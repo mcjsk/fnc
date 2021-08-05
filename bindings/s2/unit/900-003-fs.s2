@@ -1,0 +1,43 @@
+(const FS = s2.fs) || return;
+
+
+assert FS.dirSeparator;
+assert FS.dirIsAccessible('.');
+assert !FS.dirIsAccessible('./nope');
+assert FS.fileIsAccessible(__FILE);
+
+if(typeinfo(isfunction (const G = FS.getcwd))){
+    var d = G(), d2 = G(true), DS = FS.dirSeparator;
+    assert d === G(false);
+    assert d !== d2;
+    assert d2.length() === d.length() + 1;
+    assert d === d.split(DS).join(DS);
+    assert DS === d2.charAt(d2.length()-1);
+    assert d2 === d2.split(DS).join(DS);
+
+
+    if(typeinfo(isfunction (const C = FS.chdir))){
+        const cwd = G();
+        assert catch C();
+        assert undefined === C('/');
+        assert '/' === G();
+        assert undefined === C(cwd);
+    }
+}
+
+if(typeinfo(isfunction (const S = FS.stat))){
+    assert true === S('.',undefined) /* we can always stat(2) the current dir, right? */;
+    assert false === S('...',undefined) /* Doesn't throw on stat(2) failure */;
+    assert catch S('...') /* Throws if stat(2) fails. */;
+    assert catch S(0) /* Throws if argv[0] is not a string or buffer */;
+    var o = S('.');
+    assert typeinfo(isobject o);
+    assert typeinfo(isinteger o.ctime);
+    assert typeinfo(isinteger o.mtime);
+    assert typeinfo(isinteger o.size);
+    assert typeinfo(isinteger o.perm);
+    assert 'dir' === o.type;
+}
+
+;;
+

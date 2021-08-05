@@ -1,0 +1,14 @@
+/**
+   require() plugin which returns a handle to the repo Db object for
+   Fossil.require's shared Fossil.Context.  If no checkout has been
+   opened when this is called, openCheckout() is called on the
+   context, otherwise there are no side effects.
+*/
+return requireS2(['fsl/context'], proc(F){
+    affirm const d = F.db;
+    if(!d.checkout){
+        F.openCheckout();
+    }
+    affirm d.repo;
+    return d.repo;
+});

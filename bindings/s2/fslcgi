@@ -1,0 +1,63 @@
+#!/bin/sh
+########################################################################
+# Intended to be run as a CGI script. It is currently hard-coded to
+# live in same dir as s2sh and the ./fslcgi.d directory and f-s2sh
+# binary.
+#
+# A sample Apache vhost for this script looks like:
+#
+#<VirtualHost *:80>
+#    ServerName s2.local
+#    ScriptAlias /cgi-bin/ /path/to/libfossil/s2
+#    DocumentRoot /path/to/libfossil/s2
+#    Options +FollowSymLinks
+#</VirtualHost>
+#<Directory "/path/to/libfossil/s2">
+#        AllowOverride All
+#        Options +ExecCGI +Indexes
+#        Order allow,deny
+#        Allow from all
+#        Require all granted
+#        DirectoryIndex fslcgi
+#        SetHandler cgi-script
+#</Directory>
+########################################################################
+
+S2_HOME=`dirname "$0"`
+# PROXY_SCRIPT is the script-side entry point for the CGI app
+PROXY_SCRIPT=$0.s2
+# Interpreter-level flags for s2sh:
+S2_SHELL_FLAGS="-S -a -R"
+S2_SHELL=$S2_HOME/f-s2sh
+#S2_RC_DIR = "resource dir" for cgi bits. Passed via the --resource-dir CLI flag.
+S2_RC_DIR=${S2_HOME}/fslcgi.d
+
+S2_MODULE_PATH=".:$S2_HOME:${S2_RC_DIR}/lib"
+S2_INCLUDES_PATH=".:$S2_HOME:${S2_RC_DIR}/include"
+#NYI: S2_AUTOLOAD_MODULES="module1,module2,module3"
+
+export S2_MODULE_PATH S2_INCLUDES_PATH S2_AUTOLOAD_MODULES
+
+#export S2_HOME
+
+# For libfossil.so:
+LD_LIBRARY_PATH="${S2_HOME}/..:${LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH
+
+# Tell the script world which repository file to use...
+if [ -d ~/fossil ]; then
+    S2_CGI_REPO="~/fossil/libfossil.fsl"
+    true
+else
+    S2_CGI_REPO="$S2_HOME/../../libfossil.fsl"
+    #S2_CGI_REPO="-R=$S2_HOME/../../fossil.fsl"
+fi
+
+#S2_CGI_REP0=''
+# Misc flags intended for consumption by scripts...
+S2_REPO_URL=http://fossil.wanderinghorse.net/repos/libfossil/
+#S2_CGI_REPO=-C
+S2_SCRIPT_FLAGS="--repo-db=${S2_CGI_REPO} --repo-url=${S2_REPO_URL} --resource-dir=${S2_RC_DIR}"
+#S2_SCRIPT_FLAGS="${S2_SCRIPT_FLAGS} --repo-url=http://url-to-your/repo[.cgi]"
+
+exec $S2_SHELL ${S2_SHELL_FLAGS} -f $PROXY_SCRIPT -- $S2_SCRIPT_FLAGS

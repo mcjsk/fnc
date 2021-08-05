@@ -1,0 +1,155 @@
+
+scope {
+
+    var i = 0;
+    foreach({a:1,b:2} => k){
+        ++i;
+        assert 'a'===k || 'b'===k;
+    }
+    assert 2 === i;
+    var obj = {a:1,b:2};
+    i = 0;
+    foreach(obj => k,v){
+        assert obj[k] === v;
+        if(2===++i){
+            assert 'CWAL_RC_IS_VISITING'===catch{
+                obj[k] = 1 /* assignment fails while iterating
+                              (limitation of cwal's properties
+                              model).*/
+            }.codeString();
+        }
+    }
+    assert 2 === i;
+
+    i = var j = 0;
+    foreach(@[1,2,3] => ndx,v) i+=v, j+=ndx;
+    assert 6 === i;
+    assert 3 === j;
+    unset j;
+
+    i = 0;
+    foreach(#{#a:1, b:2} => k,v){
+        assert 'a'===k || 'b'===k;
+        assert 'a'===k ? 1===v : 2===v;
+        ++i;
+    }
+    assert 2 === i;
+
+    i = 0;
+    foreach({}.prototype => k,v) ++i;
+    assert i > 10;
+
+    assert undefined === foreach(@[]=>k) assert 0;
+    assert undefined === foreach({}=>k) assert 0;
+    assert undefined === foreach({#}=>k) assert 0;
+
+    // Slightly special behaviour for enums, for consistency
+    // in handling them regardless of their property storage type...
+    // We "just happen to know" that enums switch from objects to hashes
+    // if they get "big enough" (counting their reverse mappings)...
+    // 2020-02-21: enums are now always hashes, to eliminate special-case
+    // handling such as this.
+
+    var myEnum = enum {a,b,c,d,e};
+    i = 0;
+    foreach(myEnum=>k){
+        assert typeinfo(isstring k);
+        assert typeinfo(isunique myEnum[k]);
+        ++i;
+    }
+    assert 5 === i;
+    assert 5 === myEnum.#;
+    i = 0;
+    foreach(myEnum=>k,v){
+        assert typeinfo(isstring k);
+        assert typeinfo(isunique v);
+        assert myEnum[k] === v;
+        assert myEnum[v] === k;
+        ++i;
+    }
+    assert i === 5;
+    unset myEnum;
+
+    assert 3 === foreach(@[1,2,3] => v){
+        v<3 ? continue : break v;
+        throw "impossible";
+    };
+    assert 2 === foreach(@[1,2,3]=>v) v%2 || break v;
+
+    /* Empty arrays and tuples must be a no-op: */
+    i = 0;
+    foreach(@[]=>i) assert false /*loop body is never eval'd*/;
+    assert 0===i;
+    foreach([#]=>i) assert false /*loop body is never eval'd*/;
+    assert 0===i;
+
+}
+
+scope {
+    /* foreach() in a ternary must not generate a syntax error... */
+    assert 1 === 0 ? foreach(@[0]=>v) v : 1;
+    assert 0 === 1 ? foreach(@[0]=>v) break v : 1;
+}
+
+scope {
+    var a = [1], i =0;
+    a[4] = 1;
+    foreach( @a => v ) ++i;
+    assert 5 === i /* array visitation now includes C-level NULL entries (as the undefined value). */;
+}
+
+scope { // foreach(string=>...)
+    var n = 0;
+    foreach('© © '=>i,v){
+        assert v === i%2 ? ' ' : '©';
+        ++n;
+    }
+    assert 4 === n;
+
+    n = 0;
+    var x = 'にちは';
+    assert x[2] === foreach(x=>i,v){
+        ++n;
+        0===i && assert 'に'===v;
+        1===i && assert 'ち'===v;
+        2===i && break v;
+        assert x[i] === v;
+    };
+    unset x;
+    assert 3 === n;
+
+    /* We have one slightly different code path (opimization) for ASCII strings: */
+    n = 0;
+    foreach('abcd'=>i,v){
+        0===i && assert 'a' === v;
+        1===i && assert 'b' === v;
+        2===i && assert 'c' === v;
+        3===i && assert 'd' === v;
+        ++n;
+    }
+    assert 4 === n;
+
+    /* For strings, if no key is provided we iterate over the values.
+       Contrast with objects, where we iterate over keys in that case. */
+    n = 0;
+    foreach('にちは'=>v){
+        assert 'に' === v || 'ち' === v || 'は' === v;
+        ++n;
+    }
+    assert 3 === n;
+
+    /* Empty strings must be a no-op: */
+    n = 0;
+    foreach(''=>i) assert false /*loop body is never eval'd*/;
+    assert 0===n;
+}
+
+scope {
+    /* 20181119: allow a break in the foreach operand expression... */
+
+    assert 1 === foreach((0|||break 1)=>k){...};
+    assert -1 === foreach(scope {break -1}=>k){...};
+    assert catch { /* break from inside a call() must still fail */
+        foreach(proc(){break}()=>k){...}
+    }.message.indexOf("'break'") > 0;
+}

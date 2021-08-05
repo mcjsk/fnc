@@ -1,0 +1,310 @@
+var ar = [1,2,3];
+
+scope {
+  assert 3 === ar.#;
+  assert 3 === ar.#;
+  assert ar.# === 3;
+  assert '3' === ar.#.toString();
+  assert 2 === ar.indexOf(3);
+  assert ar === ar.length(2) /* setter returns the array */;
+  assert 2 === ar.#;
+  assert 2 === ar[1];
+  assert undefined === ar[2];
+
+  ar.prop = 1;
+  ar.clear();
+  assert 1===ar.prop;
+  assert !ar.#;
+  ar.clear(true);
+  assert undefined===ar.prop;
+}
+
+scope {
+  assert ar.isEmpty();
+  assert 3 === ar.push(1,2,3);
+  assert !ar.isEmpty();
+  assert 3 === ar.#;
+  var x = 0;
+  var eachCallback = proc(v,i){
+    //print('in func x=',x,i);
+    x = i;
+      //print(x, argv, v, i);
+  } ;
+  ar.eachIndex( eachCallback );
+  assert 2 === x;
+  eachCallback(0,1);
+  assert 1 === x;
+}
+
+scope {
+  assert 3 === ar.#;
+  assert 3 === ar.2;
+  assert 3 === ar.pop();
+  assert 2 === ar.#;
+  assert 1 === ar.shift();
+  assert 1 === ar.#;
+  assert 2 === ar.0;
+  assert 0 === ar.indexOf(2);
+  ar.reverse();
+  assert 2 === ar.0;
+}
+
+scope {
+    // Array.indexOf() type-strict comparison flag...
+    var a = [0,'1',2];
+    assert a.indexOf(1,false) === 1 /* not type-strict */;
+    assert a.indexOf(1,true) < 0 /* type-strict */;
+    assert a.indexOf('1',false) === 1 /* not type-strict */;
+    assert a.indexOf('1',true) === 1 /* type-strict */;
+    assert a.indexOf(1) < 0 /* default == type-strict */;
+}
+
+scope {
+  assert 1 === ar.#;
+  assert 2 === ar.0;
+  ar.unshift(1,-1);
+  assert 3 === ar.#;
+  assert 2 === ar.2;
+  assert -1 === ar.1;
+  assert 1 === ar[0];
+  assert '1,-1,2' === ar.join(',');
+  assert 3 === ar.setIndex(1,3);
+  assert '1,2,3' === ar.sort().join(',');
+  assert '3,2,1' === ar.sort(function(l,r){
+    // reverse-order (l,h)...
+    return l==r ? 0 : l < r ? 1 : -1;
+    cannot happen;
+    // The long way:
+    l==r && return 0;
+    l < r && return 1;
+    return -1;
+  }).join(',');
+  assert '123' === ar.reverse().join('');
+  assert ar === ar.unshift(-1);
+  assert '-1123' === ar.join('');
+}
+
+scope {
+  const a1 = [1,2,3];
+  assert catch{a1.slice(0,-1)}.codeString() === 'CWAL_RC_RANGE';
+  assert catch{a1.slice(-1,0)}.codeString() === 'CWAL_RC_RANGE';
+  // slice() during sort is madness...
+  assert catch a1.sort(proc(){a1.slice()}).codeString() === 'CWAL_RC_LOCKED';
+    
+  var a2 = a1.slice(0,1);
+  assert 'array' === typename a2;
+  assert 1 === a2.#;
+  assert 1 === a2.0;
+
+  const a3 = a2.slice(3);
+  assert 0 === a3.#;
+}
+
+scope {
+  const a1 = [1,2,3];
+  var a2 = a1.slice(0, 1);
+  //print('a2=',a2);
+  assert 1=== a2.#;
+
+  a2 = a1.slice(1,1);
+  assert 1=== a2.#;
+  assert 2 === a2.0;
+
+  a2 = a1.slice(1, 6);
+  assert 2=== a2.#;
+  assert 3 === a2.1;
+}
+
+scope {
+    const a = [-2,-1,0,1];
+    assert -2 === a.shift();
+    assert -1 === a.0;
+    assert 0 === a.shift(2);
+    assert 1 === a.#;
+    assert 1 === a.0;
+}
+
+scope {
+    const ar = [0,proc f(){assert f===this; return this},1];
+    assert ar.1 === ar.1() /* 'this' is not the array */;
+}
+
+scope { // using arrays as prototypes...
+    var x = {0: 0, // interesting: whether or not this property
+             // gets set as an object prop or array index depends
+             // on whether it gets set before or after this object
+             // extends the array class...
+             prototype:[1,2]
+            };
+    x.0 = -1 /* sets array index */;
+    assert -1 === x.0 /* array index */;
+    assert -1 === x.prototype.0 /* array index */;
+    if(!pragma(build-opt CWAL_OBASE_ISA_HASH)){
+        assert 0 === x.'0' /* string type bypasses array index check,
+                              so this is an object property access.*/;
+        x.'0' = 1 /* also object property, not array index */;
+        assert -1 === x.0 /* string key '0' did not overwrite this */;
+    }
+    x[] = 3;
+    assert 3 === x.length();
+    assert 3 === x.2;
+
+    /*
+      Minor descrepancy vis-a-vis objects: objects never (via
+      assignment) add new properties to their prototypes, but instead
+      shadow any prototype prop with the same name. Arrays index
+      access does not behave that way: it modifies the array part of
+      the value directly (the prototype, in the above example).
+    */
+}
+
+scope {
+    // Check for propagation of non-exception errors from array.sort()
+    // callbacks...
+    const ex = catch [1,2].sort(proc(){
+        ,/*intentional syntax error*/
+        assert cannot happen;
+    });
+    assert 'CWAL_SCR_SYNTAX' === ex.codeString();
+}
+
+scope {
+    // Ensure that attempts to iterate over an array from a sort()
+    // callback, or sort during iteration, are rejected...
+    const ar = [1,2,3];
+    var ex = catch foreach(@ar=>v) ar.sort();
+    assert 'CWAL_RC_IS_VISITING_LIST' === ex.codeString();
+    ex = catch ar.sort(proc(){foreach(@ar=>v){1}});
+    assert 'CWAL_RC_LOCKED' === ex.codeString();
+
+    // But multiple iteration must (as of 20191211) work...
+    var i = 0;
+    foreach(@ar=>v) foreach(@ar=>v) ++i;
+    assert i === ar.# * ar.#;
+
+    // Assigning during traversal is OK:
+    foreach(@ar=>i,v) ar[i] = 2*v;
+    assert 6 === ar.2;
+
+    // reverse() during traversal is allowed only because it's
+    // just a special case of assignment:
+    foreach(@ar=>v) ar.reverse();
+    assert 6 === ar.0;
+    assert 2 === ar.2;
+    /**
+       One could rightfullyargue that sorting is also just a special
+       case of get/set, but its implementation is much more involved,
+       so traversing during sort, or vice versa, are currently
+       disallowed.  That Way Lies Madness.
+    */
+}
+
+scope {
+    // Ensure that sort() never calls its callback for an empty- or
+    // length-1 array...
+    [].sort(proc(){cannot happen});
+    [1].sort(proc(){cannot happen});
+}
+
+scope { // removeIndex()
+    var x = [1,2,3,4];
+    assert true === x.removeIndex(1);
+    assert 3 === x.#;
+    assert 1 === x[0];
+    assert 3 === x[1];
+    assert 4 === x[2];
+    assert undefined === x[3];
+}
+
+scope { // filter()
+    const isOdd = proc(v){ return v % 2 };
+    var a = [1,2,3];
+    var b = a.filter(isOdd);
+    var c = a.filter(isOdd, true);
+    assert 2 === b.#;
+    assert 1===b.0 && 3===b.1;
+    assert 1 === c.#;
+    assert 2 === c.0;
+    unset a, b, c;
+
+    /**
+       20181109: Array.filter() now accepts a Tuple 'this'. As of
+       20190811, it returns a Tuple if called that way (it previously
+       returned an array).
+    */
+    const t = [#1,2,3,4];
+    assert typeinfo(istuple t);
+    var ta = t.filter(isOdd);
+    assert typeinfo(istuple ta);
+    assert 2 === ta.#;
+    assert 1 === ta.0;
+    assert 3 === ta.1;
+    assert [#1,3] === ta;
+
+    ta = t.filter(isOdd,true);
+    assert typeinfo(istuple ta);
+    assert [#2,4] === ta;
+    
+    assert [#] === [#].filter(isOdd);
+
+}
+
+scope { // operator+=
+    var a = [] /* can't be const because of += assignment :/ */;
+    assert a === (a+=3);
+    assert 1 === a.#;
+    assert 3 === a.0;
+    assert a === (a += 'b');
+    assert 2 === a.#;
+    assert 'b' === a.1;
+    const o = {a:[]};
+    assert o.a === (o.a+=1);
+    assert (o.a += 2) === o.a;
+    assert 2===o.a.1;
+}
+
+scope {
+    /* 20191211 changes to how iteration is reported... */
+    var a = [1,2,3];
+    a.x = -1;
+    assert !typeinfo(isiteratingprops a);
+    assert !typeinfo(isiterating a);
+    foreach(a=>k){
+        assert typeinfo(mayiteratelist a);
+        assert !typeinfo(isiteratinglist a);
+        assert typeinfo(isiteratingprops a);
+        assert typeinfo(isiterating a);
+        foreach(@a=>v){
+            assert typeinfo(isiteratinglist a);
+            assert typeinfo(isiteratingprops a);
+            assert typeinfo(mayiteratelist a);
+            assert typeinfo(isiterating a);
+        }
+        assert !typeinfo(isiteratinglist a);
+        assert typeinfo(isiterating a);
+        assert typeinfo(isiteratingprops a);
+    }
+    assert !typeinfo(isiteratingprops a);
+    assert !typeinfo(isiterating a);
+
+    a.sort(proc(l,r){
+        assert !typeinfo(mayiteratelist a);
+        return -l.compare(r);
+    });
+    assert 3 === a.0;
+}
+
+scope {
+    /*
+      Array comparison func must internally use floating point
+      comparisons.
+
+      Changed 20191220, prompted by a bug repor against the muJS JS
+      engine: https://github.com/ccxvii/mujs/issues/122
+    */
+    const l = [{a: 0.5}, {a: -0.1}, {a: 0.7}];
+    l.sort(proc(x,y) {return x.a - y.a});
+    assert 0.7===l.2.a;
+    assert 0.5===l.1.a;
+    assert -0.1===l.0.a;
+}

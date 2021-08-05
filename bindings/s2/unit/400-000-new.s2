@@ -1,0 +1,222 @@
+proc(){
+    assert !typeinfo(isnewing);
+}();
+assert !typeinfo(cannew 1);
+assert !typeinfo(cannew {});
+assert typeinfo(cannew s2.Hash);
+var v = new s2.Hash(13);
+assert v inherits s2.Hash;
+assert 13 === v.hashSize();
+//s2.dumpVal(v);
+
+assert typeinfo(cannew s2.Buffer);
+v = new s2.Buffer(10);
+assert v inherits s2.Buffer;
+assert v.capacity() >= 10;
+//s2.dumpVal(v);
+
+assert typeinfo(cannew s2.PathFinder);
+v = new s2['PathFinder']() {
+    this.x = 1;
+};
+assert v inherits s2.PathFinder;
+assert undefined === v.search('PathFinder');
+assert 'string' === typeinfo(name v.search(__FILE));
+assert 1 === v.x;
+//s2.dumpVal(v);
+
+const Array = {
+    prototype: [].prototype,
+    blah: 2,
+    __new: proc(){
+        this.x = 1;
+        assert typeinfo(isnewing);
+        assert typeinfo(is-newing this);
+        assert argv && !typeinfo(isnewing argv);
+        if(1) assert typeinfo(isnewing) /* works as of 20171206 */;
+        assert typeinfo(isnewing) /* But now we're back in our 'new' scope. */;
+        proc(){assert !typeinfo(is-newing)/* different "this" */}();
+        var rc = argv.slice();
+        rc.prototype = this;
+        return rc;
+    }
+};
+assert typeinfo(cannew Array);
+v = new Array(-1,0,1);
+assert v inherits Array;
+assert 'array' === typeinfo(name v);
+assert [].prototype === Array.prototype;
+assert -1 === v.0;
+assert 1 === v.2;
+assert 2 === v.blah;
+assert v.blah === (v[] = v.blah); // reminder to self: not a precedence bug - JS also requires extra parens here.
+assert 3 === ++v.blah;
+assert 2 === v.prototype.blah;
+assert 2 === v.prototype.prototype.blah;
+assert 3 === v.blah;
+assert 4 === v.length();
+v[4] = -1;
+assert 5 === v.length();
+assert -1 === v.4;
+//s2.dumpVal(v);
+//v.eachIndex(proc(v){print(typename v, v)});
+
+const Object = {
+    prototype: {}.prototype,
+    __new: proc(){
+        assert typeinfo(isnewing);
+        return;// {prototype: this}; // same effect but requires +1 temp Object allocation
+    }
+};
+assert typeinfo(cannew Object);
+v = new Object();
+assert v inherits Object;
+assert 'function' === typename v.eachProperty;
+assert v.isEmpty();
+
+const String = {
+    prototype: "".prototype,
+    __new: proc(){
+        // hmmm. Can't do POD types as PODs this way
+        // without other s2-level infrastructure.
+        this.value = argv.join('');
+        assert typeinfo(isnewing);
+    }
+};
+assert typeinfo(cannew String);
+v = new String("a","b","c");
+assert v inherits String;
+assert v !== String;
+assert 'abc' === v.value;
+assert undefined === v.prototype.value;
+
+// An alternate approach...
+const String2 = {
+    __new: proc(){
+        assert typeinfo(isnewing);
+        return argv.join('');
+    }
+};
+assert typeinfo(cannew String2);
+v = new String2('a','b','c');
+assert v === 'abc';
+
+const Boolean = {
+    __new: proc(v=(affirm 0 && "Boolean ctor requires an argument")){
+        assert typeinfo(isnewing);
+        return !!v;
+    }
+};
+assert typeinfo(cannew Boolean);
+assert true === new Boolean(true);
+assert false === new Boolean(false);
+assert catch {new Boolean()}.message.indexOf('ctor') > 0;
+assert catch new Boolean().message.indexOf('ctor') > 0; // also works
+
+const MyClass = {
+    prototype: s2.Hash,
+    __new: proc(){
+        assert typeinfo(isnewing) /* in 'new' scope */;
+        if(1){
+            assert typeinfo(isnewing);
+            const x = this;
+            proc(){
+                assert !typeinfo(isnewing)/*not the same 'this' as the ctor call*/;
+                assert typeinfo(isnewing x)/*optionally accepts an expression*/;
+            }();
+        }
+        var rc = new s2.Hash();
+        rc.prototype = this;
+        foreach(@argv=>i,v) rc.insert('k'+i, v);
+        proc(){
+            assert !typeinfo(isnewing) /* not in 'new' scope */;
+            new String() /* typeinfo(isnewing) check must pass */;
+            assert !typeinfo(isnewing) /* not in 'new' scope */;
+        }();
+        new Boolean(1) {
+            assert !typeinfo(isnewing) /* not in the post-ctor block */;
+        };
+        assert typeinfo(isnewing) /* back in 'new' scope */;
+        return rc;
+    }
+};
+assert typeinfo(cannew MyClass);
+v = new MyClass(1,2,3);
+assert v inherits MyClass;
+assert MyClass inherits s2.Hash;
+assert v inherits s2.Hash;
+// v's prototype is a hash, but v is not, so new properties
+// set via its dot/[] ops don't land in the hash:
+//v.eachEntry(proc(k,v){print(__FLC,' ',k,'=',v)});
+assert 2 === v#'k1';
+assert 'function' === typeinfo(name v.__new);
+assert 3 === v.search('k2');
+assert 3 === v # 'k2';
+
+
+/* Exception subclasses are a bit trickier... */
+const E = {
+    prototype: exception(0).clearProperties(),
+    __typename: 'Exceptional',
+    __new: proc(codeOrMsg,
+                msgOrCode){
+        assert typeinfo(isnewing);
+        (argv.length()>1
+         ? exception(codeOrMsg,msgOrCode)
+         : exception(0,codeOrMsg)
+        ).copyPropertiesTo(this);
+        //e.copyPropertiesTo(this)
+        /* collect stack trace and friends */;
+        this.hi = 1;
+    }
+};
+assert !E.stackStrace;
+assert !E.script;
+var e = catch throw new E('yo');
+assert e;
+assert e.prototype === E;
+assert e inherits E;
+assert !E.stackStrace /* testing a bufix in s2_throw_value() */;
+assert typeinfo(hasexception e);
+assert !typeinfo(isexception e);
+
+
+/* Make sure short-circuiting skips all it's supposed to... */
+assert !typeinfo(isdeclared Nope);
+assert -1 === 0 ? new Nope() : -1;
+assert -1 === 0 ? new Nope() { nope nope nope } : -1;
+assert -1 === (1 ? new MyClass() { this.x = -1 } : new Nope() { nope nope nope }).x;
+
+// reminder to self: braces are needed around these catch blocks because
+// otherwise catch does not convert syntax errors to exceptions.
+assert 'CWAL_SCR_SYNTAX' === catch { new MyClass() {return 3} }.codeString();
+assert catch { new MyClass() { continue } }.message.indexOf('Unhandled') >= 0;
+assert catch { new MyClass() { break } }.message.indexOf('Unhandled') >= 0;
+
+assert 3 === new MyClass(), 3 /* new must stop after the call() part... */;
+assert 3 === new MyClass(){}, 3 /* ... or the post-init part */;
+
+if(0){
+    // Functions as ctors is currently disabled
+    /**
+       This is more JavaScripty but also leads to each instance being
+       able to be call()'d, and that call landing in the constructor!
+       Unlike in JS, this ctor _is_ the prototype for new instances,
+       so add shared methods directly as properties of this ctor.
+       
+       i don't have a workaround for the call()able problem which also
+       leaves the resulting objects as (v inherits Func). :/
+    */
+    const Func = proc(a,b){
+        this.a = a;
+        this.b = b;
+    };
+    assert typeinfo(cannew Func);
+    var f = new Func(1,2);
+    assert f inherits Func;
+    assert f.a === 1;
+    assert f.b === 2;
+    assert 'object' === typeinfo(name f);
+    assert !typeinfo(isfunction f);
+    assert typeinfo(iscallable f) /* unfortunate */;
+}

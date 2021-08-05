@@ -1,0 +1,296 @@
+/* String method tests... */
+
+scope{
+    assert 'ab' === 'a'.concat('b');
+    assert 'ABC' === 'a'.concat('b','c').toUpper();
+    assert 42 === '0*'.byteAt(1);
+    assert undefined === '0'.byteAt(3);
+    assert '*' === '1*1'.charAt(1);
+    assert '☺' === '1☺1'.charAt(1);
+    assert '*' === '1*1'[1];
+    assert '☺' === '1☺'[1];
+    assert '☺' === '☺1'[0];
+    assert undefined === '☺1'[2];
+
+    assert '.'.isAscii();
+    assert !'1☺1'.isAscii();
+    assert '...'[0].isAscii();
+    assert '1☺1'[0].isAscii();
+    assert !'1☺1'[1].isAscii();
+
+    var x = "hi! there! this string cannot not get interned (not simple/short enough)";
+    var y = "".concat(x);
+    assert x === y
+    /* String.concat() optimization: "".concat(oneString) returns
+       oneString. Unfortunately, from the script level, we can't
+       _really_ be sure that we have the same string instance. Except
+       possibly via this little cheat... */;
+    assert typeinfo(refcount x) === typeinfo(refcount y);
+    var z = [x,x,x]; // just grab a few refs to x
+    assert typeinfo(refcount x) === typeinfo(refcount z.0);
+    assert typeinfo(refcount x) === typeinfo(refcount y);
+    y = "".concat("",y) /* bypasses optimization */;
+    assert typeinfo(refcount x) === typeinfo(refcount z.0);
+    assert typeinfo(refcount x) > typeinfo(refcount y);
+    // WEIRD... the refcount on y is 1 higher on the first hit:
+    // print(__FLC,typeinfo(refcount x),typeinfo(refcount y),typeinfo(refcount z));
+    // it's almost like an argv isn't letting its ref go (but gets
+    // swept up by the next call), but i just checked and argv is
+    // ref/unref'd properly.  Hmmm. Aha: it's the pending result value
+    // in the stack (s2_eval_ptoker(), actually) at that point! Correct behaviour -
+    // it gets cleaned up by s2_eval_ptoker() after the next expression (the first
+    // call, were the refcount is +1 higher than we might (otherwise) expect).
+    //print(__FLC,typeinfo(refcount x),typeinfo(refcount y),typeinfo(refcount z));
+    //print(__FLC,typeinfo(refcount x),typeinfo(refcount y),typeinfo(refcount z));
+}
+
+scope {
+    assert 'Z☺Z' === 'z☺z'.toUpper();
+    assert 'z☺z' === 'Z☺Z'.toLower();
+
+    var str = '↻Æ©';
+    assert 5 === "©123©".length();
+    assert 5 === "©123©".#;
+    assert 7 === "©123©".lengthBytes();
+    assert 3 === str.length();
+    assert 3 === str.#;
+    assert 7 === str.lengthBytes();
+    assert '↻' === str.charAt(0);
+    assert 'Æ' === str.charAt(1);
+    assert '©' === str.charAt(2);
+    assert '©' === str[2];
+    assert undefined === str.charAt(3);
+    assert undefined === str[3];
+    assert 'Æ©' === str.substr(1);
+    assert '↻Æ' === str.substr(0,2);
+
+    
+    str = 'こんにちは' /*no idea what this says (or not) - copied it from the net.
+                        Google says it means "Hi there"*/;
+    assert 15 === str.lengthBytes();
+    assert 5 === str.length();
+    assert 'こ' === str.charAt(0);
+    assert 'ん' === str.charAt(1);
+    assert 'に' === str.charAt(2);
+    assert 'ち' === str.charAt(3);
+    assert 'は' === str.charAt(4);
+    assert 'んにち' === str.substr(1,3);
+    assert 'にちは' === str.substr(2,-1);
+
+    assert '' === str.substr(0,0);
+
+    assert 'CWAL_RC_RANGE' === catch {"abc"[-1]}.codeString()
+    /* negative (from-the-end) indexes are a potential TODO, currently disallowed. */;
+
+    assert 'c' === 'abc'.charAt(2).charAt(0).charAt(0).charAt(0);
+    assert 'c' === 'abc'[2][0][0]
+    /* SOMETIMES a cwal-level assertion: lifetime issue. Triggering it
+       depends on recycling settings, engine state, and... lemme
+       guess... right: string interning again >:(. Somewhere we're
+       missing a reference we need. This was "resolved" in
+       s2_process_top() by adding its newly-pushed result value to the
+       eval-holder list (if such a list is active).
+    */;
+    assert 'c' === 'abc'[2][0][0][0][0][0][0][0][0][0];
+    
+};
+
+
+scope {
+  /* The subtleties of split()... */
+  const split = proc(s,sep){
+    sep || (sep = ':');
+    var ar = s.split(sep);
+    var j = ar.join(sep);
+    assert j === s;
+    return ar;
+  };
+
+  scope {
+    var str = "//aaa//b//c//xy//";
+    var sep = '//';
+    var ar = split(str,sep);
+    assert ar.join(sep) === str;
+    assert "" == ar.0;
+    assert "" === ar.5;
+    assert 6 === ar.length();
+    assert 'aaa' === ar.1;
+    assert 'xy' === ar.4;
+  }
+
+  scope {
+    var str = "aaa/b/c/xy/";
+    var sep = '/';
+    var ar = split(str, sep);
+    assert ar.join(sep) === str;
+    assert 5 === ar.length();
+    assert 'aaa' === ar.0;
+    assert "" === ar.4;
+ }
+
+  scope {
+    var str = "aaa©b©c©";
+    var sep = '©';
+    var ar = split(str, sep);
+    assert ar.join(sep) === str;
+    assert 4 === ar.length();
+    assert 'aaa' === ar.0;
+    assert "" === ar.3;
+  }
+
+  scope{
+    var str = ":::";
+    var sep = ':';
+    var ar = split(str, ':');
+    assert ar.join(sep) === str;
+    assert 4 === ar.length();
+    assert !ar.0;
+    assert !ar.3;
+  }
+
+  scope {
+    var str = ":";
+    var sep = str;
+    var ar = split(str, sep);
+    assert ar.join(sep) === str;
+    assert 2 === ar.length();
+    assert !ar.0;
+    assert !ar.1;
+  }
+
+  scope {
+    var ar = split(":a:b:",':');
+    assert 4 === ar.length();
+    assert !ar.0;
+    assert 'a' === ar.1;
+    assert 'b' === ar.2;
+    assert !ar.3;
+  }
+
+  scope {
+    var ar = split("abc", '|');
+    assert 1 === ar.length();
+    assert 'abc' === ar.0;
+  }
+
+  scope {
+    var ar = split("", '.');
+    assert 1 === ar.length();
+    assert "" === ar.0;
+  }
+
+  scope {
+    var ar = split("a:::b", ':');
+    assert 4 === ar.length();
+    assert "a" === ar.0;
+    assert !ar.1;
+    assert !ar.2;
+    assert "b" === ar.3;
+  }
+
+  scope {
+      // The 'limit' semantics changed on 20160213 to match what JS does.
+      // Note that we still don't accept split() with no args, like JS does.
+      var ar = "a:b:c".split(':',2);
+      assert 2 === ar.length();
+      assert 'b' === ar.1;
+
+      ar = 'a:b:c'.split('/');
+      assert 1 === ar.length();
+      assert 'a:b:c' === ar.0;
+  }
+
+  scope {
+      /* "Empty split". String interning saves us scads of memory here
+         when the input string is large... */
+      var ar = "abc".split('');
+      assert typeinfo(isarray ar);
+      assert 3 === ar.length();
+      assert 'c' === ar.2;
+
+      ar = "abc".split('',2);
+      assert 2 === ar.length();
+      assert 'b' === ar.1;
+  }
+
+} /* end split() */
+
+scope {
+  //assert "3.00.1" === "3.00.1" /* just making sure */;
+  //print("3.00.1", "3.0"+0.1);
+  assert "3.00.1" === "3.0"+0.1; // string on the left
+  assert 3.7 === 0.7 + "3"; // string on the right
+  assert 3.74 === 0.7 + "3" + "0.04";
+  assert 3.1 === 3.1 + "abc"; // "abc"==0
+  assert 5 === +"5";
+  assert -5 === -"5";
+  assert -5 === +"-5";
+  assert 1.2 === -"-1.2"; // but beware of precision changes on such conversions!
+}
+
+scope {
+  const sp = "".prototype;
+  sp.firstChar = proc(asInteger=false){
+    return this.charAt(0, asInteger);
+  };
+  assert "a" === "abc".firstChar();
+  //unset "".prototype.firstChar; // hmmm - unset cannot deal with this.
+  unset sp.firstChar;
+}
+
+scope {
+    var a = "a";
+    a += "b";
+    assert 'ab' === a;
+}
+
+scope {
+    /* String.replace() tests... */
+    proc x(haystack,needle,replace/*,limitAndOrExpect*/){
+        const expect = argv.4 ||| argv.3,
+           limit = argv.4 ? argv.3 : 0;
+        const v = haystack.replace(needle, replace, limit);
+        (expect === v)
+            && (assert 1 /*String.replace() check passed*/)
+            && return x;
+        throw "Mismatch: expecting ["+expect+"] but got: ["+v.toString()+"]";
+    }
+    ("abc", 'b', 'B', 'aBc')
+    ('abcabc', 'b', 'BB', 1, 'aBBcabc')
+    ('ab©ab©ab©', 'b', 'BB', 2, 'aBB©aBB©ab©')
+    ('(C)ab(C)', '(C)', '©', '©ab©')
+    ('abc', 'x', 'y', 'abc')
+    ('abc', 'abc', '', '')
+    ('a\r\nc\r\n', '\r\n', '\n', 'a\nc\n')
+    ;;
+}
+
+scope {
+    assert 2 === 'abcd'.indexOf('c');
+    assert 0 > 'abcd'.indexOf('e');
+    assert 2 === 'ab©'.indexOf('©');
+    assert 3 === 'ab©c'.indexOf('c');
+    assert 3 === 'ab©cはd'.indexOf('cはd');
+
+    // 20190713 bugfix: the indexOf() of same-length strings
+    // was just plain broken due to an "optimization" which
+    // backfired.
+    assert 'a'.indexOf('b') < 0;
+    assert 'cab'.indexOf('cab') === 0;
+}
+
+scope {
+
+    /* 20191220: an invalid \Uxxxxxxxx value now triggers a syntax
+       error rather than being immediately fatal with no error
+       location info. Because it's a syntax error, and not an exception,
+       it can only be catch'd if it comes from inside/through a block.
+       i.e. (catch '\U00E0A080') will not convert it to an exception, but
+       the following will... */       
+    const ex = catch {
+        '\U00E0A080'
+    };
+    assert ex;
+    assert ex.message.indexOf('Uxx')>0;
+    assert 'CWAL_SCR_SYNTAX' === ex.codeString();
+}

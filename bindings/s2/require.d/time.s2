@@ -1,0 +1,5 @@
+/* a require.s2 module which "hides" s2.time via the module
+   interface. It could optionally load 'dll!mod_time', but that's
+   an internal impl detail.
+*/
+return s2.time;

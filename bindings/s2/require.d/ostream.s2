@@ -1,0 +1,13 @@
+/**
+   A require() module providing an "ostream" object. It overloads the
+   << operator and sends all arguments to s2out.
+
+   This module was written before the s2out keyword existed. That
+   keyword does the same thing but does so more efficiently, making
+   this module entirely superfluous. It is retained solely as a basic
+   example of how to write a require.s2 module.
+*/
+affirm typeinfo(iscallable s2out);
+return {
+    'operator<<': proc(){s2out<<argv.0; return this}
+};

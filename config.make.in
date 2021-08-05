@@ -1,0 +1,89 @@
+# Example of a typical Makefile template for autosetup
+
+# Tools. CC is standard. The rest are via cc-check-tools
+CC = @CC@
+RANLIB = @RANLIB@
+AR = @AR@
+STRIP = @STRIP@
+
+# FLAGS/LIBS
+CFLAGS += @CFLAGS@
+LDFLAGS += @LDFLAGS@
+LDLIBS += @LIBS@
+#LDLIBS += -lsqlite3 -lz
+LDFLAGS_MODULE_LOADER += @LDFLAGS_MODULE_LOADER@
+
+# ??? HAVE_DLOPEN := @HAVE_DLOPEN@
+HAVE_LIBDL := @HAVE_LIBDL@
+HAVE_LIBLTDL := @HAVE_LIBLTDL@
+#HAVE_LT_DLOPEN := @HAVE_LT_DLOPEN@
+
+ENABLE_MODULES ?= @FSL_ENABLE_MODULE_LOADER@
+#ifeq (1,$(HAVE_DLOPEN))
+#  ENABLE_MODULES := 1
+#endif
+#ifeq (1,$(HAVE_LT_DLOPEN))
+#  ENABLE_MODULES := 1
+#endif
+
+# Install destination
+prefix = @prefix@
+exec_prefix = @exec_prefix@
+DESTDIR = $(prefix)
+
+CONFIG.MAKE := $(word $(words $(MAKEFILE_LIST)),$(MAKEFILE_LIST))
+#TOP_SRCDIR_ABS := $(dir $(realpath $(CONFIG.MAKE)))
+TOP_SRCDIR_REL := $(patsubst %/,%,$(dir $(CONFIG.MAKE)))
+TOP_SRCDIR_ABS := $(realpath $(TOP_SRCDIR_REL))
+#$(error TOP_SRCDIR_REL=$(TOP_SRCDIR_REL))
+
+SRC.DIR := $(TOP_SRCDIR_REL)/src
+
+# Project-specific CFLAGS
+TOP_INCDIR := $(TOP_SRCDIR_REL)/include
+COMPAT_DIR := $(TOP_SRCDIR_REL)/compat
+#CPPFLAGS += -D_GNU_SOURCE -Wall -Werror -I. -I$(TOP_INCDIR)
+CPPFLAGS += -I. -I$(TOP_INCDIR) -I$(SRC.DIR)
+# -I$(COMPAT_DIR)/javavm/export -I$(COMPAT_DIR)/tcl-8.6/generic
+ifneq (,$(wildcard $(HOME)/include/*))
+  # This is admittedly primarily for my own sake!
+  CPPFLAGS += -I$(HOME)/include
+endif
+
+ifeq (,$(filter tcc,$(CC)))
+  # Assume gcc-compatible compilation flags...
+  CFLAGS += -Wall -Werror -Wsign-compare -pedantic
+#??? -fno-strict-aliasing
+  CFLAGS += @CC_FLAG_C99@
+endif
+# /tcc
+
+# Enable MAKE_COMPILATION_DB = yes to generate a JSON compilation database. For
+# each *.c source file being compiled, a corresponding JSON file will be created
+# in the './compile_commands' sub-directory, and will be used to generate the
+# 'compile_commands.json' compilation database in the repository root. This is
+# only available with compilers that support the '-MJ' option (e.g., clang).
+MAKE_COMPILATION_DB = @MAKE_COMPILATION_DB@
+
+
+FSL_ENABLE_READLINE := @FSL_ENABLE_READLINE@
+LDFLAGS_READLINE := @lib_readline@
+
+ifeq ($(MAKE_COMPILATION_DB),yes)
+compdb_dir = compile_commands
+mkdir_compdb = $(TOP_SRCDIR_REL)/$(compdb_dir)
+$(mkdir_compdb):
+	@mkdir -p $@
+
+compdb_file = $(TOP_SRCDIR_REL)/$(compdb_dir)/$(subst /,-,$@.json)
+compdb_args = -MJ $(compdb_file)
+CFLAGS += $(compdb_args)
+else
+mkdir_compdb =
+endif
+
+
+CLEAN_FILES += *.o lib*.a *.so
+
+ShakeNMake.QUIET ?= @BUILD_QUIETLY@
+

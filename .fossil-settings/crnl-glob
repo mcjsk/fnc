@@ -1,0 +1,6 @@
+*.dsp
+*.dsw
+*.sln
+*.vcxproj
+*.vcxproj.filters
+

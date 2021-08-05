@@ -1,0 +1,4 @@
+return requireS2(
+    ['fsl/wiki/util'],
+    proc(util){ return util.getPageNames(); }
+);

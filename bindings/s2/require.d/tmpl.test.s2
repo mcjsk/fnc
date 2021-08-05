@@ -1,0 +1,42 @@
+/* A brief test of the 'tmpl' require.s2 module. */
+requireS2(
+['ob',
+ 'nocache!tmpl'
+ // bug:  ^^^^ reading a directory (by accident) is reported as OOM.
+ // Fixed by not allowing PathFinder to resolve directory names, but
+ // that support is missing for Windows (patches welcomed).
+],
+proc(ob, t){
+    const src = 'a=<% a %>, b=<%b%>, c=<%c%>\n';
+    const obLevel = ob.level();
+    var str;
+    ob.push();
+    var ex = catch{
+        t.process(src,{
+            a:'hi',
+            b:'there',
+            c:'world'
+        });
+        str = ob.pop(-1);
+    };
+    while(ob.level()>obLevel) ob.pop();
+    ex && throw ex;
+    affirm "a=hi, b=there, c=world\n" === str;
+
+    scope {
+        const src2 = '<%a%>,<%b%>,<%c%>\n',
+          compiled = t.compile(src2),
+          opt = { a:-1, b:0, c:1 }
+          ,TMPLOUT = proc(){} /* eval'd template uses this func, if defined */
+        ;
+        const XYZ = 'hi';
+        t.process('<% XYZ %>\n', null);
+        for(var i = 0; i < 5; ++i, ++opt.a, ++opt.b, ++opt.c ){
+            t.process(compiled, opt, src);
+        }
+        affirm 4==opt.a;
+        affirm 5==opt.b;
+        affirm 6==opt.c;
+    };
+    print(__FLC,'done!');
+});

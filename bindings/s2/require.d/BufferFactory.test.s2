@@ -1,0 +1,14 @@
+/**
+   A require.s2 module which returns an object containing "factory
+   methods" for creating Buffers.
+*/
+requireS2(
+['BufferFactory'],
+proc(bfac){
+    var b = bfac.new(100);
+    affirm b.capacity()>=100;
+    
+    b = bfac.readFile(__FILE);
+    affirm 'buffer' === typename b;
+    affirm b.length()>50;
+});

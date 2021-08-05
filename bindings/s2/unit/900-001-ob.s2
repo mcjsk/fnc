@@ -1,0 +1,83 @@
+// TODO: more output buffering tests, when i'm not so tired.
+scope {
+  assert 'object' === typename s2.ob;
+  const ob = s2.ob;
+  assert 0 === ob.level();
+  assert ob === ob.push();
+  print('buffered');
+  var b = ob.pop(1);
+  assert 0 === ob.level();
+  assert b inherits s2.Buffer;
+  assert b.length()>0;
+  // Reminder to self: if assertion tracing is on, assertions will generate
+  // output to our buffer, making exact content checks here impractical.
+  // But we can do...
+  assert b.toString().indexOf('buffered') >= 0;
+  //print("Buffered",b.length(),"bytes.");
+}
+
+scope{
+  const ob = s2.ob;
+  const out = print;
+  assert 1 === ob.push().level();
+      out("This will be flushed to stdout.");
+      ob.flush();
+      out("level 1");
+      var v1 = ob.takeString();
+      assert ob === ob.push(100);
+          out("This will be flushed to level 1.");
+          ob.flush();
+          out("level 2");
+          var v2 = ob.takeString();
+      assert ob === ob.pop();
+      var v1b = ob.takeString();
+      out("discarded");
+      //ob.clear()// not needed b/c pop() will do this
+  ob.pop();
+  assert v1 === 'level 1\n';
+  assert v2 === 'level 2\n';
+  assert v1b.indexOf('This will be flushed to level 1.\n')>=0
+    /* use indexOf() insted of === comparison because s2sh -A (assert
+       tracing) breaks a direct comparison by injecting assertion
+       tracing output into the buffer. */;
+}
+
+scope {
+    const ob = s2.ob;
+    const fHi = proc(){s2out<<"hi"};
+    var v = ob.capture(fHi);
+    assert "hi" === v;
+    v = ob.capture("s2out<<'hi again'");
+    assert "hi again" === v;
+    v = ob.capture("s2out<<'hi'", 1);
+    assert typeinfo(isbuffer v);
+    assert "hi" === v.takeString();
+    v = ob.capture(fHi, 0);
+    assert undefined === v;
+    const level = ob.level();
+    v = ob.capture(proc(){
+        s2out << "hi";
+        ob.push();
+        s2out << " again";
+        // intentionally leaving extra entry: capture() will pop it.
+    });
+    assert ob.level() === level;
+    assert "hi again" === v;
+
+    const b = new s2.Buffer(/*reserving memory will bypass
+                              an allocation optimization*/);
+    assert b === ob.capture(eval=>{
+        s2out << "hi";
+        ob.push();
+        s2out << " again";
+    }, b);
+    assert "hi again" === b.takeString();
+
+    assert 'CWAL_RC_MISUSE' === catch ob.capture().codeString();
+    assert 'CWAL_RC_MISUSE' === catch ob.capture(b).codeString()
+    /* Should arguably be CWAL_RC_TYPE, but the args validation isn't
+       that detailed. */;
+    
+    // We cannot test the too-many-ob.pop()-calls case here without
+    // screwing up downstream tests.
+}

@@ -1,0 +1,44 @@
+// this script is for testing thing which have been known to
+// trigger/cause cwal-level assertions...
+
+if(1){ // eval-holder: these must not crash anymore...
+    (var a = 'x'), (a = a + 'y'), a;
+    /** ^^^
+
+        Crashes sometimes. Unfortunately very picky about combination of
+        string interning and recycling options, as well as the current
+        state of the recyling subsystem. Enabling the "eval holder"
+        resolves it (see s2_eval.c's EVAL_USE_HOLDER), and its unclear
+        whether (but it seems doubtful that) a solution which doesn't
+        involve the eval holder is possible without an overhaul of the
+        eval engine to intricately manage refs of all values in the stack
+        machine. That would require touching (very carefully) every
+        routine which manipulates the stack machine.
+    */
+
+    scope {
+        (var a = 'x'), (a = a + 'y'), a
+        /* crashes other times (without the eval holder) */
+        ;;
+    }
+}
+
+if(1){
+    // (Re)discovered and fixed 20180507:
+    var a, b;
+    a++ ? 1 : 2; b;
+    /*
+      ==> Unexpected token after postfix operator: (OpIncrPost) ==> (Identifier)
+
+      That triggers after the ternary expr completes, but adding a
+      second semicolon after the ternary expr fixes it. Other postfix
+      ops also trigger it.
+    */
+    assert 1 === a;
+}
+
+assert 'CWAL_SCR_SYNTAX' === catch{new s2.Buffer( s2. /*trailing dot*/)}.codeString()
+/* That used to (until 20171205) trigger an assert in the
+   line-counting code because the eval loop wasn't catching the
+   trailing dot in that context. */
+;

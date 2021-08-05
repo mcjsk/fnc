@@ -1,0 +1,76 @@
+if(!typeinfo(isfunction s2.glob)){
+    print("no s2.glob() function. Skipping tests.");
+    /* reminder: normally we could 'return' from here,
+       but that would premanturely end one the
+       unit test which combines all unit tests files
+       into a single file before execution. */
+}else{
+    var g = s2.glob;
+    /* glob matching policies (3rd glob() param):
+
+       <0 = (default) wildcard-style (case sensitive)
+
+       0 = SQL LIKE style (case insensitive)
+
+       >0 = SQL LIKE style (case sensitive)
+    */
+    assert typeinfo(islocal g)
+        /* for symmetry with a test much further down... */;
+    // Must throw if given any non-string arguments:
+    assert catch g(undefined,"");
+    assert catch g("",undefined);
+    // Throw if glob is empty (input haystack be empty):
+    assert 0 === catch g("","").message.indexOf('Glob string');
+
+    assert g("*", "");
+    assert g("%", "",0);
+    assert g("%", "",1);
+
+    assert g("ab*", "abcd");
+    assert g("ab*", "abcd", -1 /* === default */);
+    assert g("[a]bc", "abc");
+    assert !g("[a]bc", "Abc");
+    assert g("a[bB]c", "aBc");
+
+    assert g("ab%d", "abcd", 0);
+    assert g("ab%d", "abcd", 1);
+    assert g("ab%d", "AbcD", 0);
+    assert !g("ab%d", "AbcD", 1);
+
+    assert g("_b_d", "AbcD", 0);
+    assert !g("A__d", "Abcd");
+    assert g("A__d", "Abcd", 1);
+    assert !g("A__d", "AbcD", 1);
+
+    assert g('*☺Z', "abc☺Z");
+    assert g('___☺Z', "abc☺Z", 0);
+    assert g('___☺Z', "abc☺Z", 1);
+
+    assert g('%んにち%', 'abcんにちdef',0);
+    assert g('%んにち%', 'abcんにちdef',1);
+
+    assert g('*ん?ち*', 'abcんにちdef');
+    assert g('%ん_ち%', 'abcんにちdef',0);
+    assert g('%ん_ち%', 'abcんにちdef',1);
+
+    assert g('*んにち*', 'abcんにちdef');
+    assert g('%cんにちd%', 'abcんにちdef',0);
+    assert !g('%CんにちD%', 'abcんにちdef',1);
+
+    const sP = "".prototype;
+    const oldOp1 = sP.'operator=~', oldOp2 = sP.'operator!~';
+
+    sP.'operator=~' = proc(glob) using (g) { return g(glob, this) };
+    sP.'operator!~' = proc(glob) { return !this.'operator=~'(glob) };
+    unset g;
+    assert !typeinfo(islocal g)
+    /* just proving that g is no longer in scope for the following calls
+       operator calls. */;
+
+    assert 'abcんにちdef' =~ '*んにち*';
+    assert "abc☺Z" =~ '*☺Z';
+    assert "Abc" !~ "[a]bc";
+    
+    sP.'operator=~' = oldOp1;
+    sP.'operator!~' = oldOp2;
+}

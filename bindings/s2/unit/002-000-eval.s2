@@ -1,0 +1,16 @@
+assert undefined === eval -> {};
+assert undefined === eval -> '';
+
+assert 3 === eval {1 * 3};
+assert 3 === eval -> {1 * 3};
+assert '3 + 1' === eval "3 + 1";
+
+assert 4 === eval -> "3 + 1";
+assert eval {2+2} === eval -> "3 + 1";
+
+assert '3  * 2+1; 0' === eval => {  3  * 2+1; 0  };
+assert '3  * 2+1' === eval =>   3  * 2+1  ;
+assert 7 === eval-> eval =>3*2+1;
+assert 2 === eval -> eval { 1; 2 };
+assert undefined === eval -> eval {};
+assert undefined === eval -> eval { 1; 2;; };

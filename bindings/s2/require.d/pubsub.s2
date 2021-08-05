@@ -1,0 +1,117 @@
+/**
+  A require.s2 module implementing a basic publish-subscriber
+  manager.
+
+  Example usage:
+
+  http://fossil.wanderinghorse.net/repos/cwal/index.cgi/finfo?name=s2/require.d/pubsub.test.s2
+
+  Returns a class, each instance of which manages its own list
+  of publishers and subscribers.
+*/
+return {
+    __typename: 'PubSub',
+    prototype: undefined,
+    
+    /**
+       Constructor for use with the 'new' keyword.
+       
+       var pubber = new thisObj();
+       assert pubber inherits thisObj; // this will hold
+
+       Each instance maintains its own, independent list of
+       subscriptions.
+    */
+    __new: proc(){
+        this.reset();
+    },
+
+    /**
+       Subscribes a callback to events published for a given key.
+       key may be of any value type. func must be-a Function.
+       
+       Returns a unique-per-subscription value (of an unspecified
+       type) which can be passed to unsub() to opt out of a
+       subscription. For a permanent subscription, simply ignore the
+       result value.
+    */
+    sub:proc callee(key, func){
+        affirm typeinfo(iscallable func) /* is Function-like */;
+        const m = (this.$map[key] ||| (this.$map[key]={prototype:null})),
+              i = enum{k:key}.k;
+        m[i] = func;
+        return i;
+    },
+
+    /**
+       Expects id to be a value returned by this.sub() and
+       unsubscribes a subscriber registered with that id.
+
+       Returns this object.
+    */
+    unsub: proc(id){
+        affirm typeinfo(isunique id);
+        (const c = this.$map[id.value]) && unset c[id];
+        return this;
+    },
+
+    /**
+       Publishes an event to all subscribers (if any) of the key
+       (event type) given as the first argument.
+       Important notes:
+
+       a) Subscribers are notified in an UNSPECIFIED and (very)
+       POSSIBLY CHANGING order.
+
+       b) Any arguments given after the event key are passed to each
+       subscriber callback function, in the order they are passed in
+       here. e.g. if this function is passed ('foo', 'bar', 1) then
+       each subscriber will be called with ('bar', 1). Pedantic
+       side-note: each callback gets its own copy of the arguments
+       array, to avoid unintended side-effects if a callback modifies
+       its argv.
+
+       Returns this object (for lack of a better option).
+
+       It propagates any exceptions thrown by a subscriber, and any
+       pending subscribers won't get called.
+
+       Pedantic side-node: each subscriber gets its own copy of the
+       arguments array, so it's safe to change it or keep a reference
+       to it in the subscribers without affecting others.
+    */
+    pub:proc(/*key, event args...*/){
+        return this.pubWithThis(argv.shift(), undefined, @argv);
+    },
+
+    /**
+       A special case of pub() useful in certain code constellations.
+
+       For each listener of event type e, its callback is called using
+       t as the callback's "this" and passing on all arguments after
+       the second. If t is undefined then each callback is its own
+       'this' (as is conventional for s2).
+
+       Returns this object.
+
+       See pub() for more details.
+    */
+    pubWithThis: proc(e,t/*...*/){
+        const m = this.$map[e] ||| return this;
+        affirm typeinfo(isobject m);
+        argv.shift(2);
+        foreach(m=>k,f) f.apply(t?:f, argv.slice());
+        return this;
+    },
+
+    /**
+       Removes all subscriptions for the given key or (if no arguments
+       are passed) all subscriptions for all keys.
+       
+       Returns this object (for lack of a better option).
+    */
+    reset:proc(/*key*/){
+        argv.# ? unset this.$map[argv.0] : this.$map = {prototype:null};
+        return this;
+    }
+};

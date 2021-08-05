@@ -1,0 +1,187 @@
+scope {
+    /* Basic sanity checks for the Db and Stmt bindings. */
+    var db = Fossil.Db.open(':memory:');
+    assert db inherits Fossil.Db;
+    assert 'Db' === typename db;
+    //db.eachProperty(print);
+
+    var st = db.prepare("CREATE TABLE t(a,b)");
+    assert st inherits Fossil.Db.Stmt;
+    assert 'Stmt' === typename st;
+    assert undefined === st.step();
+    st.finalize();
+    assert 0 === catch{st.finalize()}.message.indexOf("'this'");
+    st = 0; // will (in this case) clean up the wrapping part of the binding immediately
+
+    assert db === db.execMulti(<<<EOSQL
+                 DELETE FROM t;
+                 INSERT INTO t VALUES(1,2);
+                 INSERT INTO t VALUES(3,4);
+                 EOSQL);
+    var counter = 0;
+    assert db === db.each({
+        sql: 'select a a, b b from t', // string or buffer
+        mode: 0, // 0===get each row as an object, else as an array
+        callback:<<<EOF // string/buffer or function
+          // Local vars defined in an each() callback:
+          // integer columnCount, integer rowNumber, Array columnNames,
+          // Object|Array this.
+          counter = rowNumber;
+          assert "object"===typename this;
+          //'print("row", rowNumber, this)'
+        EOF
+        // bind: if sql prop contains bound params, then a value,
+        // array of values, or an object with named params as keys.
+        // See examples below.
+    });
+    assert 2 === counter;
+    counter = 0;
+    db.each({
+        sql: 'select a a, b b from t',
+        callback: proc(){
+            counter = rowNumber;
+            assert 'array' === typename this;
+            assert 2 === this.length();
+            //'print("row", rowNumber, this)'
+        }
+    });
+    assert 2 === counter;
+
+    counter = 0;
+    db.prepare("select a, b from t").each(proc(){
+        affirm 'Stmt'===typeinfo(name this);
+        ++counter;
+        assert 1===this.get(0)%2;
+        assert 0===this.get(1)%2;
+        assert catch {this.get(2)}.codeString()==='CWAL_RC_RANGE';
+    }).finalize();
+    affirm 2 === counter;
+
+    var lastCol;
+    counter = 0;
+    db.each({
+        sql: 'select a a, b b from t where a>:min AND a<$max',
+        bind: {':min':1, $max:10} /* note that the ':' resp '$' is mandatory,
+                                     but $ is an identifier char and need not
+                                     be quoted. */,
+        mode: 0, // 0 === fetch each row as an object
+        callback: proc(){
+            counter = rowNumber;
+            assert 'object' === typename this;
+            lastCol = this.a;
+            //print("row", rowNumber, this)
+        }
+    });
+    assert 1 === counter;
+    assert 3 === lastCol;
+
+    st = db.prepare('select a a, b b from t where a>?1 AND a<?2'
+                    +' AND a<?2 AND a>?1'/*checking if binding ?N works right*/);
+    st.bind([0, 10]);
+    counter = 0;
+    while(st.step()){++counter}
+    assert 2 === counter;
+    st.reset();
+    st.bind(1, 1).bind(2,5);
+    counter = 0;
+    lastCol = 0;
+    while(var row = st.stepArray()){
+        ++counter;
+        lastCol = row.1;
+    }
+    st.finalize();
+    assert counter === 1;
+    assert lastCol === 4;
+
+    counter = 0;
+    db.each({sql:'select * from t order by a',
+             callback:'++counter>0 && return false'
+            });
+    assert 1 === counter;
+
+    assert 42 === catch{
+        db.each({sql:'select * from t order by a',
+                 callback:'throw 42'})
+    }.message;
+
+    counter = 0;
+    db.exec("create temp table ttmmpp(a)",
+            "insert into ttmmpp values(1),(2),(3)"
+           )
+        .each({sql:"select a from ttmmpp",
+               callback: 'counter += this.0'})
+            ;
+    assert 6 === counter;
+
+    // Make sure transactions basically work...
+    assert 0 === db.transactionState();
+    db.begin();
+    assert 1 === db.transactionState();
+    db.exec("update ttmmpp set a=NULL");
+    assert null === db.selectValue('select a from ttmmpp');
+    db.begin(); // nested!
+    assert 2 === db.transactionState();
+    db.exec("update ttmmpp set a=0");
+    assert 0 === db.selectValue('select a from ttmmpp');
+    db.rollback(); // only queues up the rollback b/c we are nested
+    assert -1 === db.transactionState()/* negated value of current transaction level */;
+    db.commit(); // actually rolls back b/c of previous rollback() call
+    assert 0 === db.transactionState();
+    assert 1 === db.selectValues('select a from ttmmpp order by a').0;
+    assert 3 === db.selectValue('select a from ttmmpp order by a desc');
+
+    /*
+      Alternately (more simply) use db.transaction() to handle the
+      begin/commit/rollback() management. Give it a function and it
+      will begin(), call the function, and either commit or roll back
+      (if the function call throws/propagates an error).
+    */
+    const rollbackMsg = "Will roll back.";
+    var ex = catch db.transaction(proc(){
+        // In this callback, "this" is the db instance.
+        this.exec("update ttmmpp set a=NULL");
+        assert null === this.selectValue('select a from ttmmpp');
+        assert 1 === this.transactionState();
+        throw rollbackMsg;
+    });
+    assert 0 === db.transactionState();
+    assert ex;
+    assert rollbackMsg === ex.message;
+    assert 1 === db.selectValue('select a from ttmmpp order by a');
+    ex = catch db.transaction(proc(){
+        assert 1 === this.transactionState();
+        this.exec("update ttmmpp set a=NULL");
+    });
+    assert !ex;
+    assert 0 === db.transactionState();
+    assert null === db.selectValue('select a from ttmmpp','default');
+
+    // Once more, this time nested...
+    ex = catch db.transaction(proc(){
+        this.exec("update ttmmpp set a=1");
+        this.transaction(proc(){
+            assert 1 === this.selectValue('select a from ttmmpp');
+            this.exec("update ttmmpp set a=2");
+            assert 2 === db.transactionState();
+            // Making sure script-stopper events are not downgraded
+            // to exceptions:
+            //assert !'just testing assert() propagation';
+            //exit 'just testing exit() propagation';
+            //fatal 'just testing fatal() propagation';
+            throw 42;
+        });
+        throw "Never reached.";
+        this.exec("update ttmmpp set a=3");
+    });
+    //print(__FLC,"ex =",ex);
+    assert 0 === db.transactionState();
+    assert ex;
+    assert 42 === ex.message;
+    assert null === db.selectValue('select a from ttmmpp');
+
+
+    // A Db is closed automatically when it is GC'd, but we
+    // can manually close them if needed:
+    db.close();
+    assert 0 === catch{db.close()}.message.indexOf("'this'");
+}

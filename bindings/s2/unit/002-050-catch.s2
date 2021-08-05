@@ -1,0 +1,107 @@
+const oldStackTrace = pragma(exception-stacktrace true);
+assert undefined === catch {1+3};
+var ex;
+//ex = catch -> ",";
+ex = catch -> {","};
+//ex = catch{,}
+//return ex;
+
+assert typeinfo(isexception ex);
+assert typeinfo(isstring ex.script);
+assert typeinfo(isinteger ex.line);
+assert typeinfo(isinteger ex.column);
+assert typeinfo(isinteger ex.code);
+//print(typename ex,':',ex);
+
+assert 'CWAL_RC_TYPE' === catch{var x; x.foo}.codeString();
+assert 'CWAL_RC_NOT_FOUND' === catch{unknownVar}.codeString();
+
+/*
+  dupe vars and var names which collide with a keyword currently
+  throw, rather than being triggered like syntax errors. The reason
+  is so that they are catchable. That is arguable behaviour but the
+  current unit test system can't (without additional sub-scripts)
+  'catch' a syntax error to test these...
+*/
+assert 'CWAL_RC_ALREADY_EXISTS' === catch{ var dupe, dupe }.codeString();
+assert 'CWAL_RC_ALREADY_EXISTS' === catch{ var for /*<== any keyword*/ }.codeString();
+
+assert 'CWAL_RC_TYPE' === catch{s2.import('.')/*cannot eval a directory*/}
+    .codeString();
+
+scope {
+    var ex = exception("hi");
+    assert 'CWAL_RC_EXCEPTION' === ex.codeString();
+    assert 'hi' === ex.message;
+
+    ex = exception(1,2);
+    assert 1 === ex.code;
+    assert 2 === ex.message;
+
+    ex = proc(){
+        return exception(1,2);
+    }();
+    assert 1 === ex.code;
+    assert 2 === ex.message;
+    assert typeinfo(isarray ex.stackTrace);
+
+    const obj = {
+        prototype: exception(1,2)
+    };
+    assert obj inherits ex.prototype;
+    assert 1 === obj.code;
+    assert 2 === obj.message;
+    assert typeinfo(isobject obj);
+
+    const e2 = catch{throw obj};
+    assert e2 === obj && "obj is-a exception, so it is thrown as-is.";
+}
+
+assert undefined === (1 ? catch 0 : 0)
+/* must not syntax error (fixed 20160205). Formerly the implicit scope
+   pushed by 'catch' (resp. the 'eval' family of keywords) was not
+   respecting the current ternary level (it was clearing it, on
+   purpose, because that's what we want in most cases), causing a
+   syntax error in such constructs. It now retains the ternary level
+   if the 'eval' operand is not a block expression. */;
+
+assert 0 === (1 ? catch {0:} : 0).message.indexOf("Unexpected ':'")
+/* But _this_ use of ':', without a '?' in the same (explicit) scope,
+   is not permitted. */;
+
+ex = catch [1,2,3].get(-1);
+assert typeinfo(isexception ex);
+assert 'CWAL_RC_RANGE' === ex.codeString();
+
+scope {
+    const ex = catch proc() { proc() { proc() {throw 1}() }() }();
+    assert typeinfo(isexception ex);
+    const st = ex.stackTrace;
+    assert st.length() >= 3 /*(may vary in amalgamated tests)*/;
+    assert 47 === ex.column;
+    assert 55 === st.0.column;
+    assert 59 === st.1.column;
+    assert 63 === st.2.column;
+}
+
+var line;
+ex = catch{
+    (line=__LINE+1), var x = {a:1 /*intentionally missing comma*/
+     b:1}/* ACHTUNG: 'b' must be at column 5 or adjust the assertion below */
+};
+//print(__FLC,line, ex);
+assert ex;
+assert ex.column ===  5
+  /* at one point it was reporting the line/column of the opening '{'
+     for the object literal containing the syntax error. */;
+assert ex.line === line;
+
+/*
+  On 20171130 it was accidentally discovered that tokens with token
+  type IDs in the range (1..127) were, in effect, being treated as
+  string literals by the eval engine. They now trigger a syntax error.
+*/
+assert 'CWAL_SCR_SYNTAX' === catch{/*<== a literal \r*/}.codeString();
+assert 'CWAL_SCR_SYNTAX' === catch{``}.codeString();
+
+pragma(exception-stacktrace oldStackTrace);

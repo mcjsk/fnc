@@ -1,0 +1,152 @@
+/*
+  Initialization script for s2sh. If it is named the same as the binary
+  (minus any ".exe" extension), with a ".s2" extension (and in the same directory),
+  s2sh will autoload this file at startup and fail if processing it fails.
+*/
+
+assert Fossil;
+assert Fossil.Context;
+
+assert s2 && 'function' === typename s2.loadModule;
+/**
+  An s2.loadModule() proxy which uses a PathFinder
+  instance to search for DLLs. The name argument must be the
+  base name part, optionally with a partial leading (sub-)path.
+
+  The dest argument is passed as the last argument to s2.loadModule(),
+  and is returned to the caller on success. Well-behaved modules will
+  install their features in that object.
+
+  If the S2_MODULE_PATH and/or S2_MODULE_EXTENSION environment
+  variables are set, they are treated as a semicolon- or
+  colon-separated list of directories resp. file extensions. If not
+  specified, some default set is used.
+
+*/
+s2.loadModule2 = function(name, dest = {}){
+    affirm 'string' === typename name;
+    const fn = pf.search( name );
+    fn || throw "Cannot find '".
+        concat(name, "' in search path ", pf.prefix.toJSONString());
+    //print("Importing",name, '==>', fn);
+    return loadModule.call(this, realpath ? realpath(fn) : fn, dest);
+}.importSymbols({
+    loadModule: s2.loadModule,
+    realpath: s2.io ? s2.io.realpath : undefined,
+    pf: s2.PathFinder.new(
+        // Directories...
+        ('string' === typename (var s = s2.getenv('S2_MODULE_PATH')))
+            ? s.split(s.indexOf(';') >= 0 ? ';' : ':')
+        : ['.'],
+        // Extensions...
+        ('string' === typename (s = s2.getenv('S2_MODULE_EXTENSIONS')))
+       ? s.split(s.indexOf(';') >= 0 ? ';' : ':')
+        : ['.so','.dll']
+    )
+});
+
+
+/**
+   For the given container, v, this displays (via s2.io.output() a
+   listing of its properties. Intended for getting an overview of an
+   object's API.
+*/
+s2.vls = proc(v,label){
+    label && print(label);
+    typeinfo(iscontainer v) && this.eachProperty.call(v,eachProp);
+}.importSymbols({
+    eachProp:proc(k,v){
+        print('\t'+typeinfo(name k), k, '=', typeinfo(name v), v);
+    }
+});
+
+/**
+   For the given container, v, this displays (via s2.io.output() a
+   tree listing, recursively, of its properties. Intended for getting
+   an overview of an object's API.
+
+   If includeProto is truthy, v.prototype is also dumped. If it is
+   less than 0, that is done recursively for all entries and their
+   prototypes.
+*/
+s2.vtree = proc vtree(v,label,includeProto){
+    typeinfo(iscontainer v) || return;
+    if(!typeinfo(isstring label) && undefined===includeProto){
+        includeProto= label;
+        label = undefined;
+    }
+    const doMyProto = includeProto;
+    includeProto < 0 || (includeProto=0);
+    //print(__FLC,'argv =',argv);
+    label ?: (label = "%1$p".applyFormat(v));
+    label && out(buf.toString(),label," [type: ",typeinfo(name v),'] ==>\n');
+    ++buf.level;
+    buf.length(buf.level*4);
+    buf.fill(' ');
+    var ex = catch{
+        // ^^^^ s2 bug: braces around this catch should not be necessary.
+        // Symptom: if the first if() passes then the 'else' is getting seen
+        // after catch resolves.
+        if(typeinfo(isarray v)){
+            //out(' array ',v.toJSONString(0,true/*output cycles as strings*/),'\n');
+            v.eachIndex(eachIndex);
+        }else{
+            buf.prototype.eachProperty.call(v,eachProp);
+        }
+    };
+    ex = catch if(!ex && v.prototype){
+        doMyProto
+        ? vtree(v.prototype,label?label+'.prototype':0, includeProto)
+        : out(buf.toString(),label ? label+'.' : '',
+              'prototype ==> [type: ',
+              typeinfo(name v.prototype),']\n');
+    };
+    --buf.level;
+    buf.length(buf.level * 4);
+    ex && throw ex;
+}.importSymbols({
+    buf: eval {
+        var b = new s2.Buffer(20);
+        b.level = 0;
+        b;
+    },
+    out: s2.io.output,
+    eachProp:proc(k,v){
+        if(typeinfo(isfunction v)){
+            out(buf.toString(), (label ? label+'.'+k :k),'()\n');
+        }
+        else if(typeinfo(iscontainer v)
+                && typeinfo(isfunction v.mayIterate)){
+            v.mayIterate()
+                ? vtree(v,(label ? label+'.'+k : k), includeProto)
+                : out(buf.toString(),(label ? label+'.'+k : k),
+                      " = <cyclic: %1$p>\n".applyFormat(v));
+        }else{
+            out(buf.toString(), (label ? label+'.'+k :k),
+                ' = ', typeinfo(name v), ' ', v, '\n');
+        }
+    },
+    eachIndex:proc(v,k){
+        if(typeinfo(isfunction v)){
+            out(buf.toString(), (label ? label+'['+k+']','()\n'));
+        }
+        else if(typeinfo(iscontainer v)
+                && typeinfo(isfunction v.mayIterate)){
+            v.mayIterate()
+                ? vtree(v,(label ? label+'['+k+']' : k), includeProto)
+                : out(buf.toString(),(label ? label+'['+k+']' : k),
+                      " = <cyclic: %1$p>\n".applyFormat(v));
+        }else{
+            out(buf.toString(), (label ? label+'['+k+']' :k),
+                ' = ', typeinfo(name v), ' ', v, '\n');
+        }
+    }
+});
+
+/**
+   Add Fossil.require(), used in loading Fossil-aware modules.
+*/
+Fossil.require = import( false, 'require.d/require.s2' );
+
+// The rest of the initialization happens via here:
+Fossil.require(['nocache!fsl/extendFossil'],proc(){});

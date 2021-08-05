@@ -1,0 +1,3 @@
+assert 'Fossil' === typename Fossil;
+assert 'Db' === typename Fossil.Db;
+assert 'Stmt' === typename Fossil.Db.Stmt;

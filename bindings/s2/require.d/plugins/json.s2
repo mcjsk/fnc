@@ -1,0 +1,21 @@
+/** A require.s2 plugin which loads file content as JSON,
+    using s2.json.parseFile(). It does _not_ cache its
+    results. Use the json-cached plugin for the same
+    effect but with cached results.
+*/
+return {
+    cacheIt: false /*
+                     We _generally_ don't want these cached because
+                     they are "probably" used only once in most cases.
+
+                     Use the 'json-cached' plugin if you want cached
+                     JSON files.
+                   */,
+    suffix: ['.json'],
+    prefix: // Append '/json' to all paths in the default plugin's path
+        ((const p = [], suffix = s2.io.dirSeparator+'json'),
+         requireS2.getPlugin('default').prefix.eachIndex(proc(v){
+             p[] = v+suffix;
+         }), p),
+    load: proc(file){return s2.json.parseFile(file)}
+};

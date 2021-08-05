@@ -1,0 +1,20 @@
+assert 'string' === typeinfo(name '');
+assert 'integer' === typeinfo(name 3 * 8);
+assert 'double' === typeinfo(name 3.1);
+assert 'function' === typeinfo(name print);
+assert 'string' === typeinfo(name typeinfo(name 3));
+assert 'undefined' === typeinfo(name undefined);
+assert 'undefined' === typeinfo(name $omeUndefined$ymbol);
+assert 'object' === typeinfo(name s2.('prototype'));
+assert 'object' === typeinfo(name s2.'prototype');
+assert 'object' === typeinfo(name s2.prototype);
+assert 'object' === typeinfo(name s2['pro'+'totype']);
+assert 'object' === typeinfo(name s2[('p'+('r'+('o')))+('totype')]);
+
+assert 'integer' === typeinfo(name 8*2.3);
+assert 18 === 8*2.3 /* LHS type determines result type,
+                       but double on the RHS is honored
+                       for multiplication/division purposes
+                       and the result gets truncated to an int.
+                    */;
+assert 'double' === typeinfo(name 8.0*2.3);

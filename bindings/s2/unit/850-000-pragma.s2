@@ -1,0 +1,81 @@
+/**
+   20191230: pragma(...) was introduced to query/modify engine-level
+   state.
+*/
+const oldStackTrace = pragma(exception-stacktrace true);
+
+scope {
+    const E = proc(){return exception(0)};
+    assert pragma(exception-stacktrace);
+    var e = E();
+    assert typeinfo(isarray e.stackTrace);
+    assert pragma(exception-stacktrace 5);
+    assert true === pragma(exception-stacktrace);
+    assert pragma(exception-stacktrace null);
+    assert false === pragma(exception-stacktrace);
+    e = E();
+    assert undefined === e.stackTrace;
+    assert false === pragma(exception-stacktrace true) /* result === old value */;
+    e = E();
+    assert typeinfo(isarray e.stackTrace);
+}
+
+pragma(exception-stacktrace false);
+
+scope {
+    assert 0 === pragma(refcount "")/*builtin value*/;
+    var x;
+    assert 0 === pragma(refcount x)/*undefined value (builtin)*/;
+    x = 1000;
+    assert 0 < pragma(refcount x)
+    /* What?... the refcount is 2 from the shell and 3 here. */;
+}
+
+scope {
+    assert typeinfo(isinteger pragma(sweep-interval));
+    assert typeinfo(isinteger pragma(vacuum-interval));
+
+    var i = pragma(sweep-interval);
+    assert i > 0;
+    pragma(sweep-interval 99);
+    assert 99 === pragma(sweep-interval);
+    pragma(sweep-interval i);
+    assert i === pragma(sweep-interval);
+
+    i = pragma(vacuum-interval);
+    assert i > 0;
+    pragma(vacuum-interval 99);
+    assert 99 === pragma(vacuum-interval);
+    pragma(vacuum-interval i);
+    assert i === pragma(vacuum-interval);
+
+    assert 'CWAL_RC_RANGE'===catch pragma(sweep-interval -1).codeString();
+    assert 'CWAL_RC_RANGE'===catch pragma(vacuum-interval -1).codeString();
+}
+
+scope {
+    const i = pragma(trace-sweep);
+    assert typeinfo(isinteger i);
+    var t = pragma(trace-sweep 2);
+    assert i === t;
+    assert 2 === pragma(trace-sweep 0);
+    assert 0 === pragma(trace-sweep i);
+}
+
+scope {
+    const i = pragma(trace-assert);
+    assert typeinfo(isinteger i);
+    const t = pragma(trace-assert 1);
+    // be careful with the order, to prevent
+    // generating extraneous output...
+    assert 1 === pragma(trace-assert 0);
+    assert i === t;
+    assert 0 === pragma(trace-assert i);
+}
+
+/* Test for pragma(trace-token-stack) intentionally elided because it
+   generates output to stdout. It uses the exact same code as several
+   other trace-xxx pragmas, though.
+*/
+
+pragma(exception-stacktrace oldStackTrace);

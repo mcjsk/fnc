@@ -1,0 +1,12 @@
+assert 2 === 1<<1;
+assert 64 === 256>>2;
+assert 4 === 1<<1<<1;
+
+assert 4 === 1<<1<<1 ||| 0;
+assert 4 === 0 || 1<<1<<1 ||| 1;
+
+assert 1 === 0b1;
+assert 4 === 0b100;
+assert 0xff === 0b11111111;
+assert 0b0110 === (0b_11_10 & 0b_01_11);
+assert 0b100 === 0b1 << 2;

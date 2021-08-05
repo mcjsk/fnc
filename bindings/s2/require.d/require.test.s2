@@ -1,0 +1,50 @@
+
+affirm requireS2;
+affirm 'string' === typename requireS2.home;
+affirm requireS2.home.indexOf('/')>-1 || requireS2.home.indexOf('\\')>-1;
+//print(__FLC,'requireS2.home =',requireS2.home);
+/**
+   A quite incomplete test of require.s2. Since this cannot even
+   be loaded by require.s2 if require.s2 isn't at least basically
+   working, just getting here already tells us much.
+*/
+requireS2.addPlugin('dummy',{
+    isVirtual: true,
+    cacheIt: false,
+    load: proc(n,opt){
+        return {
+            name: n,
+            opt: opt
+        };
+    }
+});
+
+requireS2.addPlugin({
+    dummy2:{
+        isVirtual: true,
+        chachIt: true,
+        load: proc(n,opt){
+            return 1;
+        }
+    },
+    dummy3:{
+        isVirtual: true,
+        chachIt: true,
+        load: proc(n,opt){
+            return 0;
+        }
+    }
+});
+
+requireS2(['dummy!fred?a=1'],proc(obj){
+    affirm 'fred' === obj.name;
+    affirm 1 === obj.opt.a;
+
+    assert true === requireS2(['dummy!barny', 'dummy2!', 'dummy3!'],proc(d, d2, d3){
+        assert 'barny' === d.name;
+        assert !d.opt;
+        assert 1 === d2;
+        assert 0 === d3;
+        return true;
+    });
+});

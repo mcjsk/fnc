@@ -1,0 +1,336 @@
+
+const Buffer = s2.Buffer.new;
+
+scope {
+
+  var b = Buffer();
+  assert b inherits s2.Buffer;
+  assert !b.capacity();
+  assert !b.length();
+  b.length(10);
+  assert 10 === b.length();
+  assert b.# === b.length();
+  assert b.capacity() >= b.length();
+}
+
+
+scope {
+    const sz = 20, b = Buffer(sz);
+    assert !b.#;
+    assert b.isEmpty();
+    assert b.capacity() >= sz;
+    b.append('a');
+    assert !b.isEmpty();
+    assert 1 === b.#;
+    b.appendf('%1$d', 1);
+    assert 2 === b.#;
+
+    b.fill(42);
+    assert '**' === b.toString() /* ensure that fill() does not change the length() */;
+
+    b.reset();
+    assert 0 === b.#;
+    b.fill('!');
+    assert undefined === b.byteAt(0) /* ensure that fill() does not change the length() */;
+
+    b.length(sz).fill( '$' );
+    assert 36 === b.byteAt( 0 );
+    assert 36 === b.byteAt( sz-1 );
+    assert undefined === b.byteAt( sz );
+
+    b.fill( '!', 1, 18 );
+    assert 36 === b.byteAt( 0 );
+    assert 36 === b.byteAt( 19 );
+    assert 33 === b.byteAt( 1 );
+    assert 33 === b.byteAt( 18 );
+    assert '$!' === b.toString( 0, 2 );
+}
+
+scope {
+    const fmt = proc callee(fmt){
+        return callee.buffer.reset( 0 ).appendf.apply( callee.buffer, argv ).toString();
+    };
+    fmt.buffer = Buffer(100);
+    const check = proc(cmp){
+        argv.shift();
+        const s = fmt.apply(fmt,argv);
+        (s===cmp) || throw ("Mismatch: <<<"+cmp+">>> !== <<<" +s+">>>");
+        assert 1 /* count the above comparison as an assertion.
+                    We use throw only to get more info out of it
+                    if it fails*/;
+    };
+    const av = [ 42, "string formatter", "abcde",
+                 19.17, true, false, -13.19];
+
+    assert 'CWAL_RC_RANGE' === catch{fmt("%8$+f", 0)/*not enough args*/}.codeString();
+
+    check( '%', '%%' );
+    check( '%x%y', '%%x%%y' );
+
+    check( 'hi, world', "%1$s", 'hi, world' );
+    check('hi, world (           hi, world)',
+          "%1$s (%1$20s)", 'hi, world');
+    check('integer 42 042 02A 002a',
+          "%1$y %1$d %1$03d %1$03X %1$04x", av.0);
+    check('(        42) (42        )',
+          "(%1$10d) (%1$-10d)", av.0);
+    check('(       +42) (+42       )',
+          "(%1$+10d) (%1$+-10d)", av.0);
+
+    check( '00042', "%1$05d", av.0 );
+    check( '42.00000', "%1$0.5f", av.0 );
+    check('string formatter', "%2$s", 0, av.1);
+    check('string', "%2$.6s", 0, av.1);
+    check('string formatter and string formatter',
+          "%2$s and %2$s", 0, av.1);
+    check( '(abcde     ) (     abcde)',
+           "(%3$-10s) (%3$10s)", 0, 0, av.2 );
+    check( '(     abcde) (abcde     )',
+           "(%3$10s) (%3$-10s)", 0, 0, av.2 );
+    check( '(       abc) (abc       )',
+           "(%3$10.3s) (%3$-10.3s)", 0, 0, av.2 );
+    check( '(abc       ) (       abc)',
+           "(%3$-10.3s) (%3$10.3s)", 0, 0, av.2 );
+    check( '(abcd) (abcd    )',
+           "(%3$.4s) (%3$-8.4s)", 0, 0, av.2 );
+    check( '19.17 19.2 19.17 19.170',
+           "%4$f %4$.1f %4$.2f %4$.3f", 0, 0, 0, av.3 );
+    check( '+19.17 (19.170    ) (    19.170) (+00019.170)',
+           "%4$+0f (%4$-10.3f) (%4$10.3f) (%4$+010.3f)", 0, 0, 0, av.3 );
+    check( '1 true false null undefined',
+           "%5$d %5$b %6$b %5$N %5$U", 0, 0, 0, 0, av.4, av.5 );
+    check( '0.0', "%6$+f", 0, 0, 0, 0, 0, av.5 );
+    check( '-13.19', "%7$+f", 0, 0, 0, 0, 0, 0, av.6 );
+
+    check( '68692C20776F726C64',
+           "%1$B", "hi, world" );
+    check( '68692C20',
+           "%1$.4B", "hi, world" );
+    check( '                     68692C20776F726C64',
+           "%1$30B", "hi, world" );
+
+    check( '-1.0', '%1$.1f', -1.02 );
+    check( '+1.0', '%1$+.1f', 1.02 );
+
+    check( '-1', '%1$d', (-1) );
+    check( '-1', '%1$+d', (-1) );
+    check( '+1', '%1$+d', 1 );
+
+    check( 'h', '%1$c', 'hi' );
+    check( '     hhhhh', '%1$10.5c', 'hi' );
+    check( 'hhhhh     ', '%1$-10.5c', 'hi' );
+    check( '  ©', '%1$3c', '©' );
+    check( '©©©', '%1$0.3c', '©' );
+    check( '©©©', '%1$.3c', '©' );
+    check( '©©©  ', '%1$-5.3c', '©' );
+    check( '  ©©©', '%1$5.3c', '©' );
+    check( 'A', '%1$c', 65 );
+    check( 'AAAA', '%1$.4c', 65 );
+    check( '10', '%1$o', 8 );
+    check( '0010', '%1$04o', 8 );
+    check( '  10', '%1$4o', 8 );
+    assert '1 2 3' === "%1$d %2$d %3$d".applyFormat( 1,2,3 );
+    check( '(NULL)', '%1$q', null );
+    check( "h''i", '%1$q', "h'i" );
+    check( "'h''i'", '%1$Q', "h'i" );
+    check( 'NULL', '%1$Q', null );
+
+    // check 0-precision characters...
+    check( '', '%1$.0c', '*' );
+    check( '', '%1$0.0c', '*' );
+    check( '  ', '%1$2.0c', '*' ) /* arguable, but currently true */;
+
+    // check urlencoding/decoding
+    check( 'a%20b%26c', '%1$r', 'a b&c' );
+    check( 'a b&c', '%1$R', 'a%20b%26c' );
+    check( 'a%2zb', '%1$R', 'a%2zb' );
+
+    assert catch {'%1$.1r'.applyFormat()}.message.indexOf('precision')>0;
+    assert catch {'%1$1r'.applyFormat()}.message.indexOf('width')>0;
+    assert catch {'%1$.1R'.applyFormat()}.message.indexOf('precision')>0;
+    assert catch {'%1$1R'.applyFormat()}.message.indexOf('width')>0;
+}
+
+scope{
+    var b = Buffer(100);
+    var x = 0, y = 0;
+    b << <<<EOF
+    for(var i = 0; i < 5; ++i) ++x, --y; 
+    1
+    EOF;
+    var rc = b.evalContents("foo");
+    assert 1 === rc;
+    assert 5 === x;
+    assert -x === y;
+
+    b.reset() << <<<EOF
+    0;
+    1;
+    return {a:'a',b:'bbbb'};
+    EOF;
+  
+    var name = 'bar';
+    rc = b.evalContents(name);
+    assert rc.a === 'a';
+    assert rc.b === 'bbbb';
+
+    b.reset() << <<<EOF
+    0;
+    1;
+    throw 3;
+    return {a:'a',b:'bbbb'};
+    EOF;
+  
+    var ex = catch{
+        rc = 1
+        ? b.evalContents(name)
+            : eval ->b;
+        throw "NOT REACHED";
+    };
+    assert ex;
+    //print(__FLC,'ex =',ex) /* a cycle (the exception obj!) in the stack trace!?!?!? Corruption??? */;
+    // something here is triggering an assertion in cleanup!
+    // Worked around: comments are in evalContents() impl for further consideration later.
+    assert name === ex.script;
+    assert 3 === ex.message;
+    assert 3 === ex.line;
+    assert 4 === ex.column;
+
+    assert 3 === "a+b".evalContents({a:1,b:2});
+    assert 'xyz' === "__FILE".evalContents('xyz');
+    assert 'xyz9' === "__FILE+a".evalContents({a:9},'xyz');
+    assert 'xyz8' === "__FILE+a".evalContents('xyz',{a:8});
+    assert 'test.x' === catch {"A_+B_".evalContents('test.x',{a:1,b:2})}.script;
+}
+
+scope {
+    var b = Buffer() << "h©, ©orld";
+    assert '©, ©' === b.substr(1,4);
+    assert 'h©, ©orld' === b.substr(0,-1);
+    assert '©orld' === b.substr(4);
+    assert ', ©o' === b.substr(2,4);
+
+    b.reset();
+    assert '' === b.substr(1);
+}
+
+scope {
+    var b = Buffer() << 1.00;
+    assert "1.0" === b.toString() /* bugfix check: leave final trailing 0 after the dot. */;
+
+
+    /* Testing Buffer.slice()... */
+    b.reset() << "012345";
+    proc x(expect,offset=0,count=-1){
+        const v = b.slice(offset, count).toString();
+        (expect === v) && (assert "slice() check passed") && return x;
+        throw "Mismatch: expecting ["+expect+"] but got: ["+v.toString()+"]";
+    }
+    ("012345")
+    ("012345",0)
+    ("012345",0,-1)
+    ("12345",1,-1)
+    ("12345",1,50)
+    ("5", 5, 1)
+    ("5", 5, 10)
+    ("", 5, 0)
+    ("1234", 1, 4)
+    ;
+
+    /* Buffer.replace() tests... */
+    b.reset() << "012345";
+    const check = proc callee(needle,replace/*,limitAndOrExpect*/){
+        const expect = argv.3 ||| argv.2,
+           limit = argv.3 ? argv.2 : 0;
+        const v = b.replace(needle, replace, limit).toString();
+        (expect === v) && (assert 1 /*Buffer.replace() check passed*/) && return callee;
+        throw "Mismatch: expecting ["+expect+"] but got: ["+v+"]";
+    }
+    ('1', '9', '092345')
+    (57, 42, '0*2345')
+    ('345', '**', 42, '0*2**')
+    ('*', 'x', 1, '0x2**')
+    ('0x2', '', '**')
+    (42, 0, '\0\0')
+    ;
+    assert !b.isEmpty() /* technically speaking */;
+    assert 2 === b.#;
+    assert 0 === b.byteAt(1);
+    var v = b.toString();
+    assert 2 === v.#;
+    assert '\0\0' === v;
+
+    b.reset() << "012345";
+    check('1', '©', '0©2345')
+         ('345', '©©', '0©2©©')
+    ;
+
+    b.reset() << "a*b*c";
+    assert b.replace(42,33).toString() === "a!b!c";
+    b.reset() << "a*b*c";
+    assert b.replace(42,33,1).toString() === "a!b*c";
+
+    assert catch {b.replace("","x")}.codeString() === 'CWAL_RC_RANGE' /* needle must be >0 bytes */;
+}
+
+scope {
+    /*
+      Ensure that evalContents() behaves safely when the being-eval'd
+      buffer's contents are modified during evaluation. i.e. the
+      modifications are only temporary and get discarded when
+      evalContents() is done.
+    */
+    const contents = "x = 2; b<<'abc'; assert 'abc'===b.takeString()";
+    var x, b = Buffer() << contents;
+    b.evalContents(__FLC);
+    assert 2 === x;
+    assert contents === b.takeString();
+}
+
+
+if(const BB = s2.Buffer.compression ? s2.Buffer : 0){
+    assert 0 === catch {BB.isCompressed()}.message.indexOf("'this'");
+    assert 0 === catch {BB.isCompressed(1)}.message.indexOf("Argument");
+    assert 0 === catch {BB.uncompressedSize()}.message.indexOf("'this'");
+    assert 0 === catch {BB.uncompressedSize(1)}.message.indexOf("Argument");
+    const b = BB.readFile(__FILE);
+    const len = b.#;
+    assert len > 5000;
+    assert !b.isCompressed();
+    assert !b.isCompressed(b);
+    assert 0 === catch {b.isCompressed(1)}.message.indexOf("Argument");
+    assert !BB.isCompressed(b);
+    assert undefined === b.uncompressedSize();
+    assert undefined === BB.uncompressedSize(b);
+    assert b === b.uncompress() /* must be a no-op */;
+    assert b.# === len;
+
+    assert b === b.compress();
+    assert b.isCompressed();
+    assert b.isCompressed(b);
+    assert BB.isCompressed(b);
+    const zlen = b.#;
+    assert zlen < len;
+    assert zlen > len/10;
+    assert b === BB.compress(b) /* must be a no-op */;
+    assert b.# === zlen;
+    assert len === b.uncompressedSize();
+    assert len === BB.uncompressedSize(b);
+
+    assert b === BB.uncompress(b);
+    assert !b.isCompressed();
+    assert !b.isCompressed(b);
+    assert b.# === len;
+    assert undefined === b.uncompressedSize();
+    assert undefined === BB.uncompressedSize(b);
+
+}else{
+    /* For the benefit of the -A flag (assert tracing). */
+    var b = Buffer();
+    assert !b.isCompressed();
+    assert 'CWAL_RC_UNSUPPORTED' === catch {b.compress()}.codeString();
+    assert 'CWAL_RC_UNSUPPORTED' === catch {b.uncompress()}.codeString();
+    assert undefined === b.uncompressedSize();
+    /* note that b.uncompressedSize() _would_ work if it was compressed,
+       but that's hard to demonstrate here w/o compression support. */
+}

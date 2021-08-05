@@ -1,0 +1,166 @@
+
+var o = {a:1, 2:'two', __typename:'Fred'};
+scope {
+  assert 'Fred' === typename o;
+  assert o.hasOwnProperty('a');
+  assert !o.hasOwnProperty('hasOwnProperty');
+  assert o.prototype.hasOwnProperty('hasOwnProperty');
+  assert o.hasOwnProperty(2);
+  assert pragma(build-opt CWAL_OBASE_ISA_HASH)
+        ? !o.hasOwnProperty('2') : o.hasOwnProperty('2');
+  unset o.2;
+  assert !o.hasOwnProperty(2);
+  assert 0 != o.compare({});
+  assert 0 === o.compare(print,print);
+  assert 0 === o.compare(o);
+  assert 0 === o.compare(o,o);
+  assert 0 === o.compare(1,1);
+  assert o.compare(1,-1) > 0;
+  assert o.compare(-1,1) < 0;
+}
+
+scope {
+  var k = o.propertyKeys();
+  assert 'array' === typename k;
+  assert 'string' === typename k.0;
+  //print('o.propertyKeys() ==',k);
+}
+
+
+scope {
+  o.clearProperties();
+  assert 'object' === typename o;
+  assert undefined === o.a;
+}
+
+scope {
+  assert !o.hasOwnProperty('x');
+  o.x = 1;
+  assert 1 === o.x;
+  assert o.hasOwnProperty('x');
+  o.unset('x');
+  assert undefined === o.x;
+  assert !o.hasOwnProperty('x');
+}
+
+scope {
+  assert o.mayIterate();
+}
+
+scope {
+    o.a = 3, o.b = 7, o.c = 42.24, o.d = [1,2,3], o.1 = -1;
+    const json = o.toJSONString(' ');
+    const o2 = eval -> json;
+    assert typename o === typename o2;
+    assert o2.d[1] === o.d[1];
+    if(!pragma(build-opt CWAL_OBASE_ISA_HASH)){
+        /*only works if !CWAL_OBASE_ISA_HASH, else order is undefined*/
+        assert o2.toJSONString(1) === json;
+        const abc = o.toJSONString('abc');
+        assert abc.indexOf('abc')>0;
+        assert abc.toLower() === o2.toJSONString('ABC').toLower();
+    }
+}
+
+scope {
+  o.x = -1;
+  assert -1 === o.get('x');
+  o.set('x',1);
+  assert 1 === o.get('x');
+  o.set({Z: 'zzz'});
+  assert 'zzz' === o.Z;
+  assert true === o.unset('x','Z');
+  assert false === o.unset('x','Z');
+  assert undefined === o.Z;
+  //o.compare(); // check that exception contains call-point line/col info
+}
+
+scope {
+  o.s = o;
+  var counter = 0;
+  o.p = proc f(){
+    counter = counter + 1;
+    return f;
+  };
+  o.('p')(__FLC)(__FLC);
+  assert 2===counter;
+  counter = 0;
+  o.s.p(__FLC)(__FLC)(__FLC);
+  assert 3===counter;
+  counter = 0;
+  o['s'].('p')(__FLC);
+  o['s'].s.('p')(__FLC);
+  o['s'].s['p'](__FLC);
+  assert 3===counter;
+  o;
+}
+
+scope {
+  var counter = 0, lastKey, lastVal;
+
+  const f = proc(k,v){
+    assert this.mayIterate()/*as of 20191212*/;
+    counter = counter + 1;
+    //print(k,v);
+    lastKey = k;
+    lastVal = v;
+  };
+  assert o.mayIterate();
+  o.eachProperty(f);
+  assert o.mayIterate();
+  assert counter === o.propertyKeys().length();
+  assert undefined !== lastKey;
+  assert undefined !== lastVal;
+  assert lastKey !== lastVal;
+}
+
+scope {
+    /* Ensure that an object which inherits Function is call()able
+       and that 'this' resolution works right. */
+    var x = 0;
+    var f = proc callee(){
+        assert this inherits callee;
+        assert this !== callee /* 'this' is one step down the prototype chain */;
+        /* 'this' for non-property call() === the function resp. the call()able */;
+        ++x;
+        ++this.z;
+    };
+    var y = { prototype: f, z: 1 };
+    assert y inherits f;
+    y();
+    assert 1 === x;
+    assert 2 === y.z;
+}
+
+scope {
+    var o = {
+    };
+    assert o.isEmpty();
+    assert 0 === o.propertyCount();
+    o.a = 1, o.b = 2;
+    assert !o.isEmpty();
+    assert 2 === o.propertyCount();
+
+    var y = {};
+    var x = o.copyPropertiesTo(y, {});
+    assert x !== o;
+    assert x !== y;
+    assert 2 === x.propertyCount();
+    foreach(x=>k,v){
+        assert v === o[k];
+        assert v === y[k];
+    };
+
+    assert 'CWAL_RC_TYPE' === catch{x.copyPropertiesTo(1)}.codeString();
+    assert 'CWAL_RC_MISUSE' === catch{x.copyPropertiesTo(/*no args*/)}.codeString();
+    assert 'CWAL_RC_TYPE' === catch{x.copyPropertiesTo.call(0/*not a container*/, 1)}.codeString();
+}
+
+scope {
+    const o = {};
+    assert o === o.withThis(proc(){});
+    assert o === o.withThis(proc(){return});
+    assert 1 === o.withThis(proc(){return 1});
+}
+
+o; // propagate this out to make sure it survives the propagation process w/o being cleaned up.

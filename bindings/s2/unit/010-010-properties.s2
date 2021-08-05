@@ -1,0 +1,74 @@
+
+scope {
+  var o = {}; 
+  assert 'object' === typename o;
+  o.x = o;
+  o.x['x'].'z' = 1;
+  assert 1 === o.x.'x'['x'].z;
+  assert 1 === o.x['x'].('z');
+  assert 1 === o.x['x'].('x').('z');
+  assert 1 === o.x['x'].('x')['x'].('z');
+  o.x = 1;
+  o.x = o.x + 2;
+  assert 3 === o.x;
+  assert 6 === o.x * 2;
+  assert 4 === 1 + o.('x');
+  assert 2 === o['x'] * 3 % 7;
+  var z = 'x';
+  assert 3 === o[z];
+  assert 9 === o.(z) * o[z];
+}
+
+scope {
+  var o = {a:1};
+  assert 2 === (o.a+=1);
+  assert -2 === (o.a*=3*3-10);
+  o.a = 2; 
+  assert 10===(o.a*=3+2);
+  assert 10 === o.a;
+  assert 5 === (o['a'] /= 2);
+  assert 20 === (o['a'] <<= 2);
+  assert 20 === o.a;
+}
+
+scope {
+  var o = {a:1}, o2 = {prototype:o};
+  assert o2 inherits o;
+  assert 1 === o2.a;
+  o2.a = -1;
+  assert 1 === o.a;
+  assert -1 === o2.a;
+  unset o2.a;
+  assert 1 === o2.a;
+  unset o2.a;
+  assert 1 === o2.a /* o.a not cleared by unset */;
+  o2.unset('a');
+  assert 1 === o2.a /* o.a not cleared by o2.unset() */;
+  o.clearProperties();
+  assert undefined === o2.a;
+
+  o.x = 1, o2.x = 1;
+  assert 1 === o.x && 1 === o2.x;
+  unset o.x, o2.x;
+  assert undefined === o.x /* ensure unset handles commas properly */;
+  assert undefined === o2.x /* ensure unset handles commas properly */;
+}
+
+scope {
+    // Test 20190706 fix for bool lookup/property key bug...
+    var o = {};
+    assert undefined === o[true] /* must not resolve to a truthy-keyed
+                                    property (e.g. a member method) */;
+    o[true] = 3; // bool-typed property key
+    assert undefined === o['x'] /*must not match a boolean true property key */;
+    assert 3 === o[true] /* must match existing bool-type key */;
+    assert undefined === o.true /* note that o.true is a STRING key, not bool */;
+    assert undefined === o[false] /* just checking */;
+    o[false] = 1;
+    assert 1 === o[false] /* must match literal bool prop key */;
+    assert undefined === o.false /* note that o.false is a STRING key, not bool */;
+    assert undefined === o[0] /* must not match property key [false] */;
+    o[0] = 2;
+    unset o[false];
+    assert undefined === o[false] /* must not match falsy property key [0] */;
+}

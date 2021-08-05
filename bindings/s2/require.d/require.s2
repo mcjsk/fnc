@@ -1,0 +1,559 @@
+/**
+   Implements a basic script module loading API similar to
+   require.js (http://requirejs.org).
+
+   In short, this module acts as a loader for arbitrary other content,
+   be it s2 script code, raw file content, or "virtual" (non-file)
+   content plugged in by the user. Its usage is modelled very much of
+   off requirejs, and it will look familiar to anyone who has used
+   that library.
+
+   See the API docs in this module for more details. For even more
+   details (or other details, in any case), see this public Google
+   Doc:
+
+   https://docs.google.com/document/d/14gRP4f-WWgWNS64KM_BI7YjQqBLl4WT3jIrmNmFefYU/view
+
+   Example usage:
+
+   Assume the files r1.s2 and r2.s2 live somewhere in this module's
+   search path and that both return an Object with a foo() method.
+   This is how we might import and use them:
+
+   @code
+   const R = import('path/to/require.s2');
+
+   R(['r1', 'r2'], proc(r1, r2){
+     r1.counter = r2.counter = 1;
+     print(__FLC,r1);
+     print(__FLC,r2);
+     r1.foo();
+     r2.foo();
+     ++r1.counter;
+     ++r2.counter;
+   });
+
+   R(['r2', 'r1'], proc(r2, r1){
+     assert 2 === r2.counter;
+     assert 2 === r1.counter;
+     // ^^^ because imported script results are cached
+   });
+   @endcode
+
+*/
+affirm s2.fs;
+affirm s2.Buffer;
+affirm typeinfo(isfunction s2.getenv);
+affirm typeinfo(isfunction s2.fs.realpath);
+affirm typeinfo(isfunction s2.Buffer.readFile);
+const  /* saves some var lookup time */
+s2 = s2,
+realpath = s2.fs.realpath,
+getenv = s2.getenv,
+cliFlags = (s2.ARGV ? s2.ARGV.flags : 0) ||| {prototype:null}
+;
+
+const importFileBuffer = s2.Buffer.readFile;
+const importFileText = proc(fn) using(importFileBuffer) {
+    return importFileBuffer(fn).takeString();
+};
+/**
+   If a string-type CLI flag OR environment variable (in that
+   order) with the given name is found, this function returns an
+   array of its contents, tokenized using
+   s2.PathFinder.tokenizePath(). If no flag/environment variable
+   is found, or a CLI flag with a non-string value is found,
+   undefined is returned.
+
+   Interpretation of the arguments is as follows:
+
+   - If only 1 argument is provided, this routine looks for both a
+   CLI flag and environment var (in that order) with that name.
+
+   - If 2 arguments are provided, the 1st is checked as a CLI flag
+   and the 2nd as an environment variable (in that order).
+*/
+const pathFromEnv = proc(f,e=f){
+    const p = F[f] ||| E(e);
+    return typeinfo(isstring p)
+        ? P.tokenizePath(p)
+        : undefined;
+} using {
+    E: getenv,
+    P: s2.PathFinder,
+    F: cliFlags
+};
+
+/**
+   Internal utility to convert almost-URL-encoded plugin options
+   to some value form. Treats non-existent values (===undefined)
+   as a boolean true flag.
+*/
+const convertQValue = proc(v){
+    undefined === v && return true;
+    'true' === v && return true;
+    'false' === v && return false;
+    'null' === v && return null;
+    return 0.parseNumber(v) ?: v;
+};
+
+/**
+   Module-internal cache of import() responses.
+*/
+const modCache = new s2.Hash(0.nthPrime(15));
+
+/**
+   The main "require" module object.
+*/
+const mod = {
+    __typename: 'require.s2',
+    /**
+       Used for doing file lookups. Its search path and extensions
+       get continually swapped out by require() and friends to use
+       whatever search path the current context requires.
+    */
+    pf: new s2.PathFinder(),
+    pathFromEnv,
+    /* Exposed for corner-case use by plugins. */
+    modCache
+};
+
+/**
+   This "default" plugin (A) acts as the default
+   implementation for fetching require()'d files, (B) is
+   where the interface for other plugins is documented.
+*/
+const PluginModel ={
+    /**
+       Clear the prototype - we don't really need it for
+       this object.
+    */
+    prototype: undefined,
+    /** If true, require() does not search for the filename it
+        is given. (It is assumed to be some form of virtual
+        unique identifier, and may be empty.)
+    */
+    isVirtual: false,
+    
+    /**
+       cacheIt tells require whether or not to cache the results
+       of requests to this plugin. If it is true, then this.load()
+       will only be called for the first request, and its result
+       will be returned on subsequent requests. EXCEPTION: if
+       a plugin is called with arguments (see load()) the cache
+       is ignored/bypassed.
+
+       The default is expected (by client code) to always be true
+       for the default plugin!
+    */
+    cacheIt: true,
+
+    /**
+       For file-based plugins, prefix specifies the search
+       directories (array of strings, excluding any trailing slash
+       on the directory parts unless they refer to the root
+       directory).
+    */
+    prefix: pathFromEnv('s2.require.path', 'S2_REQUIRE_PATH') ||| ['.'],
+    /**
+       For file-based plugins, suffix specifies the search
+       extensions (array of strings, including any '.' part,
+       e.g. use ".foo" instead of "foo" unless you're searching
+       for partial extensions).
+    */
+    suffix: pathFromEnv('s2.require.extensions', 'S2_REQUIRE_EXTENSIONS') ||| ['.s2'],
+
+    /**
+       Called by require() to "load" a given module.  load() must
+       accept a module name, "load" that module, for a given
+       definition of "load", and return its contents or
+       result. (It need not actually load anything from anywhere,
+       much less a file: it might simply return a predefined
+       object or other value.)
+
+       In the call context, 'this' will be this plugin
+       configuration object.
+
+       The first argument is the "name" part of the string passed
+       to require.
+
+       The second argument part is either undefined or an object:
+       if the file string contains '?', anything after the ? is
+       assumed to be encoded in the form a=b&c=d... (URL-like, but
+       _without_ the URL encoding), and that gets transformed into
+       an Object of key/value pairs before passing them to this
+       function (the default value, if no "=" is provided, is boolean
+       true). HOWEVER: passing any arguments after '?' will
+       cause caching to be bypassed, because the arguments presumably
+       change how the plugin works. Note that if nothing follows
+       the '?' then no options object is created.
+       
+       Caveats regarding the opt parameter:
+
+       1) all of the values in the opt object will originally be
+       of type string, but numeric-looking strings and the strings
+       ("true", "false", "null") get converted to their
+       script-native type.
+
+       2) Only one level of opt object is supported, not nested
+       objects, arrays, etc.
+    */
+    load: proc(f/*, opt*/) using({
+        b: s2.Buffer.readFile,
+        r: mod
+    }) {
+        return b(f).evalContents(f,{requireS2: r});
+    }
+    /* Reminder to self: we cannot simply alias to s2.import() because
+       any extra non-string arguments would be passed to it (doing the
+       wrong thing). Reminder #2: adding comments outside of function
+       bodies, instead of if them, uses less memory, since they don't
+       get allocated as part of the function body. That's especially
+       significant when the length of the comments outweigh the rest
+       of the source, as in this case. */
+};
+
+/**
+   The funkiness we do with 'this' vs 'mod' in may places places
+   below is so that this stuff still works when clients copy the
+   returned module into a property of another object. i.e. the following
+   usages are equivalent:
+
+   var x = mod;
+   obj.x = mod;
+   x([...],...);
+   obj.x([...],...);
+
+   Both calls (because of these extra bindings) use the same "this"
+   inside the call (the local 'mod' symbol), which is important for
+   identical/correct semantics in both uses.
+*/
+
+/**
+   All the plugins are stored in this object, and any number may
+   potentially be loaded (and added here) via client-side use.
+*/
+mod.plugins = {
+    /**
+       The name 'default' is magic and assumes certain
+       plugin-level defaults. It also provides the default .prefix
+       and .suffix properties for other non-isVirtual (file-using)
+       plugins (used only if a given plugin does not define them
+       itself).
+    */
+    default: PluginModel,
+    /**
+       Works just like the default plugin but bypasses
+       the cache.
+    */
+    nocache: {
+        cacheIt: false,
+        load: PluginModel.load
+    },
+    /** Loads file content as a string. */
+    text: {
+        cacheIt: false,
+        // prefix: uses the defaults
+        suffix: ['.txt', '.s2', '.html'],
+        load: importFileText
+    },
+    /** Loads file content as a buffer. */
+    buffer: {
+        cacheIt: false,
+        // prefix: uses the defaults
+        suffix: ['.txt', '.s2', '.html'],
+        load: importFileBuffer
+    }
+
+    /**
+       Demonstration of a "virtual" plugin (one which does not
+       use files).
+       
+       virtualDemo:{
+       isVirtual: true,
+       cacheIt: true, // not strictly necessary, plugin-dependent
+       load: proc f(fn,opt){
+       print("Example of a 'virtual' handler. Arguments:",argv);
+       return opt ||| this;
+       }
+       }
+    */
+
+};
+
+/**
+   Installs one or more plugins into this object.
+
+   If called with an initial string arugment then:
+
+   - Adds a new plugin. name must be a string and pluginObj must
+   be an object which follows the PluginModel interface. Returns
+   pluginObj on success.
+
+   If called with a non-string argument then:
+
+   - name is assumed to be a container. Each of its properties is
+   assumed to be a module definition, and each one gets installed
+   via a call back into this function, passing it each key and
+   value. Returns this object.
+
+   Throws on error.
+*/
+mod.addPlugin = proc callee(name, pluginObj){
+    if(name && !pluginObj && typeinfo(iscontainer name)){
+        foreach(name=>k,v) callee(k,v);
+        return this;
+    }
+    affirm 'string' === typeinfo(name name);
+    affirm name /* name must be non-empty */;
+    affirm typeinfo(iscontainer pluginObj) && typeinfo(iscallable pluginObj.load);
+    mod.plugins[name] = pluginObj;
+    return mod;
+} using(mod);
+
+/**
+   Searches for a plugin script by using this.plugins.default's
+   search path and the name ("plugins/"+name). Returns undefined
+   if not found, else the result of s2.import()'ing that file. It
+   does not check if the plugin is already installed, but installs
+   (or overwrites) it into mod.plugins[name].
+*/
+mod.searchAndInstallPlugin = proc(name){
+    mod.pf.prefix = mod.plugins.default.prefix;
+    mod.pf.suffix = mod.plugins.default.suffix;
+    const fn = mod.pf.search('plugins/'+name);
+    return fn
+        ? mod.plugins[name] = ((const requireS2=mod), import(false,R(fn)))
+        : undefined;
+} using {mod, R: realpath},
+
+/**
+   If the given plugin name is already installed, it is returned,
+   otherwise it is sought for, installed, and returned. An
+   exception is thrown if it cannot be found or if installing it
+   fails.
+*/
+mod.getPlugin = proc(name) using(mod) {
+    return mod.plugins[name] ||| mod.searchAndInstallPlugin(name);
+},
+
+/**
+   Attempts to resolve a file name using a given plugin's search
+   path. basename is the unresolved name of the file to search for
+   and forPlugin is either a plugin object or the name of a
+   plugin. The search path/extensions use are those of the given
+   plugin or (if that plugin has none), the default plugin. If the
+   given plugin has the isVirtual flag, no search is performed and
+   the undefined value is returned.
+*/
+mod.resolveFilename = proc(basename,forPlugin='default') using(mod){
+    const pConf = typeinfo(isobject forPlugin) ? forPlugin : mod.getPlugin(forPlugin);
+    affirm typeinfo(isobject pConf);
+    const pf = (pConf.isVirtual ? undefined : mod.pf) ||| return;
+    pf.prefix = pConf.prefix ||| mod.plugins.default.prefix;
+    pf.suffix = pConf.suffix ||| mod.plugins.default.suffix;
+    return pf.search(basename,0);
+};
+
+/**
+   Given a base filename...
+
+   1) If the given name does not contain a '!' character,
+   it searches for an exact-match name in the cache. If it
+   finds one, it returns that value.
+
+   2) It searches for the file using the configured search
+   paths/extensions (from this.plugins). If found, it is passed to
+   the import() function specified for the import type (see
+   below).
+
+   By default this.plugins.default is used to search for and
+   import the file. If a "special" type of name is provided to
+   this function, though (meaning the base name looks like
+   with "SOMETHING!basename"), then this.plugins[SOMETHING] is
+   used (if set), which may change the caching behaviour and
+   how the content of the file is interpreted.
+
+   Depending on the configuration options, requests might get
+   cached. Subsequent calls which expand to the same file name
+   will return the same (cached) result value on each
+   subsequent call.
+*/
+mod.import = proc(basename){
+    affirm 'string' === typeinfo(name basename);
+    if(basename.indexOf('!')<0 && const c = C#basename){
+        return c;
+    }
+    var pluginName;
+    /* Check for pluginName!... */
+    if((var ndx = basename.indexOf('!'))>0){
+        pluginName = basename.substr(0,ndx);
+        basename = basename.substr(ndx+1);
+    }
+    pluginName || (pluginName ='default');
+    /* Configuration for this plugin... */
+    const pConf = mod.getPlugin(pluginName);
+    pConf || throw "Could not load plugin '"+pluginName+"'.";
+    const pf = pConf.isVirtual ? undefined : mod.pf /* PathFinder */;
+    if(pf){
+        // Set up/reset file lookup paths/suffixes...
+        pf.prefix = pConf.prefix ||| mod.plugins.default.prefix;
+        pf.suffix = pConf.suffix ||| mod.plugins.default.suffix;
+    }
+    /* Treat ?a=b&c=d... almost like a URL-encoded
+       as query string, but without the URL encoding.
+    */
+    var qArgs, useCache = pConf.cacheIt;
+    if(basename.indexOf('?')>=0){
+        /* Parse args. If any are provided, bypass the cache. */
+        const sp = basename.split('?',2);
+        basename = sp.0;
+        (qArgs = Q(sp.1)) && (useCache = false);
+    }
+    /* Find the file, if necessary... */
+    var fn = pConf.isVirtual
+        ? basename
+        : (basename ? pf.search(basename, 0) : false)
+        ||| throw "Plugin '%1$s' cannot find '%2$s' in search path %3$J with extensions %4$J.".
+        applyFormat(pluginName, basename, pf.prefix, pf.suffix);
+    // expand to the fully qualified path for non-virtual plugins...
+    pConf.isVirtual || (fn = P(fn));
+    //print(__FLC,"fn=",fn,"useCache=",useCache,"qArgs =",qArgs,pluginName,pConf);
+    //print(__FLC,'pConf.cacheIt=',pConf.cacheIt,', fn=',fn);
+    //print(__FLC,cache.toJSONString(2));
+    const requireS2 = mod /* public API symbol, potentially
+                             needed by anything which
+                             uses anyPlugin.load() */;
+    return useCache
+        ? (const k =
+                 (pluginName ? pluginName+'!'+fn : fn),
+                 cacheCheck = (C # k))
+        ? cacheCheck
+        : C.insert(k, pConf.load(fn, qArgs))
+    : pConf.load(fn, qArgs);
+} using(mod, {
+    C: modCache,
+    P: realpath,
+    Q: proc(str) using {q:convertQValue} {
+        str || return str;
+        var r;
+        foreach(@str.split('&')=>v){
+            const s = v.split('=',2);
+            (r ||| (r = {prototype:null}))[s.0] = s.1 ? q(s.1) : (v.indexOf('=')>0 ? s.1 : true);
+        };
+        return r;
+    }
+});
+
+/**
+   For each base filename in the given array/tuple, this function
+   calls this.import(basename) and appends the results to a new
+   array.  Returns an array of the results to each import() call,
+   the order of the array's elements being the same as the calls
+   to import(). Throws if list is not an array or is empty or if
+   loading any resources fails. Propagates any exceptions.
+*/
+mod.importList = function(list) using(mod) {
+    affirm typeinfo(islist list) /* expecting an Array or Tuple */;
+    affirm !list.isEmpty() /* expecting a non-empty list of module names */;
+    const imps = [];
+    foreach(@list=>v) imps.push(mod.import(v));
+    return imps;
+};
+
+/**
+   Imports a list of script modules and optionally calls a
+   callback after loading all of them.
+
+   list is an array of strings - script file base names to import.
+   func is an optional function or code string which gets called
+   resp. eval'd after importing all of the scripts. If it's a
+   function, it is passed one argument for each entry in the list,
+   in the same order they are imported. If it is a code string
+   then it is eval'd in a scope with the array 'modules' defined
+   to the resolved list of modules.
+
+   In either case, it declares the const symbol requireS2 to be
+   the require() module, so that these callbacks may recursively
+   invoke require() via a call to requireS2(). (It is often useful
+   to do so, it turns out, and this consolidates the convention
+   across modules originally written for different code bases.)
+
+   Returns the result of calling the function (if any) or the
+   array of loaded modules (if passed no function/string).
+
+   Example:
+
+   assert 42 === thisObj(
+   ['module1', 'module2'],
+   function(mod1, mod2){
+   print('result of module1 import:' mod1);
+   print('result of module2 import:' mod2);
+   return 42;
+   }
+   );
+
+
+   _Potential_ TODOs:
+
+   - If passed a non-string value where a name is expected, use it
+   as-is as the result of the loading. i suspect we might have
+   some interesting uses for that, but want a use case before trying
+   it out.
+*/
+mod.require = function(list, func) using(mod) {
+    func && affirm (typeinfo(iscallable func) || typeinfo(isstring func));
+    list = mod.importList(list);
+    func || return list;
+    if(typeinfo(iscallable func)){
+        const requireS2=mod, s2 = s2;
+        return func.apply(func, list);
+    }else{
+        return func.evalContents('require() script',{
+            s2: s2,
+            requireS2: mod,
+            modules: list
+        });
+    }
+};
+
+/**
+   Installs a cached entry for the given module name, such that
+   future calls to import() or require() which use that exact name
+   will return the given result object. Note that the name need
+   not be filesystem-friendly. e.g. "<my-identifier>" is perfectly
+   legal. The only limitation is that it "really should not"
+   contain an exclamation point, as that may confuse import()
+   because that character is used to denote a plugin.
+*/
+mod.installModule = function(name, result) using(modCache){
+    modCache.insert(name, result);
+    return this;
+};
+
+
+// Try to determine some useful directories to search for scripts in...
+if(typeinfo(isstring var d = cliFlags['s2.require.home'])){
+    mod.home = realpath(d);
+    mod.plugins.default.prefix.push( mod.home );
+}
+else if((d=(cliFlags['s2.home']|||getenv('S2_HOME')))
+        && (d=realpath(d+'/require.d'))){
+    mod.plugins.default.prefix.push( mod.home = d );
+}
+if((var d = __FILEDIR ? realpath(__FILEDIR) : 0)
+   && (mod.home !== d)){
+    mod.plugins.default.prefix.push( d );
+    mod.home || (mod.home = d);
+}
+/* __FILEDIR may be a synthetic __FILE name
+   (e.g. via eval or Buffer.evalContents()) */
+mod.home || (mod.home="");
+
+/* We set mod.require.home so that plugins can construct paths via
+   requireS2.home. */
+
+/* Make it so that call()ing this object calls mod.require() */
+mod.prototype = mod.require /** Holy cow! We've just inherited our
+                                own member function. */;
+mod /* script result */;

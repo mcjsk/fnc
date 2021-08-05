@@ -1,0 +1,52 @@
+var a = [1,2,3], b = [];
+assert 'array' === typename a;
+assert 'array' === typename b;
+assert 2 === a[1];
+
+// unset array.index broken by other fixes:
+assert undefined === unset a[1];
+//a[1] = undefined;
+assert undefined === a[1];
+
+assert undefined === b[2];
+a[3] = [4,5,[6,7,8]];
+assert 'array' === typename a[3];
+assert 'array' === typename a[3][2];
+assert 8 === a[3][2][2];
+assert 8 === a.3[2].2; // tokenizer sees a.3.2.2 as: a.(3.2).2
+//assert 8 === a.3.2.2; // tokenizer sees 3.2 as a double
+assert 8 === a.3[2][2];
+a[] = 5*2-3;
+assert 7 === a.4;
+((a))[
+        // note that space/comments don't count here
+        ] = // nor on the RHS of a binary op
+(2*5-2);
+assert 8 === a.5;
+assert 8 === a[4+1];
+assert 9 === ++a[5];
+assert 9 === a[5]++;
+assert 10 === a[5];
+
+a[3][2][] = 9;
+assert 9 === a[3][2][3];
+
+assert 'CWAL_SCR_SYNTAX'===catch{print[]/* must throw*/}.codeString();
+
+// Must cause syntax errors:
+assert catch{[1,2,3,,]}.message.indexOf('comma')>0;
+assert catch{[1,2,,3]}.message.indexOf('comma')>0;
+assert catch{[1,]}.message.indexOf('comma')>0;
+assert catch{[,1]}.message.indexOf('comma')>0;
+assert catch{[,]}.message.indexOf('comma')>0;
+// Bugfix 20171111: disallow trailing semicolon in array value expressions:
+assert catch{[1,2;]}.message.indexOf('semicolon')>0;
+assert catch{[1;,2]}.message.indexOf('semicolon')>0;
+
+0 && scope {
+    var a = [];
+    assert 1 === (a[]=1);
+    assert 2 === a.length();
+};
+
+a /* propagate it out for lifetime checks */;

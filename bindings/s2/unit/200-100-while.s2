@@ -1,0 +1,65 @@
+
+var i = 0, max = 1000;
+while(i < max){i = i + 1}
+assert max===i;
+
+assert 'hi' === while( true ){ break "hi" };
+
+assert undefined === while(false){throw __FLC};
+
+assert 1 === while(true){ scope {catch {break 1} };; };
+
+assert 'CWAL_SCR_SYNTAX' === catch{
+       while(/*empty expr is not OK*/){/*empty body is OK*/}
+}.codeString();
+
+i = 0;
+while(!i){
+  var x =0;
+  i = while(true){
+    if((x=x+1)>3){break x}
+    //(x=x+1)>3 && break x
+  }; /* semicolon needed b/c of assignment expr */
+  true // at EOF, semicolon is optional
+}
+assert 4===i;
+
+i = 0;
+while(!i){
+  var x =0;
+  i = while(true){
+    if((x=x+1)>3){break x}
+    //(x=x+1)>3 && break x
+  } /* semicolon _normally_ needed b/c of assignment expr,
+       but special-casing of keywords ending in blocks
+       implicitly treat this EOL as an EOX */
+}
+assert 4 === i;
+
+i = 0;
+assert 4 === while(true){
+  ((i = i + 1)<4) && continue;
+  break i;
+};
+
+i = while(false){};
+assert undefined === i;
+
+i = while(true){break};
+assert undefined === i;
+
+i = 0;
+while(i<3)++i;
+assert 3 === i;
+assert 3 === i /* make sure the previous line wasn't snarfed by the loop */;
+
+i = 0;
+while(i++<3);
+assert 4 === i;
+assert 4 === i /* make sure the previous line wasn't snarfed by the loop */;
+
+i = 0;
+assert !catch{0 ? while(i<2) ++i : 1} /* no syntax error */;
+assert !i;
+assert !catch{1 ? while(i<2) ++i : 1} /* no syntax error */;
+assert 2 === i;

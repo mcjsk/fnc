@@ -1,0 +1,60 @@
+/**
+   The tmpl module (as distinct from the tmpl plugin!) provides
+   utilities for working with s2.tmpl().
+
+*/
+return {
+    /**
+       "Processes" a s2.tmpl() template as follows...
+
+       The first argument is a tmpl()-compiled script (of type Buffer)
+       or a non-compiled script of type String (in which case this
+       function compiles it and uses the original value as the 3rd
+       parameter).
+
+       The second parameter is an optional container holding key/value
+       pairs which get imported into the current scope before
+       evaluating the script. This allows one to easily create
+       mini-templates for use in loops and such. If you _have_
+       to pass a value but don't have an object, any falsy value
+       will do.
+
+       The final argument is intended to hold the uncompiled script
+       and is only used in error reporting, and is stored in any
+       exception propagated via evaluating a template. It is ignored
+       when the first argument has a typename of 'string'.
+    */
+    process: proc(template, opt, tmplUncompiled){
+        if(typeinfo(isstring template)){
+            tmplUncompiled = template;
+            template = this.compile(template);
+        }
+        affirm typeinfo(isbuffer template);
+        if(const ex = catch template.evalContents(opt|||{})){
+            ex && throw {
+            message: "Error evaluating compiled template (location info is relative to the compiled script).",
+            exception: ex,
+                template: {
+                    compiled: template.toString(),
+                    uncompiled: tmplUncompiled ? tmplUncompiled.toString() : undefined
+                }
+            };
+        }
+    },
+
+    processFile: proc(fn, opt){
+        return this.process( this.load(fn, true), opt );
+    },
+
+    /**
+       A proxy for s2.tmpl().
+    */
+    compile: s2.tmpl,
+    /**
+       Uses the tmpl! plugin to load the given file
+       and optionally compile it using this.compile()
+    */
+    load: proc(fn, compile){
+        return requireS2([(compile ? 'tmpl-compiled!' : 'tmpl!')+fn]).0;
+    } using (requireS2)
+};

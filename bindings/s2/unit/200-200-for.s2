@@ -1,0 +1,48 @@
+
+for(var i = 1, x = -1;
+        i >= -1;
+        i -= 1, x+=1){
+  //print('for(): i =',i,'x =',x);
+}
+assert 'undefined' === typename i;
+
+var i = 0, x = for(;;){
+  (i = i + 1)>3 && break i
+};
+assert 4 === i;
+assert x === i;
+
+x = for(i = 0;;){
+  scope {
+    catch{ (i = i + 1)>4 && break i }
+  }
+};
+assert 5 === i;
+assert x === i;
+
+assert -1 === (1-2 ||| for(;;){/* if this infinite loops then skip mode is broken*/});
+assert -1 === eval 1-2 ||| for(;;){/* if this infinite loops then skip mode is broken*/};
+assert false === (0 && for(;;){/* if this infinite loops then skip mode is broken*/});
+assert false === eval 0 && for(;;){/* if this infinite loops then skip mode is broken*/};
+
+
+for(i = 0, x = 0;
+    i < 3;
+   ) ++i, x += 2;
+assert 3 === i;
+assert 3 === i /* make sure the previous line wasn't snarfed by the loop */;
+assert 6 === x;
+
+for(i = 0, x = 0; i < 3; ++i
+) x += 2;
+assert 3 === i;
+assert 3 === i /* make sure the previous line wasn't snarfed by the loop */;
+assert 6 === x;
+
+for(i = 0, x = 0; i < 3; ++i    );
+assert 3 === i;
+assert 3 === i /* make sure the previous line wasn't snarfed by the loop */;
+assert 0 === x;
+
+assert !catch{0 ? for(x = 0; x<1; ++x) 1 : 1} /* no syntax error */;
+assert !catch{1 ? for(x = 0; x<1; ++x) 1 : 1} /* no syntax error */;

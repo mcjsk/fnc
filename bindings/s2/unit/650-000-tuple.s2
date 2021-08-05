@@ -1,0 +1,107 @@
+
+scope {
+    // Bugfix 20171111: disallow trailing semicolon in tuple value expressions:
+    assert catch{[#1,2;]}.message.indexOf('semicolon')>0;
+    assert catch{[#1;,2]}.message.indexOf('semicolon')>0;
+}
+
+scope {
+    const T = s2.Tuple;
+    var t0 = new T(0);
+    assert 'tuple' === typename t0;
+    assert typeinfo(istuple t0);
+    assert !typeinfo(istuple T);
+
+    assert t0 === new T(0) /* same instance! */;
+    assert 0 === t0.length();
+    assert !t0.#;
+    var t1 = new T(1){
+        this.0 = 'zero';
+    };
+    assert 1 == t1.length();
+    assert 1 === t1.#;
+    assert 'zero' === t1.0;
+    assert t1 != t0;
+    assert t1 === new T(1){ this.0 = 'zero' };
+    assert t1 ==/*overloaded*/ new T(1){ this.0 = 'zero' };
+    assert 'CWAL_RC_TYPE' === catch{t1==0}.codeString();
+    assert 'CWAL_RC_RANGE' === catch{t1.3}.codeString();
+    var t2 = new T(2){this.0 = -1; this.1 = -2};
+
+    /* the comparison ops all disallow a non-tuple RHS */;
+    assert t1 < t2;
+    assert t2 > t1;
+    assert t2 != t1;
+    assert t2 !== t1;
+    assert "[-1, -2]" === t2.toJSONString(0);
+    assert "[-1, -2]" === t2.toString();
+    assert 'CWAL_RC_TYPE' == catch {t1<1}.codeString();
+    assert 'CWAL_RC_RANGE' == catch {new T(1<<16)}.codeString()
+    /* length currently limited to 16 bits (64k) */
+    ;
+    assert catch {t1>1}.message.indexOf('annot compare')>0;
+
+    var i = 0;
+    foreach(t2 => v){assert v<0; ++i};
+    assert t2.#===i;
+    i = 0;
+    assert typeinfo(mayiterate t2);
+    assert !typeinfo(mayiterateprops t2);
+    assert typeinfo(mayiteratelist t2);
+    foreach(t2 => ndx,v){
+        assert typeinfo(mayiteratelist t2) /* allowed as of 20191211 */; 
+        assert ndx>=0;
+        assert v<0;
+        ++i;
+    };
+    assert typeinfo(mayiterate t2);
+    assert !typeinfo(mayiterateprops t2);
+    assert typeinfo(mayiteratelist t2);
+    assert t2.length()===i;
+    t2.1 = t1;
+    t1.0 = t2;
+
+    assert typeinfo(mayiteratelist [#]);
+    
+    var t3 = new T([1,2,3]);
+    assert 3 === t3.length();
+    assert 3 === t3[2];
+
+    t3 = new T(t2);
+    assert 2 === t3.length();
+    foreach(t3=>i,v) assert t2[i] === v;
+
+    assert 0 === catch {new T(0,1)}.message.indexOf("Expecting");
+
+    // Tuple literals...
+    var tL = [#1, 2, [#3, 4, 5]];
+    assert typeinfo(istuple tL);
+    assert typeinfo(istuple tL.2);
+    assert !typeinfo(istuple tL.1);
+    assert 5 === tL.2[2];
+    assert '1.2.[3, 4, 5]' === tL.join('.') /* curious but true. */;
+
+    // Tuples are treated like arrays for @rray expansion:
+    var a = [@[#1,2,3]];
+    assert 3 === a.length();
+    assert 3 === a.2;
+
+    assert catch {new T(1,2)}.line > 0 /* make sure 'new' decorates C-thrown exceptions */;
+
+
+    {x:t1}.x; // let it propagate out for lifetime checking.
+    // ^^^ reminder to self: t1[0] has a circular refererence, so t1
+    // will have a refcount>0 after it leaves this scope. It will be
+    // up to vacuuming to clean it up.
+}
+
+scope {
+    /* More comparisons... */
+    const t1 = [#1,2,3],
+          t2 = [#3,2,1];
+    assert t1 < t2;
+    assert t2 > t1;
+    assert t2 === [#3.0,2.0,1.0] /* === strictness applies only to the tuples, not their contents. */;
+    assert t2 < [#3,2,1.01];
+    assert t1 > [#1];
+}

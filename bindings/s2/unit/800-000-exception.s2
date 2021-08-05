@@ -1,0 +1,182 @@
+const oldStackTrace = pragma(exception-stacktrace true);
+/**
+   Exceptions are implicitly tested throughout the earlier unit tests,
+   but on 20191228 a new trick was discovered which required making a
+   minor backwards-incompatible change (albeit a fix) and prompted the
+   addition of a new feature, so...
+*/
+
+scope {
+    /* 20191228: if the exception keyword is followed by anything
+       other than a '(', it resolves to the exception prototype. That
+       makes it tempting to add similar keywords for "object" and
+       "array" and such, but that's a deep, dark rabbit hole.
+
+       This feature was added primarily as an inexpensive way to get
+       at the exception prototype from script code, noting that
+       exception(0).prototype captures the exception's source code
+       location and stack trace, so is not cheap.
+    */
+    const e = exception(0);
+    assert e.prototype === exception;
+    assert e.codeString === exception.codeString;
+    assert e.prototype === eval{exception} /* "virtual EOF" check */;
+}
+
+scope {
+    // Custom exception type.
+    const MyEx = {
+        prototype: exception /* for inherited exception method(s) */,
+        __typename: 'MyEx', // optional
+        __new: proc(msg = __FLC){ // constructor
+            /* Some prototype gymnastics are needed... */
+            const p = this.prototype /* === MyEx */,
+                  x = this.prototype = exception(msg)
+            /* captures stack trace ^^^^, but now "this"
+               no longer inherits MyEx, so... */;
+            x.prototype = p
+            /* ^^^^ without this part, "this" will inherit exception but NOT
+               MyEx. */;
+            /**
+               Optional (but arguable) cosmetic improvement:
+               x.line/column/script refer to this constructor function,
+               which may be a bit confusing in practice. We can instead
+               "steal" those from one level up in the stack trace (which
+               may, of course, also be "differently confusing" in practice)...
+            */
+            if(const s = x.stackTrace.0){
+                x.line = s.line;
+                x.column = s.column;
+                x.script = s.script;
+            }
+        }
+    };
+
+    assert undefined === MyEx.line;
+
+    const check = proc(x){
+        assert x inherits MyEx;
+        assert !typeinfo(isexception x) /* because x is not "directly" an exception, but: */;
+        assert typeinfo(hasexception x) /* because x inherits an exception */;
+        assert "MyEx" === typeinfo(name x);
+        assert typeinfo(isarray x.stackTrace) /* actually, it's inherited: */;
+        assert x.prototype.stackTrace === x.stackTrace;
+        //print(__FLC,'x.stackTrace =',x.stackTrace);
+        assert x.stackTrace.0.script === __FILE;
+        assert "blah!" === x.message /* derived from x.prototype */;
+        assert typeinfo(isinteger x.code) /* derived from x.prototype. */;
+        assert typeinfo(isinteger x.line) /* derived from x.prototype. */;
+        //print(__FLC,thisLine, x.line);
+        assert x.line > thisLine /* because of our finagling in the MyEx ctor */;
+        assert typeinfo(isinteger x.column) /* derived from x.prototype. */;
+        assert 'CWAL_RC_EXCEPTION' === x.codeString();
+        assert !x.hasOwnProperty('script');
+        assert x.script === __FILE;
+        //print(__FLC, x.prototype);
+    } using {
+        thisLine: __LINE
+    };
+
+    // And now...
+    check(catch throw new MyEx("blah!"));
+    check(new MyEx("blah!"));
+}
+
+scope {
+    // Make sure that script-location info is captured for this case...
+    const e = catch proc(){throw "hi"}()
+                 /* ^^^ need a level of indirection to get the
+                    stackTrace property. stackTrace is not included if
+                    it's only 1 level deep because it would simply
+                    duplicate the line/col/script position set in the
+                    other properties.
+                 */;
+    assert typeinfo(isinteger e.line);
+    assert typeinfo(isinteger e.column);
+    assert typeinfo(isarray e.stackTrace);
+    assert e.stackTrace.0.script === __FILE;
+    assert typeinfo(isstring e.script);
+    assert "hi" === e.message;
+    /**
+       There's another use case we can't(?) test from here: if a
+       cwal_exception is created in native code and passed to
+       s2_throw_value(), it "should" also get script info if a script
+       is currently active. Testing that requires adding a native
+       function binding solely to test it with, so we'll punt on that
+       very hypothetical problem for now. Native-side exceptions which
+       pass through a script-side function call get decorated with
+       that info if they don't already have it.
+    */
+}
+
+scope {
+    /* Test that s2_cstr_to_rc() is working, i.e. that both implementations
+       of the hashing routine produce identical results. */
+    foreach(@[
+        // 'CWAL_RC_OK', this won't work work in this context
+        'CWAL_RC_ERROR',
+        // 'CWAL_RC_OOM', // see below!
+        'CWAL_RC_FATAL',
+        'CWAL_RC_CONTINUE',
+        'CWAL_RC_BREAK',
+        'CWAL_RC_RETURN',
+        'CWAL_RC_EXIT',
+        'CWAL_RC_EXCEPTION',
+        'CWAL_RC_ASSERT',
+        'CWAL_RC_MISUSE',
+        'CWAL_RC_NOT_FOUND',
+        'CWAL_RC_ALREADY_EXISTS',
+        'CWAL_RC_RANGE',
+        'CWAL_RC_TYPE',
+        'CWAL_RC_UNSUPPORTED',
+        'CWAL_RC_ACCESS',
+        'CWAL_RC_IS_VISITING',
+        'CWAL_RC_IS_VISITING_LIST',
+        'CWAL_RC_DISALLOW_NEW_PROPERTIES',
+        'CWAL_RC_DISALLOW_PROP_SET',
+        'CWAL_RC_DISALLOW_PROTOTYPE_SET',
+        'CWAL_RC_CONST_VIOLATION',
+        'CWAL_RC_LOCKED',
+        'CWAL_RC_CYCLES_DETECTED',
+        'CWAL_RC_DESTRUCTION_RUNNING',
+        'CWAL_RC_FINALIZED',
+        'CWAL_RC_HAS_REFERENCES',
+        'CWAL_RC_INTERRUPTED',
+        'CWAL_RC_CANCELLED',
+        'CWAL_RC_IO',
+        'CWAL_RC_CANNOT_HAPPEN',
+        'CWAL_RC_JSON_INVALID_CHAR',
+        'CWAL_RC_JSON_INVALID_KEYWORD',
+        'CWAL_RC_JSON_INVALID_ESCAPE_SEQUENCE',
+        'CWAL_RC_JSON_INVALID_UNICODE_SEQUENCE',
+        'CWAL_RC_JSON_INVALID_NUMBER',
+        'CWAL_RC_JSON_NESTING_DEPTH_REACHED',
+        'CWAL_RC_JSON_UNBALANCED_COLLECTION',
+        'CWAL_RC_JSON_EXPECTED_KEY',
+        'CWAL_RC_JSON_EXPECTED_COLON',
+        'CWAL_SCR_CANNOT_CONSUME',
+        'CWAL_SCR_INVALID_OP',
+        'CWAL_SCR_UNKNOWN_IDENTIFIER',
+        'CWAL_SCR_CALL_OF_NON_FUNCTION',
+        'CWAL_SCR_MISMATCHED_BRACE',
+        'CWAL_SCR_MISSING_SEPARATOR',
+        'CWAL_SCR_UNEXPECTED_TOKEN',
+        'CWAL_SCR_UNEXPECTED_EOF',
+        'CWAL_SCR_DIV_BY_ZERO',
+        'CWAL_SCR_SYNTAX',
+        'CWAL_SCR_EOF',
+        'CWAL_SCR_TOO_MANY_ARGUMENTS',
+        'CWAL_SCR_EXPECTING_IDENTIFIER',
+        'S2_RC_END_EACH_ITERATION',
+        'S2_RC_TOSS'
+    ]=>k){
+        if(exception(k,0).codeString()!==k)
+            throw "codeString check failed for "+k;
+        assert 1 /* to count the above check */;
+    }
+    affirm 'CWAL_RC_EXCEPTION' === exception('CWAL_RC_OOM',1).codeString()
+    /* this gets changed to CWAL_RC_EXCEPTION to avoid an erroneous OOM! */;
+
+}
+
+pragma(exception-stacktrace oldStackTrace);

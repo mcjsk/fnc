@@ -1,0 +1,71 @@
+assert 11 === var d, z, a=3, b = a,
+  c = 1,
+  e,
+  g = 1+7+3;
+assert 3 === const f = 3;
+
+assert 3===a;
+assert a===b;
+assert a!=c;
+assert 1===c;
+assert undefined===d;
+assert d===e;
+assert 3 === f;
+
+//const fail
+
+// must syntax err:
+//var w, y,, x
+ // must throw (var already defined):
+//var a
+
+assert 8 === scope {var a = 7; assert 10 === a + b; a} + 1;
+
+assert scope{11/*NOT a built-in value*/} === scope scope {
+  scope {
+    assert 3 === a;
+      var u = 1+2+3-1+6;
+  };
+};
+
+assert 'undefined' === typeinfo(name u);
+
+scope {
+    var a2 = 'aaa', b2 = 'aaa', c2 = 'aaa',
+        d2 = ('aaa','aaa','aaa','aaa','aaa');
+    // just checking the interning stats
+    assert typeinfo(isstring a2);
+    assert typeinfo(isstring b2);
+    assert typeinfo(isstring c2);
+    assert undefined === unset a2, b2;
+    assert 'undefined' === typeinfo(name a2);
+    assert 'undefined' === typeinfo(name b2);
+    assert typeinfo(isstring c2);
+  ;;
+};
+
+var zz = scope {
+  var z = "the end";
+  //var z; // must throw (z already defined)
+  //"abc";
+};
+
+//assert 'the end' === zz;
+//zz;
+
+scope {
+    /**
+       2020-02-18: the := operator assigns as const in var decls and
+       function parameter default values.
+    */
+    var a = 1, b := 2, c = 3;
+    assert c===(a = c) /* non-const */;
+    assert 'CWAL_RC_CONST_VIOLATION' === catch{b = a}.codeString();
+    assert b === (c = b) /* non-const */;
+    const d := 1 /* same as (const d = 1), but := is permitted for
+                    consistency with var. */;
+    assert 'CWAL_RC_CONST_VIOLATION' === catch{d = b}.codeString();
+    var ex = catch { var a := , b };
+    assert 'CWAL_SCR_SYNTAX' === ex.codeString();
+    assert ex.message.indexOf(':=') > 0;
+}

@@ -1,0 +1,65 @@
+
+if(1) {
+  var a = 1;
+  assert 1 === a++;
+  assert 2 === a;
+  assert 3 === ++a;
+  assert 'CWAL_SCR_SYNTAX' === catch{++a = a}.codeString() /*invalid target for assignment*/;
+  assert 3 === a /* b/c the exception is thrown before ++a happened */;
+  assert 'CWAL_RC_NOT_FOUND' === catch{++unknownSymbol}.codeString() /*unknown symbol*/;
+  assert 3 === (a = a++);
+  assert 3 === a;
+  assert 3 === a--;
+  assert 2 === a;
+  assert 1 === --a;
+  assert 6 === --a + 2 * 3;
+  assert 0 === a;
+}
+
+if(1) {
+  var o = {a:1};
+  var a = 1;
+  assert 1 === o.a++;
+  assert 2 === o.a;
+  assert 3 === ++o.a;
+  assert 'CWAL_SCR_SYNTAX' === catch{++o.a = o.a}.codeString() /*invalid target for assignment*/;
+  assert 3 === o.a /* b/c the exception is thrown before ++o.a happened */;
+  assert 3 === (o.a = o.a++);
+  assert 3 === o.a;
+  assert 3 === o.a--;
+  assert 2 === o.a;
+  assert 1 === --o['a'];
+  assert 6 === --o.a + 2 * 3;
+  assert 0 === o.a;
+}
+
+if(1){
+    // Make sure incr/decr do not demote doubles to integers. (They used to.)
+    var a = 0.0;
+    assert 1.0 === ++a;
+    assert 0.0 === --a;
+
+    assert 0.0 === a++;
+    assert 1.0 === a++;
+    assert 2.0 === a;
+
+    var o = {a:0.0};
+    assert 1.0 === ++o.a;
+    assert 0.0 === --o.a;
+    assert 0.0 === o.a++;
+    assert 1.0 === o.a++;
+    assert 2.0 === o.a;
+
+    // Make sure booleans are coerced to integers...
+    a = false;
+    assert 1 === ++a;
+    a = true;
+    assert true === a++ /* Interesting... but is it wrong? */;
+    assert 2 === a;
+
+    assert 1 === +true;
+    assert 0 === +false;
+    assert -1 === -true;
+    assert 0 === -false;
+
+}

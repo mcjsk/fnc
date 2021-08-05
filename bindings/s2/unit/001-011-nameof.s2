@@ -1,0 +1,3 @@
+var x;
+assert nameof x === 'x';
+assert 'x' === nameof x;

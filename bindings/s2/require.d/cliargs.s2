@@ -1,0 +1,101 @@
+/**
+   A require.s2 module which returns a utility object for working with
+   the CLI arguments provided via s2.ARGV.
+
+   "Script arguments" are those passes to s2sh after any '--' flag.
+   Those get imported into s2.ARGV (which is not set if no script
+   flags are provided).
+
+   s2.ARGV, if set, is an Array containing all flags passed after
+   '--', plus possibly containing these two properties:
+
+   .flags: an object of --flag=value pairs, where --flags with no
+   value are treated as boolean true.
+
+   .nonFlags: any script argument which does not start with '-' is
+   assumed to be a filename or some other string, and is appended
+   to this array.
+
+   Either property will be undefined if no flags resp. non-flags
+   are provided.
+*/
+return {
+
+    /**
+       Holds an Array of all arguments passed after '--' to s2sh
+       resp. any app which installs that particular binding. It is
+       undefined (not an empty array) if there are no such flags.
+    */
+    args: s2.ARGV,
+    /**
+       An object (or not) containing any -flags. The keys are stripped
+       of any number of leading dashes and if a given flag is
+       duplicated, the last one currently wins (as opposed to getting
+       an array of values, though that might be a useful addition).
+    */
+    flags: s2.ARGV ? s2.ARGV.flags : undefined,
+
+    /**
+       An array (or not) of any non-flags passed after --,
+       in the order they were passed in.
+    */
+    nonFlags: s2.ARGV ? s2.ARGV.nonFlags : undefined,
+
+    /**
+       If the given flag (minus any number of prefixing "-") was passed in
+       the "script flags" (any flags passed after '--' to the s2sh
+       interpreter), its value is returned, otherwise dflt is returned.
+    */
+    getFlag: proc(flag, dflt){
+        return this.flags
+            ? (this.flags[flag] ?: dflt)
+            : dflt;
+    },
+
+    /**
+       If the given flag (minus any number of prefixing "-") was
+       passed in the "script flags" (any flags passed after '--' to
+       the s2sh interpreter), its is removed from the flags and its
+       value is returned, otherwise dflt is returned.
+
+       When the last flag is removed, this.flags is unset.
+    */
+    takeFlag: proc(flag, dflt){
+        this.flags || return dflt;
+        if(undefined !== const v = this.flags[flag]){
+            unset this.flags[flag];
+            this.flags.# || unset this.flags;
+            return rc;
+        }else return dflt;
+    },
+
+    /**
+       Returns true if the CLI flags (still) contain any flags,
+       otherwise false.
+    */
+    hasFlags: proc(){
+        return this.flags ? this.flags.#>0 : false;
+    },
+
+    /**
+       Returns true if the CLI flags (still) contain any non-flags,
+       otherwise false.
+    */
+    hasNonFlags: proc(){
+        return this.nonFlags ? !this.nonFlags.isEmpty() : false;
+    },
+
+    /**
+       Removes the first non-flag from the list and returns
+       it. Returns undefined if there are no non-flags (or none
+       remaining).
+
+       When the last entry is removed, this.nonFlags is unset.
+    */
+    nextNonFlag: proc(){
+        this.nonFlags || return undefined;
+        var rc = this.nonFlags.shift();
+        (0===this.nonFlags.length()) && unset this.nonFlags;
+        return rc;
+    }
+};

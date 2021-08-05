@@ -1,0 +1,101 @@
+A collection of SQL snippets and notes regarding the fossil db schema...
+
+
+The following few are taken from an off-list email exchange:
+========================================================================
+
+The queries below are untested.  They are off the top of my head.
+They might not work exactly right. There may well be faster ways.  But
+perhaps these can get you started.
+
+The very latest Fossil trunk is needed for the WITH RECURSIVE queries.
+Or the latest SQLite trunk if you are going directly from a TCL
+script.
+
+ 
+(1) Find the leaf for branch X (specifically: trunk)
+
+SELECT blob.uuid FROM leaf, blob, tag, tagxref
+WHERE blob.rid=leaf.rid
+AND tag.tagname='sym-'||$branchname
+AND tagxref.tagid=tag.tagid
+AND tagxref.tagtype>0
+AND tagxref.rid=leaf.rid;
+ 
+(2) Find the youngest revision tagged with T (specifically: release)
+
+SELECT blob.uuid FROM blob, tag, tagxref, event
+WHERE tag.tagname='sym-'||$tagname
+AND tagxref.tagid=tag.tagid
+AND tagxref.tagtype>0
+AND event.objid=tag.rid
+AND event.type='ci'
+ORDER BY event.mtime DESC LIMIT 1;
+
+ 
+(3) Find all revisions reachable from (1) via parent-links (primary
+and merge!) coming after (2) timewise.
+    Note that this definition
+    = includes revisions on merged branches/forks, and
+    = (2) is excluded from the set, and not necessarily reachable from (1)
+
+/* All ancestors of node $uuid that occur after time $cutoff */
+WITH RECURSIVE
+  ancestors(rid) AS (
+     SELECT rid FROM blob WHERE uuid=$uuid
+     UNION
+     SELECT pid FROM plink, ancestors, event
+        WHERE plink.cid=ancestors.rid
+             AND event.objid=ancestors.rid
+             AND event.mtime>$cutoff
+ )
+SELECT blob.uuid FROM blob, ancestors
+WHERE blob.rid=ancestors.rid;
+
+ 
+(4) Per revision in the set of (3) determine the commit message.
+
+/* All ancestors of node $uuid that occur after time $cutoff */
+WITH RECURSIVE
+  ancestors(rid) AS (
+     SELECT rid FROM blob WHERE uuid=$uuid
+     UNION
+     SELECT pid FROM plink, ancestors, event
+        WHERE plink.cid=ancestors.rid
+             AND event.objid=ancestors.rid
+             AND event.mtime>$cutoff
+ )
+SELECT blob.uuid, coalesce(event.ecomment,event.comment)
+ FROM blob, ancestors, event
+WHERE blob.rid=ancestors.rid
+AND event.objid=ancestors.rid
+ORDER BY event.mtime DESC;
+
+ 
+(5) Per revision in the set of (3) determine the set of changed files
+(edited/added/removed)
+
+WITH RECURSIVE
+  ancestors(rid) AS (
+     SELECT rid FROM blob WHERE uuid=$uuid
+     UNION
+     SELECT pid FROM plink, ancestors, event
+        WHERE plink.cid=ancestors.rid
+             AND event.objid=ancestors.rid
+             AND event.mtime>$cutoff
+ )
+SELECT
+    blob.uuid,
+    filename.name,
+    CASE WHEN nullif(mlink.pid,0) is null THEN 'added'
+        WHEN nullif(mlink.fid,0) is null THEN 'deleted'
+        ELSE 'edited' END
+ FROM blob, ancestors, event, mlink, filename
+WHERE blob.rid=ancestors.rid
+AND event.objid=ancestors.rid
+AND mlink.mid=ancestor.rid
+AND mlink.fnid=filename.fnid
+ORDER BY event.mtime DESC, filename.name;
+
+= end of untested bits
+========================================================================

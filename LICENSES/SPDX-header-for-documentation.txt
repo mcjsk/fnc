@@ -1,0 +1,7 @@
+<!-- Copyright 2021 The Libfossil Authors, see LICENSES/CC-BY-SA-4.0.txt -->
+
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
+<!-- SPDX-FileCopyrightText: 2021 The Libfossil Authors -->
+<!-- SPDX-ArtifactOfProjectName: Libfossil -->
+<!-- SPDX-FileType: Documentation -->
+<!-- SPDX-FileComment: Original by Stephan Beal, 2021 -->

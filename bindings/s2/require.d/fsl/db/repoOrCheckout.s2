@@ -1,0 +1,16 @@
+/**
+   require.s2 module which returns either the repo db (specified by
+   the -R|--repo-db=DBFILE script flags) or (if that fails) the repo
+   db associated with the current checkout. Throws if it can neither
+   open a checkout nor figure out the db from the CLI args.
+*/
+return requireS2(['fsl/context'], proc(F){
+    affirm F.db;
+    F.db.repo && return F.db.repo;
+    F.db.checkout && return F.db.checkout;
+    catch return requireS2(['fsl/db/repo']).0; // fails if no -R|--repo-db=DBFILE flag specified
+    requireS2(['fsl/db/checkout']) /* opens the checkout */;
+    assert F.db.checkout;
+    return F.db.repo;
+});
+

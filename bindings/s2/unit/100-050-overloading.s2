@@ -1,0 +1,394 @@
+/* Demonstrate operator overloading... */  
+
+if(1){
+  assert "3.00.1" === "3.0"+0.1 /* bug chasing */;
+
+  var pCount = 0, mCount = 0, o = {
+    a: 0,
+    // Binary X+Y
+    'operator+': proc(r){
+      assert 1 === argv.length();
+      ++pCount;
+      return this.a + r;
+    },
+    // X+=Y
+    'operator+=': proc(r){
+      //print('operator+=',argv);
+      assert 1 === argv.length();
+      ++pCount;
+      this.a += r;
+      return this;
+    },
+    // X-Y
+    'operator-': proc(r){
+      //print('operator-',argv);
+      assert 1 === argv.length();
+      ++mCount;
+      return this.a - r;
+    },
+    // X-=Y
+    'operator-=': proc(r){
+      //print('operator+=',argv);
+      assert 1 === argv.length();
+      ++mCount;
+      this.a -= r;
+      return this;
+    },
+    // X++
+    'operator++': proc(){
+      //assert this===argv.0 /* historical! */;
+      assert !argv.#;
+      ++pCount;
+      this.a++;
+      return this;
+    },
+    // ++X
+    '++operator': proc(){
+      assert !argv.0;
+      ++pCount;
+      ++this.a;
+      return this;
+    },
+    // X--
+    'operator--': proc(){
+      //assert this===argv.0 /* historical! */;
+      assert !argv.#;
+      ++mCount;
+      this.a--;
+      return this;
+    },
+    // --X
+    '--operator': proc(){
+      assert !argv.0;
+      ++mCount;
+      --this.a;
+      return this;
+    },
+    // -X
+    '-operator': proc(){
+      //print('-operator', argv);
+      return -this.a;
+    },
+    // X==Y
+    'operator==': proc(r){
+      // very minimal impl which does not detect
+      // an RHS of the same class as this.
+      return ((typeinfo(name this)) === (typeinfo(name r)))
+             ? this.a === r.a
+             : this.a == r;
+    },
+    // X!=Y
+    'operator!=': proc(r){
+      return !(this==r);
+    },
+    // X<Y
+    'operator<': proc(r){
+      return ((typeinfo(name this)) === (typeinfo(name r)))
+             ? this.a < r.a
+             : this.a < r;
+    },
+    // X>Y
+    'operator>': proc(r){
+      return ((typeinfo(name this)) === (typeinfo(name r)))
+             ? this.a > r.a
+             : this.a > r;
+    }
+  };
+  //print("Properties:", o.propertyKeys());
+  assert(!o.prototype.'operator+');
+  assert ++o === o;
+  assert 1 === o.a;
+  assert 1 === pCount;
+  assert o++ === o;
+  assert 2 === o.a;
+  assert 2 === pCount;
+  assert --o === o;
+  assert 1 === o.a;
+  assert 1 === mCount;
+  assert o-- === o;
+  assert 0 === o.a;
+  assert 2 === mCount;
+  //assert 2 === (o += 2);
+
+  //print('o =',o);
+  assert o === (o += 2);
+  //print('o =',o);
+  assert 4 === o + 2;
+  assert 2 === o.a;
+  assert 1 === o - 1;
+  //assert 'CWAL_RC_NOT_FOUND' === catch{-o/*no such operator*/}.codeString();
+  assert 'CWAL_RC_NOT_FOUND' === catch{+o/*no such operator*/}.codeString();
+  //print("Properties:", o.propertyKeys());  
+  assert 2 === o.a;
+  o -= 1;
+  assert 1 === o.a;
+  assert -1 === -o;
+  assert 1 === o.a;
+
+
+  assert !(o < 1);
+  assert o == 1;
+  assert o != 2;
+  assert o < 2;
+  assert o > 0;
+
+  assert 2 === ++o.a;
+  assert 2 === o.a++;
+  assert 3 === o.a;
+  assert o == 3;
+  assert !(3 == 0) /* b/c only LHS is checked for overloads */;
+
+  assert catch{o * 1 /* no such op */};
+  assert catch{o / 1 /* no such op */};
+  assert catch{o % 1 /* no such op */};
+  assert catch{o << 1 /* no such op */};
+  assert catch{o >> 1 /* no such op */};
+
+}
+
+scope {
+  const sproto = "".prototype;
+  assert catch{"" * 3 /* no such op (yet) */};
+  sproto.'operator*' = proc f(rhs){
+    (rhs>0) || throw "Expecting positive RHS for STRING*N op.";
+    f.buf || (f.buf = buffer(100));
+    f.buf.reset();
+    for(var i = 0; i < rhs; ++i ){
+      f.buf.append(this);
+    }
+    return f.buf.toString();
+  } using {buffer: s2.Buffer.new};
+  assert '***' === "*" * 3;
+  assert catch{'*' * -1 /* negative index */};
+  assert "3.00.1" === "3.0"+0.1 /* checking for a misplaced bug */;
+  unset sproto.'operator*';
+}
+
+var three = 3;
+scope {
+  var ar = [];
+  ar.'operator+=' = proc(r){
+    this.push(r);
+    return this;
+  };
+  ar.'operator<<' = proc(r){
+      return this.push(r);
+  };
+  ar += 1;
+  ar << 2;
+  assert '12' === ar.join('');
+
+  var out;
+  ar.'operator>>' = proc(r){
+    //var code = r+" = this.pop()";
+    //print('code =',code);
+    //return eval -> code;
+    return eval -> r+"=this.pop()";
+  };
+  1 ? (ar >> nameof out) // yet another (obscure) use for nameof
+    : ar.pop();
+  assert 2 === out;
+  assert 1 === ar.length();
+  assert 1 === ar.0;
+  //print(out,ar);
+  //print(__FLC, refcount three);
+  ar[3] = three;
+  //print(__FLC, refcount three);
+  ;1;1;1;
+  //print(__FLC, refcount three);
+  ar.clear();
+  //print(__FLC, refcount three);
+
+  assert catch{ar & 1/* no such operator (yet) */};
+  ar.'operator&' = proc(r){
+    return this;
+  };
+  assert ar === ar & 1;
+
+
+  var o = {a: [1,2]};
+  o.a.'operator+=' = ar.'operator+=';
+  o.a += 3;
+  assert '123' === o.a.join('');
+
+}
+//print(__FLC, refcount three);
+assert 3 === three;
+
+scope {
+  // Overloading math ops on functions...
+  var x, setX = proc(){return x = argv.0};
+  setX.'operator+' = proc(arg){return this(arg)};
+  setX+1;
+  assert 1 === x;
+  assert 0 === setX + 0;
+  assert 1 === setX + -1 + 1 * 2;
+}
+
+scope {
+  // Overload-only -> op...
+  var x, setX = proc(){return x = argv.0};
+  setX.'operator->' = proc(arg){return this(arg)};
+  setX->1;
+  assert 1 === x;
+  assert 0 === setX -> 0;
+  assert -1 === setX ->( -1 * 1 ) /* -> has . precedence */;
+
+  unset setX;
+
+  // Overload-only =~ ("contains") and !~ ("does not contain") ops...
+  var o = {
+    a: [1,2,3],
+    'operator=~':proc(arg){
+      return this.a.indexOf(arg)>=0;
+    }
+  };
+  assert o =~ 1;
+  assert o =~ 3;
+  assert !(o =~ -1);
+
+  assert catch{o !~ 1 /* no such operator yet */};
+  o.'operator!~' =proc(arg){
+    return this.a.indexOf(arg)<0;
+  };
+
+  assert o !~ -1;
+  assert !(o !~ 1);
+  assert o =~ 1 && o !~ -1; // has comparison precedence
+}
+
+scope {
+  // C++-style streams...
+  var b = new s2.Buffer(20);
+  // Remember that buffers are not containers:
+  //b.prototype.'operator<<' = proc(self,arg){ // built-in overload
+  //  return this.append(arg);
+  //};
+  b << "a" << "bc" << "def";
+  assert "abcdef" === b.toString();
+  b.reset();
+  b << 1 << 2+3; 
+  assert "15" === b.toString();
+  //unset b.prototype.'operator<<';
+
+  // Alternate implementation:
+  var o = {
+    buf: b.reset(),
+    'operator<<': proc(arg){
+       this.buf.append(arg);
+       return this;
+    }
+  };
+  o << "a" << "bc" << "def";
+  assert "abcdef" === b.toString();
+  b.reset();
+  o << 1 << 2+3; 
+  assert "15" === b.toString();
+  //unset b.prototype.'operator<<';
+}
+
+scope {
+    var x = 0;
+    var obj = {
+        'operator<<': proc(arg){
+            x += arg;
+            return this;
+        }
+    };
+    proc(a,b,c){
+        obj << a << b << c;
+        assert 6 === x /* testing an argv propagation fix */;
+        proc(d,e,f){
+            obj << d << e << f /* testing an argv propagation fix */;
+            assert 21 === x;
+        }(4,5,6);
+    }(1,2,3);
+}
+
+scope {
+    var h = new s2.Hash(13);
+    h.insert(1, "hi");
+    assert 'hi' === h # 1;
+    assert undefined === h # 0;
+    var x = 0;
+    assert 'hi' === h # (++x);
+
+    assert 0 === catch{h#1 = 'error'}.message.indexOf('Invalid LHS')
+    /* # is not valid in an assignment op */;
+
+    var h2 = new s2.Hash(13);
+    h2.insert(1,3);
+    h2.insert('a', 0);
+    h.insert(2, h2);
+    assert 3 === h # 2 # 1;
+    assert h # 2 # 1 === 3;
+    assert h # 2 # 0 === undefined;
+    assert h # 2 # 'a' === 0;
+
+    h2.insert('f', proc f(){assert f===this; return 1});
+    // # does not set 'this' like the dot op does
+    assert 1 === (h # 2 # 'f')();
+    // If it did, (h2#f)() would have h2 has 'this', which is
+    // borderline disturbing. It also means this call syntax
+    // won't work:
+    // assert 1 === h # 2 # 'f'();
+
+    var obj = { h: h, x:0 };
+    assert catch{obj#1}.message.indexOf('Hash')>0
+        /* LHS of # must be-a Hash. Overloading of # was removed,
+           as it (A) will complicate extending # to support assignment
+           (insert()) and (B) it essentially negates the reason
+           for having the # operator: an access method for hashes which
+           makes them competative with Objects (using Hash.search()
+           has function call overhead which obj[prop] does not, making
+           objects faster for most cases).
+        */;
+    assert 'hi' === obj.h # 1;
+    assert undefined === obj.h # 0;
+    assert obj.h # 2 # 'a' === 0;
+    assert 3 === obj.h # 2 # (0+1);
+    assert 0 === catch{obj.h#1 = 'error'}.message.indexOf('Invalid LHS')
+    /* # is not valid in an assignment op */;;
+}
+
+scope {
+    var o = {
+        x: 3,
+        'operator::': proc(key){
+            return this.hasOwnProperty(key);
+        }
+    };
+    assert o::x;
+    assert !o::y;
+}
+
+0 && scope {
+// experimental, doesn't yet work how i would like
+// Certain parts of this require enabling/disabling
+// specific ifdefs in s2_eval.c and/or s2_ops.c
+
+  var o = {
+    __typename: 'Bob',
+    'operator->': proc(arg){
+      return this.sub[arg];
+    },
+    sub:{
+      __typename: 'Sub',
+      x: -1,
+      f: proc(){
+        print(__FLC,'this =',this);
+        assert 'Bob' === typename this;
+        return 1;
+      }
+    }
+  };
+  print(o->'f');
+  assert 'function' === typename o->'f';
+  assert 1 === o->f(); // works, yet...
+  assert 1 === o->'f'(); // works
+  o->x = 1; // assigns in o (or errors, depending on how we assign engine->dotOpLhs)
+  o->x++; // as well.
+  // i understand why, but a fix seems rather intrusive. i'd rather have it not behave
+  // like the dot, i think.
+  print(__FLC,'o =',o);
+};

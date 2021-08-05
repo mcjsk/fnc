@@ -1,0 +1,137 @@
+
+
+/* note that the semicolons here are needed for the assert, not the if/else blocks */
+assert if(1){};
+assert !if(0){throw __FLC};
+assert !if(0){throw __FLC}else{};
+assert if(0){throw __FLC} else if(1){} else{throw __FLC};
+
+assert if(0){throw __FLC}
+       else if(true)<<<_FI /*trued the second time*/;; _FI
+       else {throw __FCL};
+assert true /* Just checking tail consumption */;
+assert !if(0){throw __FLC}
+       else if(1-2+1){throw __FLC}
+       else {};
+
+var a;
+if(0){throw __FLC}
+else if(0){throw __FLC}
+else{a=4*2-1} /* note no semicolon needed here */
+assert 7 === a;
+assert 7 === a /* make sure previous one wasn't skipped */;
+
+a = 0;
+//pragma(trace-token-stack 1);
+if(0) throw __FLC; else if(1) a = 1; else throw __FLC;
+//pragma(trace-token-stack 0);
+assert 1 === a;
+
+a = -1;
+if(1) a = 0; else if(1) {throw __FLC} else {throw __FLC}
+assert 0 === a;
+
+a = 0;
+if(0) throw __FLC; else if(0) {throw __FLC} else a = 1 ? 2 : 3;
+assert 2 === a;
+
+a = 0;
+if(0) throw __FLC; else if(0) {throw __FLC} else {a = 0 ? 2 : 3}
+assert 3 === a;
+
+assert var ex = catch{
+    if(0) 1; else if(0) else a = 1 ? 2 : 3;
+    // --------------^^^^
+};
+assert 'CWAL_SCR_SYNTAX' === ex.codeString();
+assert 0 < ex.message.indexOf('consecutive non-operators');
+
+a = 0;
+assert true === if(1) 1; else throw __FLC;
+assert false === if(0) throw __FLC; else if(0) throw __FLC;
+a = 1;
+assert 1 === a /* make sure final if() DTRT */;
+
+a = 0;
+assert false === if(0) throw __FLC; else if(0) {0};
+a = 1;
+assert 1 === a /* make sure final if() DTRT */;
+
+a = 0;
+assert true === if(0) throw __FLC; else if(1) {0};
+a = 1;
+assert 1 === a /* make sure final if() DTRT */;
+
+a = 0;
+assert true === if(0) 1; else if(1) 0;
+a = 1;
+assert 1 === a /* make sure final if() DTRT */;
+
+a = 0;
+assert true === if(1) 1; else if(1) {throw __FLC};
+a = 1;
+assert 1 === a /* make sure final if() DTRT */;
+
+a = 0;
+assert true === if(1) 1; else if(1) throw __FLC;
+a = 1;
+assert 1 === a /* make sure final if() DTRT */;
+
+// checking newline-as-EOX handling...
+if(1){}
+var b;
+assert typeinfo(islocal b);
+
+if(0){} else{}
+var b2;
+assert typeinfo(islocal b2);
+
+if(0){} else if(0){}
+var b3;
+assert typeinfo(islocal b3);
+
+if(0){}
+var c;
+assert typeinfo(islocal c);
+/*
+  When using heredocs as if/else bodies, a semicolon/newline
+  between the heredoc's closing token and the "else" part is
+  optional. Typing it seems to feel more intuitive, but internally
+  heredocs are normally treated like script blocks, and a semicolon
+  after a script block has a different meaning here:
+
+  if(1){...}; else{...} // syntax error
+
+  NEVERMIND: i don't like this semicolon inconsistency. But now it's
+  doucmented :/
+*/
+var x;
+if(1)<<<X x=1 X
+else<<<Y Y // semicolon and EOL are equivalent at the END {} of LHS if/else
+assert 1===x;
+
+x = 0;
+if(0)<<<X X
+else<<<Y x=1 Y; // semicolon and EOL are equivalent at the END of the construct
+assert 1===x;
+
+if(0){// see comments above
+    x = 0;
+    if(1)<<<X x=1 X; // semicolon is a syntax error here for consistency with {blocks}.
+    else<<<Y Y
+    assert 1===x;
+}
+
+assert !catch{0 ? if(1) 1; else{2} : 1} /*no syntax error*/;
+assert !catch{0 ? if(0) 1; else{2} : 1} /*no syntax error*/;
+assert !catch{1 ? if(1) 1; else{2} : 1} /*no syntax error*/;
+assert !catch{1 ? if(0) 1; else{2} : 1} /*no syntax error*/;
+assert catch{1 ? if(0) 1; else 2 : 1}
+/*
+  Not exactly a bug: "unexpected ':'". The problem is one of scope:
+  the if/else parts run in a new scope and it's there that the else
+  encounters ':', but the ternary op state does not span scopes (we
+  explicitely save/reset/restore it when pushing/popping
+  scopes). Terminating the 'else' body with a semicolon OR using a {}
+  body instead of non-{} body resolves it.
+*/;

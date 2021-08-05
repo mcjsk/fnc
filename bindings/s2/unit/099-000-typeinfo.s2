@@ -1,0 +1,198 @@
+/*
+  typeinfo keyword tests...
+*/
+
+assert typeinfo(isbool true);
+assert typeinfo(is-bool false);
+assert !typeinfo(isbool 1);
+
+assert typeinfo(isinteger 3);
+assert !typeinfo(is-integer 3.3);
+assert typeinfo(isdouble 3.3);
+assert !typeinfo(is-double 3);
+assert typeinfo(hasprototype 3);
+
+scope {
+    const b = s2.Buffer.new();
+    assert typeinfo(isbuffer b);
+    assert typeinfo(hasbuffer b);
+    assert !typeinfo(is-buffer {prototype:b});
+    assert typeinfo(has-buffer {prototype:b});
+    assert !typeinfo(isbuffer s2.Buffer);
+    assert !typeinfo(hasbuffer s2.Buffer);
+    assert typeinfo(cannew s2.Buffer);
+    assert typeinfo(can-new s2.Buffer);
+    assert !typeinfo(isnewing s2.Buffer);
+    assert !typeinfo(is-newing s2.Buffer);
+    /* is-newing positive test is in the 'new' unit tests */
+    assert !typeinfo(cannew 0);
+    assert !typeinfo(can-new 0);
+}
+
+assert !typeinfo(isdeclared hasNative);
+assert !typeinfo(islocal hasFunction);
+
+
+const obj = {},
+      ar = [],
+      h = {#},
+      hasHash = {prototype:h},
+      hasArray = {prototype:ar},
+      f = proc(){},
+      hasFunction = {prototype:f},
+      e = enum {a:undefined,b},
+      ex = exception(0,0),
+      hasEx = {prototype: ex},
+      pf = new s2.PathFinder(),
+      hasNative = {prototype:pf}
+;
+
+assert catch {
+    obj = {a:1}
+    /* 20160226: BUG: when hashes are used as scope storage, const
+       violations are not caught! Not sure why - a cursory examination
+       seems to imply that all const checks are in place.
+
+       Can't reproduce it in the interactive shell!?!?
+
+       Was caused by the automatic resizing of hashes losing their
+       flags.
+    */;
+};
+
+assert typeinfo(is-declared hasFunction);
+assert typeinfo(is-local hasFunction);
+scope{
+    var x;
+    assert !typeinfo(islocal hasFunction);
+    assert typeinfo(islocal x);
+}
+
+assert typeinfo(hasprototype obj);
+assert !typeinfo(has-prototype {prototype:null});
+
+assert typeinfo(hasobject obj);
+assert typeinfo(isobject obj);
+assert typeinfo(has-object ar);
+assert !typeinfo(is-object ar);
+assert typeinfo(iscontainer ar);
+
+assert typeinfo(hasobject 0);
+assert !typeinfo(isobject 0);
+assert !typeinfo(hasobject null);
+
+assert typeinfo(isderefable obj);
+assert typeinfo(is-derefable ar);
+assert typeinfo(isderefable f);
+assert typeinfo(iscontainer f);
+assert typeinfo(isderefable 0);
+assert !typeinfo(is-container 0);
+
+assert !typeinfo(isderefable null);
+assert !typeinfo(iscontainer null);
+assert !typeinfo(isderefable undefined);
+assert !typeinfo(isderefable true);
+assert typeinfo(isderefable e.a);
+assert !typeinfo(isderefable e.a.value);
+
+assert typeinfo(isarray ar);
+assert typeinfo(hasarray ar);
+assert typeinfo(islist ar);
+assert !typeinfo(is-array obj);
+assert !typeinfo(has-array obj);
+assert !typeinfo(isarray hasArray);
+assert typeinfo(hasarray hasArray);
+assert !typeinfo(islist hasArray);
+
+assert typeinfo(iscallable f);
+assert typeinfo(is-callable hasFunction);
+assert typeinfo(isfunction f);
+assert !typeinfo(is-function hasFunction);
+
+assert typeinfo(isenum e);
+assert typeinfo(is-enum e);
+assert !typeinfo(isenum obj);
+assert typeinfo(isunique e.a);
+assert typeinfo(is-unique e.a);
+
+assert !typeinfo(hashash obj);
+assert !typeinfo(ishash obj);
+assert !typeinfo(is-hash e)
+ /* 2020-02-21: though enums are technically hashes, we
+    report them here as non-hashes because not all hash
+    operations work on enums and reporting them as such
+    might lead script code to inadvertently send an enum
+    down a hash-only code path. */;
+assert !typeinfo(has-hash e);
+
+assert typeinfo(has-hash h);
+assert typeinfo(is-hash h);
+assert typeinfo(hashash hasHash);
+assert !typeinfo(ishash hasHash);
+
+assert typeinfo(isexception ex);
+assert typeinfo(hasexception hasEx);
+assert !typeinfo(is-exception hasEx);
+assert typeinfo(has-exception ex);
+
+
+assert typeinfo(isinteger 1);
+assert !typeinfo(is-integer '1');
+assert typeinfo(isdouble 1.0);
+assert !typeinfo(is-double 1);
+
+assert typeinfo(isnumber 1);
+assert !typeinfo(is-number true);
+assert typeinfo(isnumeric true);
+assert typeinfo(is-numeric '3');
+assert !typeinfo(isnumeric '3x');
+assert typeinfo(isnumeric '-3.3');
+assert typeinfo(isnumeric '+0o7');
+assert !typeinfo(isnumeric '0o8');
+
+assert typeinfo(isnative pf);
+assert typeinfo(hasnative pf);
+assert !typeinfo(is-native obj);
+assert !typeinfo(isnative hasNative);
+assert typeinfo(has-native hasNative);
+assert !typeinfo(hasnative obj);
+
+assert typeinfo(isstring '');
+assert !typeinfo(is-string 1);
+assert typeinfo(isstring <<<X X);
+assert typeinfo(isstring for(;;) break '1');
+
+assert 'array' === typeinfo(name ar);
+
+obj.x = 1;
+assert typeinfo(mayiterateprops obj);
+obj.eachProperty(proc(){
+    assert typeinfo(mayiterateprops this);
+    assert typeinfo(mayiterate this);
+    assert !typeinfo(mayiteratelist this);
+    assert typeinfo(isiteratingprops this);
+    assert !typeinfo(isiteratinglist this);
+    assert typeinfo(isiterating this);
+    assert 'CWAL_RC_IS_VISITING' === catch {this.x=1}.codeString();
+});
+foreach(obj=>k){
+    assert typeinfo(may-iterate-props obj);
+    assert typeinfo(may-iterate obj);
+    assert !typeinfo(may-iterate-list obj);
+    assert typeinfo(is-iterating-props obj);
+    assert !typeinfo(is-iterating-list obj);
+    assert typeinfo(is-iterating obj);
+}
+assert !typeinfo(isiterating obj);
+assert !typeinfo(isiteratingprops obj);
+assert !typeinfo(isiteratinglist obj);
+
+scope {
+    var t0 = [#/* empty tuple is a built-in constant */],
+        t2 = [#1,2];
+    assert typeinfo(istuple t0);
+    assert typeinfo(is-tuple t2);
+    assert typeinfo(islist t0);
+    assert typeinfo(islist t2);
+}
+

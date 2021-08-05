@@ -1,0 +1,73 @@
+assert true === true;
+assert true == 1;
+assert true !== 1;
+assert true != 0;
+assert !false;
+assert !(false == 1);;
+assert false != '0';
+assert false == +'0';
+assert false == '';
+assert !!!'';
+assert <<<X fooX === 'foo';
+
+assert 42 === (1
+       ? 2
+         ? 4 + 38
+         : -1
+       : 0 /* '===' has higher prec than '?' */);
+assert 42 === (true ? 1 ? 4 + 38 : -1 : 0);
+
+assert 0 < 1;
+assert 1 > 0;
+assert !(0 > 1);
+assert !(1 < 0);
+assert 0 < 1 && 1 > 0;
+
+assert !(3>7);
+assert 1 ? 3<2+2 : 3>7;
+
+// stack size error:  (1 ? 'hi' : (again && yet !wrong) )
+// (is invalid syntax, but the error message could be better)
+// hmmm:
+assert 'hi' === (false ? nope : (1 ? 'hi' : (again && yet + !wrong) ));
+
+assert 1 === 3.2 % 2.1 /* modulo is always integer */;
+
+assert 1 < 1.1 /* this wasn't always the case in s2 */;
+assert 1.1 > 1 /* and yet this was */;
+
+/* Arguable (but consistent) result type behaviours: */
+assert 18 === 8*2.3 /* integer result of double multiplication */;
+assert 18.0 < 8.0*2.3 /* double result of double multiplication */;
+assert 8.0*2.3 > 18 /* make sure this works both ways. */;
+assert 18 < 8.0*2.3 /*b/c of the integer-to-double mode comparison at the cwal level*/;
+assert !(8*2.3 > 18) /* integer math on the LHS of > op */;
+assert 2 === 1/0.4 /* integer result of double division */;
+assert 0 === 1/2;
+assert 0 === 1/2.0;
+
+assert 2 === 1 ? 2 ? 3 : 4 : 5;
+assert 5 === 0 ? 1&&2 ? 3 : 4 : 5; 
+assert 5 === 0 ? 1||2 ? 3 : 4 : 5; 
+assert 4 === 1 ? 0 ? 3 : 4 : 5;
+assert 3 === 0&&1 ? 2 : 3;
+assert 2 === 1||0 ? 2 : 3;
+assert 2 === 0||1 ? 2 : 3;
+assert 3 === 0||0 ? 2 : 3;
+assert 3 === false||null ? 2 : 3;
+
+var y = "";
+assert 1 === (y ||| 1);
+assert "" === (0 ||| y);
+var x;
+assert 1 === (x ?: 1);
+x = false;
+assert false === (x ?: 1);
+assert 0 === (0 ?: 1);
+x = undefined;
+assert 1 === (x ?: 1);
+
+assert false === (false ?: throw 1) /* short-circuits the RHS */;
+assert 1 === catch {undefined ?: throw 1}.message /* doesn't short-circuit the RHS */;
+
+

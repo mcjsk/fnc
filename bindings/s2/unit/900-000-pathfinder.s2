@@ -1,0 +1,119 @@
+
+scope {
+    assert s2.PathFinder;
+    const pf = new s2.PathFinder();
+    assert 'PathFinder' === typeinfo(name pf);
+    assert pf inherits s2.PathFinder;
+    pf.prefix = ['/etc', '/bin', '/usr/bin'];
+    assert '/etc/hosts' === pf.search('hosts');
+    assert pf.search('ls').indexOf('/ls') >= 0;
+    assert undefined === pf.search('ls',-1);
+    assert undefined === pf.search('no-such-file-we-hope');
+
+    pf.prefix = [/*'',*/ 'unit','.'];
+    pf.suffix = [/*'',*/ '.s2'];
+    const emptyScript = '000-000-0empty';
+    assert pf.search(emptyScript);
+    assert undefined === pf.search('no-such-script');
+    assert typeinfo(isstring pf.search(__FILE));
+    assert catch{
+        s2.PathFinder.search('anything')
+    }.message.indexOf('is not a PathFinder') > 0;
+
+    // Testing special-case handling of pf.search() args:
+    pf.'operator->'=pf.search;
+    assert typeinfo(isstring pf->'000-000-0empty');
+    assert (pf->emptyScript).indexOf('.s2') > 0;
+
+    pf.prefix = ['/'];
+    pf.suffix = [''];
+    assert undefined === pf->'etc';
+    assert undefined === pf.search('etc');
+    assert typeinfo(isstring pf.search('etc',1));
+    assert typeinfo(isstring pf.search('etc',-1));
+}
+
+scope {
+    /*
+      20200118 bugfix: previously, if the search path had no entries
+      then it was not possible to find a match even if the
+      searched-for name was a precise match by itself or in
+      combination with any of the configured extensions. Now the
+      extension list is considered even if the directory list is
+      empty.
+    */
+    const pf = new s2.PathFinder();
+    assert pf.search(__FILE);
+    pf.suffix = ['.s2'];
+    assert __FILE === pf.search(__FILE.split('.').shift());
+}
+
+scope {
+    /*
+      20200118: added PathFinder.tokenizePath()
+
+      These tests will fail on Windows builds because those builds
+      only support ';' as the path delimiter. How best to deal with
+      that is as-yet-undecided (and low priority: to the best of my
+      knowledge, s2 has never been built on Windows).
+    */
+    const F = s2.PathFinder;
+    var a, path = ":/a/b/c;/d/e/f:;:/g/h/i/.;;";
+    a = F.tokenizePath(path);
+    assert 3 === a.#;
+    assert '/a/b/c' === a.0;
+    assert '/d/e/f' === a.1;
+    assert '/g/h/i/.' === a.2;
+    assert a === F.tokenizePath(path, a);
+    assert 6 === a.# /* appended entries to a */;
+    for(var i = 0; i < 3; ++i) assert a[i]===a[i+3];
+    assert 0 === F.tokenizePath('').#;
+    assert 'CWAL_RC_MISUSE' === catch F.tokenizePath().codeString();
+    assert 'CWAL_RC_MISUSE' === catch F.tokenizePath(0/*non-string*/).codeString();
+    assert 'CWAL_RC_MISUSE' === catch F.tokenizePath('',0/*non-array*/).codeString();
+}
+
+if(const dir = './unit';
+   s2.PathFinder.fileIsAccessible(dir) ){
+    /* 20200119: verify that Unique-type unwrapping works as
+       documented for PathFinder.search(). */
+    const e = enum {
+        dirOnly: -1, fileOnly: 0, both: 1
+    };
+    const p = new s2.PathFinder([dir], ['.s2']);
+    assert p.search(dir, e.dirOnly);
+    assert p.search(dir, e.both);
+    assert !p.search(dir, e.fileOnly);
+    const f = '000-000-0empty';
+    assert !p.search(f, e.dirOnly);
+    assert p.search(f, e.both);
+    assert p.search(f, e.fileOnly);
+}
+
+scope {
+    /*
+      20200120: test support for passing strings to the constructor.
+    */
+    var p = new s2.PathFinder('a:b;c');
+    assert !p.suffix /* was not initialized by the ctor */;
+    assert 3 === p.prefix.#;
+    assert 'c' === p.prefix.2;
+    assert 'b' === p.prefix.1;
+    assert 'a' === p.prefix.0;
+
+    p = new s2.PathFinder(null,'a:b;c');
+    assert !p.prefix /* null/undefined ctor args are silently skipped */;
+    assert 3 === p.suffix.#;
+    assert 'c' === p.suffix.2;
+
+    p = new s2.PathFinder(undefined,null);
+    assert !p.prefix;
+    assert !p.suffix;
+
+    p = new s2.PathFinder('','');
+    assert 0 === p.prefix.#;
+    assert 0 === p.suffix.#;
+    
+    assert 'CWAL_RC_TYPE'===catch{new s2.PathFinder(1)}
+        .codeString() /* non-string/array/null/undefined argument */;
+}

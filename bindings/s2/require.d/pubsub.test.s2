@@ -1,0 +1,55 @@
+/* Short demo of the pubsub require.s2 module. */
+requireS2(
+    ['nocache!pubsub'],
+    proc(P){
+        const p = new P();
+        assert 'object' === typename p.$map /* testing internals */;
+        print(__FLC, 'pubsub:');
+        foreach(p=>k,v) print('\t',k,v);
+        var counter = 0;
+        const id = p.sub('hi', proc(){
+            ++counter;
+            print(__FLC,'hi handler 1',argv);
+        });
+        const id2 = p.sub('bye', proc(){
+            ++counter;
+            print(__FLC,'bye handler',argv);
+        });
+
+        const id3 = p.sub('hi', proc(){
+            ++counter;
+            print(__FLC,'hi handler 2',argv);
+        });
+
+        print(__FLC, 'subscription IDs =',id, id2, id3);
+        print("Publishing events...");
+        p.pub('hi',0, __FLC);
+        assert 2 === counter;
+
+        p.pub('nope',1, __FLC);
+        assert 2 === counter;
+
+        p.pub('bye', 2, __FLC);
+        assert 3 === counter;
+
+        p.pub('hi',3, __FLC);
+        assert 5 === counter;
+        p.unsub(id);
+        p.pub('hi',4, __FLC);
+        assert 6 === counter;
+        p.pub('bye', 5, __FLC);
+        assert 7 === counter;
+        print(__FLC, 'done');
+
+        var p2 = new P();
+        assert p2.$map;
+        assert p2.$map !== p.map;
+        assert p2 !== p;
+        assert !(p2 inherits p);
+        assert p2 inherits p.prototype;
+        assert p2.sub === p.sub;
+
+        print(__FLC, 'really done');
+        return p;
+    }
+);

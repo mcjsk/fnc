@@ -1,0 +1,744 @@
+/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
+/* vim: set ts=2 et sw=2 tw=80: */
+#if !defined(NET_FOSSIL_SCM_FSL_CHECKOUT_H_INCLUDED)
+#define NET_FOSSIL_SCM_FSL_CHECKOUT_H_INCLUDED
+/*
+  Copyright 2013-2021 Stephan Beal (https://wanderinghorse.net).
+
+  Derived heavily from previous work:
+
+  Copyright (c) 2013 D. Richard Hipp (https://www.hwaci.com/drh/)
+
+
+  This program is free software; you can redistribute it and/or
+  modify it under the terms of the Simplified BSD License (also
+  known as the "2-Clause License" or "FreeBSD License".)
+
+  This program is distributed in the hope that it will be useful,
+  but without any warranty; without even the implied warranty of
+  merchantability or fitness for a particular purpose.
+
+  ******************************************************************************
+  This file declares public APIs for working with checkout-side fossil content.
+*/
+
+#include "fossil-db.h" /* MUST come first b/c of config macros */
+#include "fossil-repo.h"
+
+#if defined(__cplusplus)
+extern "C" {
+#endif
+
+
+/**
+   Returns version information for the current checkout.
+
+   If f is not NULL and has an opened checkout then...
+
+   If uuid is not NULL then *uuid is set to the UUID of the opened
+   checkout. If rid is not NULL, *rid is set to the record ID of
+   that checkout. The returned uuid bytes and rid are valid until
+   the library closes the checkout db or updates its state to a
+   newer checkout version. When in doubt about lifetime issues,
+   copy the UUID immediately after calling this if they will be
+   needed later.
+
+   Corner case: a new repo with no checkins has an RID of 0
+   and a UUID of NULL.
+
+   If f is NULL or has no checkout then *uuid will be set to NULL
+   and *rid will be set to 0.
+*/
+FSL_EXPORT void fsl_checkout_version_info(fsl_cx *f, fsl_id_t * rid,
+                                          fsl_uuid_cstr * uuid );
+
+/**
+   Given a fsl_cx with an opened checkout, and a filename, this
+   function canonicalizes zOrigName to a form suitable for use as
+   an in-repo filename, _appending_ the results to pOut. If pOut is
+   NULL, it performs its normal checking but does not write a
+   result, other than to return 0 for success.
+
+   As a special case, if zOrigName refers to the top-level checkout
+   directory, it resolves to either "." or "./", depending on whether
+   zOrigName contains a trailing slash.
+
+   If relativeToCwd is true then the filename is canonicalized
+   based on the current working directory (see fsl_getcwd()),
+   otherwise f's current checkout directory is used as the virtual
+   root.
+
+   If the input name contains a trailing slash, it is retained in
+   the output sent to pOut except in the top-dir case mentioned
+   above.
+
+   Returns 0 on success, meaning that the value appended to pOut
+   (if not NULL) is a syntactically valid checkout-relative path.
+
+   Returns FSL_RC_RANGE if zOrigName points to a path outside
+   of f's current checkout root.
+
+   Returns FSL_RC_NOT_A_CHECKOUT if f has no checkout opened.
+
+   Returns FSL_RC_MISUSE if !f, !zOrigName, FSL_RC_OOM on an
+   allocation error.
+
+   This function does not validate whether or not the file actually
+   exists, only that its name is potentially valid as a filename
+   for use in a checkout (though other, downstream rules might prohibit that, e.g.
+   the filename "..../...." is not valid but is not seen as invalid by
+   this function). (Reminder to self: we could run the end result through
+   fsl_is_simple_pathname() to catch that?)
+*/
+FSL_EXPORT int fsl_checkout_filename_check( fsl_cx * f, char relativeToCwd,
+                                            char const * zOrigName, fsl_buffer * pOut );
+
+
+/**
+   Adds the given filename to the current checkout vfile list of
+   files as a to-be-added file, or updates an existing record if
+   one exists.
+
+   If relativeToCwd is true (non-0) then the filename is
+   resolved/canonicalized based on the current working directory
+   (see fsl_getcwd()), otherwise f's current checkout directory is
+   used as the virtual root. This makes a subtle yet important
+   difference in how the name is resolved. CLI apps which take file
+   names from the user will generally want to set relativeToCwd to
+   true. GUI apps, OTOH, will possibly need it to be false,
+   depending on how they resolve and pass on the filenames.
+
+   This function ensures that zFilename gets canonicalized and can
+   be found under the checkout directory, and fails if no such file
+   exists (checking against the canonicalized name).
+
+   Returns 0 on success, non-0 on error.
+
+   Note that unlike fsl_checkout_file_rm(), this routine cannot
+   recursively add files from a directory name. Fixing that is on
+   the TODO list.
+
+   @see fsl_checkout_file_rm()
+*/
+FSL_EXPORT int fsl_checkout_file_add( fsl_cx * f, char relativeToCwd, char const * zFilename );
+
+/**
+   The converse of fsl_checkout_file_add(), this queues a file for
+   removal from the current checkout. The arguments have identical
+   meanings as for fsl_checkout_file_add() except that this routine
+   does not ensure that the resolved filename actually exists - it
+   only normalizes zFilename into its repository-friendly form.
+
+   If recurseDirs is true then if zFilename refers to a directory
+   then this operation queues all files under that directory
+   (recursively) for removal. In this case, it is irrelevant
+   whether or not zFilename ends in a trailing slash or not.
+
+   Returns 0 on success, any of a number of non-0 codes on error.
+   Returns FSL_RC_MISUSE if !f, !zFilename, or !*zFilename.
+   Returns FSL_RC_NOT_A_CHECKOUT if f has no opened checkout.
+
+   @see fsl_checkout_file_add()
+*/
+FSL_EXPORT int fsl_checkout_file_rm( fsl_cx * f, char relativeToCwd, char const * zFilename,
+                          char recurseDirs );
+
+/**
+   Change-type flags for use with fsl_checkout_changes_visit() and
+   friends.
+*/
+enum fsl_checkout_change_t {
+/**
+   Sentinel placeholder value.
+*/
+FSL_CKOUT_CHANGE_NONE = 0,
+/**
+   Indicates that a file was modified in some unspecified way.
+*/
+FSL_CKOUT_CHANGE_MOD,
+/**
+   Indicates that a file was modified as the result of a merge.
+*/
+FSL_CKOUT_CHANGE_MERGE_MOD,
+/**
+   Indicates that a file was added as the result of a merge.
+*/
+FSL_CKOUT_CHANGE_MERGE_ADD,
+/**
+   Indicates that a file was modified as the result of an
+   integrate-merge.
+*/
+FSL_CKOUT_CHANGE_INTEGRATE_MOD,
+/**
+   Indicates that a file was added as the result of an
+   integrate-merge.
+*/
+FSL_CKOUT_CHANGE_INTEGRATE_ADD,
+/**
+   Indicates that a file was added.
+*/
+FSL_CKOUT_CHANGE_ADDED,
+/**
+   Indicates that a file was removed.
+*/
+FSL_CKOUT_CHANGE_REMOVED,
+/**
+   Indicates that a file is missing from the local checkout.
+*/
+FSL_CKOUT_CHANGE_MISSING,
+/**
+   Indicates that a file was renamed.
+*/
+FSL_CKOUT_CHANGE_RENAMED,
+/**
+   NOT YET USED.
+
+   Indicates that a file contains conflict markers.
+*/
+FSL_CKOUT_CHANGE_CONFLICT,
+/**
+   NOT YET USED.
+
+   Indicates that a file in the changes table references
+   a non-file on disk.
+*/
+FSL_CKOUT_CHANGE_NOT_A_FILE,
+/**
+   NOT YET USED.
+
+   Indicates that a file is part of a cherrypick merge.
+*/
+FSL_CKOUT_CHANGE_CHERRYPICK,
+/**
+   NOT YET USED.
+
+   Indicates that a file is part of a backout.
+*/
+FSL_CKOUT_CHANGE_BACKOUT
+};
+
+typedef enum fsl_checkout_change_t fsl_checkout_change_t;
+
+/**
+   Sets up the vfile table in f's opened checkout db and scans the
+   checkout root directory's contents for changes compared to the
+   pristine checkout state. It records any changes in the vfile
+   table.
+
+   Returns 0 on success, non-0 on error, FSL_RC_MISUSE
+   if !f.
+
+   For compatibility with fossil(1), this routine clears the vfile
+   table of any entries not related to the current checkout.
+
+   TODO: a variant of this which scans only a given file or directory.
+
+   @see fsl_checkout_changes_visit()
+*/
+FSL_EXPORT int fsl_checkout_changes_scan(fsl_cx * f);
+
+/**
+   A typedef for visitors of checkout status information via
+   fsl_checkout_changes_visit(). Implementions will receive the
+   last argument passed to fsl_checkout_changes_visit() as their
+   first argument. The second argument indicates the type of change
+   and the third holds the repository-relative name of the file.
+
+   If changes is FSL_CKOUT_CHANGE_RENAMED then origName will hold
+   the original name, else it will be NULL.
+
+   Implementations must return 0 on success, non-zero on error. On
+   error any looping performed by fsl_checkout_changes_visit() will
+   stop and this function's result code will be returned.
+
+   @see fsl_checkout_changes_visit()
+*/
+typedef int (*fsl_checkout_changes_f)(void * state, fsl_checkout_change_t change,
+                                      char const * filename,
+                                      char const * origName);
+
+/**
+   Compares the changes of f's local checkout against repository
+   version vid (checkout version if vid is negative). For each
+   change detected it calls visitor(state,...) to report the
+   change.  If visitor() returns non-0, that code is returned from
+   this function. If doChangeScan is true then
+   fsl_checkout_changes_scan() is called by this function before
+   iterating, otherwise it is assumed that the caller has called
+   that or has otherwise ensured that the checkout db's vfile table
+   has been populated.
+
+   Returns 0 on success.
+
+   @see fsl_checkout_changes_scan()
+*/
+FSL_EXPORT int fsl_checkout_changes_visit( fsl_cx * f, fsl_id_t vid,
+                                           char doChangeScan,
+                                           fsl_checkout_changes_f visitor,
+                                           void * state );
+/**
+   A bitmask of flags for fsl_vfile_changes_scan().
+*/
+enum fsl_ckout_sig_t {
+/**
+   The empty flags set.
+*/
+FSL_VFILE_CKSIG_NONE = 0,
+
+/**
+   Non-file FS objects throw an error. Not yet implemented.
+*/
+FSL_VFILE_CKSIG_ENOTFILE = 0x001,
+/**
+   Verify file content using sha1sum, regardless of whether or not
+   file timestamps differ.
+*/
+FSL_VFILE_CKSIG_SHA1 = 0x002,
+/**
+   For unchanged or changed-by-merge files, set the mtime to last
+   check-out time, as determined by fsl_mtime_of_manifest_file().
+*/
+FSL_VFILE_CKSIG_SETMTIME = 0x004,
+/**
+   Indicates that when populating the vfile table, it should be
+   cleared of entries for other checkins. This is primarily for
+   compatibility with fossil(1), which generally assumes only a
+   single checkin's worth of state is in vfile and can get confused
+   if that is not the case.
+*/
+FSL_VFILE_CKSIG_CLEAR_VFILE = 0x008
+};
+
+/**
+    This function populates (if needed) the vfile table of f's
+    checkout db for the given checkin version ID then compares files
+    listed in it against files in the checkout directory, updating
+    vfile's status for the current checkout version id as its goes.
+    If vid is negative then the current checkout's RID is used in
+    its place (note that 0 is the RID of an initial empty
+    repository!). cksigFlags must be a bitmask of fsl_ckout_sig_t
+    values.
+
+    Returns 0 on success, non-0 on error.
+
+    BUG: this does not properly catch one particular corner-case
+    change, where a file has been replaced by a same-named non-file
+    (symlink or directory).
+*/
+FSL_EXPORT int fsl_vfile_changes_scan(fsl_cx * f, fsl_id_t vid, int cksigFlags);
+
+
+/**
+   Adds the given file f's list of "selected" files - the list of
+   filenames which should be included in the next commit
+   (see fsl_checkin_commit()).
+
+   Warning: if this function is not called before
+   fsl_checkin_commit(), then fsl_checkin_commit() will select all
+   modified, added, removed, or renamed files by default.
+
+   zName must be a non-empty NUL-terminated string and its bytes are
+   copied. The filename is canonicalized via
+   fsl_checkout_filename_check() - see that function for the meaning
+   of the relativeToCwd parameter.
+
+   The resolved name must refer to either a single vfile.pathname
+   value in the current vfile table (i.e. in the current checkout,
+   though possibly newly-added and not necessarily committed), or it
+   must refer to a directory, under which all modified, added,
+   deleted, or renamed files are queued up for the next commit.
+
+   If given a single file name it returns FSL_RC_NOT_FOUND if the
+   file is not in the current checkout. In this case f's error state
+   is updated with a description of the problem.
+
+   If given a directory name, it does not validate that any changes
+   are actually detected for queuing up (that detection comes at the
+   final commit stage).
+
+   The change-state of the file(s) is not actually checked by this
+   function, other than to confirm that the file is indeed listed in
+   the current checkout. That means that the file may still be
+   modified by the client before the commit takes place, and the
+   changes on disk at the point of the fsl_checkin_commit() are the
+   ones which get saved (or not).
+
+   Returns 0 on success, FSL_RC_MISUSE if either pointer is NULL,
+   or *zName is NUL. Returns FSL_RC_OOM on allocation error.
+
+   On error f's error state might (depending on the nature of the
+   problem) contain more details.
+
+   Returns 0 and has no side-effects if zName is already in the
+   checkin queue. This function honors the
+   fsl_cx_is_case_sensitive() setting when comparing names but the
+   check for the repo-level file is case-sensitive! That's arguably
+   a bug.
+
+   @see fsl_checkin_file_is_enqueued()
+   @see fsl_checkin_file_dequeue()
+   @see fsl_checkin_discard()
+   @see fsl_checkin_commit()
+*/
+FSL_EXPORT int fsl_checkin_file_enqueue(fsl_cx * f, char const * zName,
+                             char relativeToCwd);
+
+/**
+   The opposite of fsl_checkin_file_enqueue(), then removes the
+   given file or directory name from f's checkin queue. Returns 0 on
+   succes. Unlike fsl_checkin_file_enqueue(), this function does
+   little validation on the input and simply asks the internals to
+   clean up. Specifically, it does not return an error if this
+   operation finds no entries to unqueue. If zName is empty or NULL
+   then ALL files are unqueued from the pending checkin.
+
+   If relativeToCwd is true (non-0) then zName is resolved based on
+   the current directory, otherwise it is resolved based on the
+   checkout's root directory.
+
+
+   @see fsl_checkin_file_enqueue()
+   @see fsl_checkin_file_is_enqueued()
+   @see fsl_checkin_discard()
+   @see fsl_checkin_commit()
+*/
+FSL_EXPORT int fsl_checkin_file_dequeue(fsl_cx * f, char const * zName,
+                             char relativeToCwd);
+
+/**
+   Returns true (non-0) if the file named by zName is in f's current
+   file checkin queue.  If NO files are in the current selection
+   queue then this routine assumes that ALL files are implicitely
+   selected. As long as at least once file is enqueud (via
+   fsl_checkin_file_enqueue()) then this function only returns true
+   for files which have been explicitly enqueued.
+
+   If relativeToCwd then zName is resolved based on the current
+   directory, otherwise it is resolved based on the checkout's
+   root directory.
+
+   This function returning true does not necessarily indicate that
+   the file _will_ be checked in at the next commit. If the file has
+   not been modified at commit-time then it will not be part of the
+   commit.
+
+   This function honors the fsl_cx_is_case_sensitive() setting
+   when comparing names.
+
+   Achtung: this does not resolve directory names like
+   fsl_checkin_file_enqueue() and fsl_checkin_file_dequeue() do. It
+   only works with file names.
+
+   @see fsl_checkin_file_enqueue()
+   @see fsl_checkin_file_dequeue()
+   @see fsl_checkin_discard()
+   @see fsl_checkin_commit()
+*/
+FSL_EXPORT bool fsl_checkin_file_is_enqueued(fsl_cx * f, char const * zName,
+                                             int relativeToCwd);
+
+/**
+   Discards any state accumulated for a pending checking,
+   including any files queued via fsl_checkin_file_enqueue()
+   and tags added via fsl_checkin_T_add().
+
+   @see fsl_checkin_file_enqueue()
+   @see fsl_checkin_file_dequeue()
+   @see fsl_checkin_file_is_enqueued()
+   @see fsl_checkin_commit()
+   @see fsl_checkin_T_add()
+*/
+FSL_EXPORT void fsl_checkin_discard(fsl_cx * f);
+
+/**
+   Parameters for fsl_checkin_commit().
+
+   Checkins are created in a multi-step process:
+
+   - fsl_checkin_file_enqueue() queues up a file or directory for
+   commit at the next commit.
+
+   - fsl_checkin_file_dequeue() removes an entry, allowing
+   UIs to toggle files in and out of a checkin before
+   committing it.
+
+   - fsl_checkin_file_is_enqueued() can be used to determine whether
+   a given name is already enqueued or not.
+
+   - fsl_checkin_T_add() can be used to T-cards (tags) to a
+   deck. Branch tags are intended to be applied via the
+   fsl_checkin_opt::branch member.
+
+   - fsl_checkin_discard() can be used to cancel any pending file
+   enqueuings, effectively cancelling a commit (which can be
+   re-started by enqueuing another file).
+
+   - fsl_checkin_commit() creates a checkin for the list of enqueued
+   files (defaulting to all modified files in the checkout!). It
+   takes an object of this type to specify a variety of parameters
+   for the check.
+
+   Note that this API uses the terms "enqueue" and "unqueue" rather
+   than "add" and "remove" because those both have very specific
+   (and much different) meanings in the overall SCM scheme.
+*/
+struct fsl_checkin_opt {
+  /**
+     The commit message. May not be empty - the library
+     forbids empty checkin messages.
+  */
+  char const * message;
+
+  /**
+     The optional mime type for the message. Only set
+     this if you know what you're doing.
+  */
+  char const * messageMimeType;
+
+  /**
+     The user name for the checkin. If NULL or empty, it defaults to
+     fsl_cx_user_get(). If that is NULL, a FSL_RC_RANGE error is
+     triggered.
+  */
+  char const * user;
+
+  /**
+     Don't use this yet - it is not yet tested all that well.
+
+     If not NULL, makes the checkin the start of a new branch with
+     this name.
+  */
+  char const * branch;
+
+  /**
+     If this->branch is not NULL, this is applied as its "bgcolor"
+     propagating property. If this->branch is NULL then this is
+     applied as a one-time color tag to the checkin.
+
+     It must be NULL, empty, or in a form usable by HTML/CSS,
+     preferably \#RRGGBB form. Length-0 values are ignored (as if
+     they were NULL).
+  */
+  char const * bgColor;
+
+  /**
+     If true, the checkin will be marked as private, otherwise it
+     will be marked as private or public, depending on whether or
+     not it inherits private content.
+  */
+  bool isPrivate;
+
+  /**
+     Whether or not to calculate an R-card. Doing so is very
+     expensive (memory and I/O) but it adds another layer of
+     consistency checking to manifest files. In practice, the R-card
+     is somewhat superfluous and the cost of calculating it has
+     proven painful on very large repositories. fossil(1) creates an
+     R-card for all checkins but does not require that one be set
+     when it reads a manifest.
+  */
+  bool calcRCard;
+
+  /**
+     Whether to allow (or try to force) a delta manifest or not. 0
+     means no deltas allowed - it will generate a baseline
+     manifest. Greater than 0 forces generation of a delta if
+     possible (if one can be readily found) even if doing so would not
+     save a notable amount of space. Less than 0 means to
+     decide via some heuristics.
+
+     A "readily available" baseline means either the current
+     checkout is a baseline or has a baseline. In either case, we
+     can use that as a baseline for a delta. i.e. a baseline
+     "should" basically available except on the initial checkin,
+     which has neither a parent checkin nor a baseline.
+
+     The current behaviour for "auto-detect" mode is: it will generate
+     a delta if a baseline is "readily available." Once it calculates
+     a delta form, it calculates whether that form saves any
+     appreciable space/overhead compared to whether a baseline
+     manifest was generated. If so, it discards the delta and
+     re-generates the manifest as a baseline. The "force" behaviour
+     (deltaPolicy>0) bypasses the "is it too big?" test, and is only
+     intended for testing, not real-life use.
+
+     Caveat: if the repository has the "forbid-delta-manifests" set to
+     a true value, this option is ignored: that setting takes
+     priority.
+  */
+  int deltaPolicy;
+
+  /**
+     Tells the checkin to close merged-in branches (merge type of
+     0). INTEGRATE merges (type=-4) are always closed by a
+     checkin. This does not apply to CHERRYPICK (type=-1) and
+     BACKOUT (type=-2) merges.
+  */
+  bool integrate;
+
+  /**
+     Time of the checkin. If 0 or less, the current time
+     is used.
+  */
+  double julianTime;
+
+  /**
+     If this is not NULL then the committed manifest will include a
+     tag which closes the branch. The value of this string will be
+     the value of the "closed" tag, and the value may be an empty
+     string. The intention is that this gets set to a comment about
+     why the branch is closed, but it is in no way mandatory.
+  */
+  char const * closeBranch;
+
+  /**
+     Tells fsl_checkin_commit() to dump the generated manifest to
+     this file. Intended only for debugging and testing. Checking in
+     will fail if this file cannot be opened for writing.
+  */
+  char const * dumpManifestFile;
+  /*
+    fossil(1) has many more options. We might want to wrap some of
+    it up in the "incremental" state (f->ckin.mf).
+
+    TODOs:
+
+    A callback mechanism which supports the user cancelling
+    the checkin. It is (potentially) needed for ops like
+    confirming the commit of CRNL-only changes.
+  */
+};
+
+/**
+   Empty-initialized fsl_checkin_opt instance, intended for use in
+   const-copy constructing.
+*/
+#define fsl_checkin_opt_empty_m {               \
+    NULL/*message*/,                            \
+      NULL/*messageMimeType*/,                  \
+      NULL/*user*/,                             \
+      NULL/*branch*/,                           \
+      NULL/*bgColor*/,                          \
+      false/*isPrivate*/,                           \
+      true/*calcRCard*/,                           \
+      -1/*deltaPolicy*/,                        \
+      false/*integrate*/,                           \
+      0.0/*julianTime*/,                        \
+      NULL/*closeBranch*/,                      \
+      NULL/*dumpManifestFile*/                  \
+      }
+
+/**
+   Empty-initialized fsl_checkin_opt instance, intended for use in
+   copy-constructing. It is important that clients copy this value
+   (or fsl_checkin_opt_empty_m) to cleanly initialize their
+   fsl_checkin_opt instances, as this may set default values which
+   (e.g.) a memset() would not.
+*/
+FSL_EXPORT const fsl_checkin_opt fsl_checkin_opt_empty;
+
+/**
+   Do not use - under construction/testing. Very dangerous. Stay
+   away. If you choose to ignore this warning, then read on...
+
+   This creates a "checkin manifest" for the current checkout.
+
+   Its primary inputs is a list of files to commit. This list
+   is provided by the client by calling fsl_checkin_file_enqueue()
+   one or more times.  If no files are explicitely selected
+   (enqueued) then it calculates which local files have changed vs
+   the current checkout and selects all of those.
+
+   Non-file inputs are provided via the opt parameter.
+
+   Tip: to implement a "dry-run" mode, simply wrap this call in a
+   transaction started on the fsl_cx_db_checkout() db handle
+   (passing it to fsl_db_transaction_begin()), then, after this
+   call, either cal; fsl_db_transaction_rollback() (to implement
+   dry-run mode) or fsl_db_transaction_commit() (for "wet-run"
+   mode). If this function returns non-0, such a transaction should
+   _always_ be rolled back!
+
+   On success, it returns 0 and...
+
+   - If newRid is not NULL, it is assigned the new checkin's RID
+   value.
+
+   - If newUuid is not NULL, it is assigned the new checkin's UUID
+   value. Ownership of the bytes is passed to the caller, who must
+   eventually pass them to fsl_free() to free them.
+
+   On error non-0 is returned and f's error state may (depending on
+   the nature of the problem) contain details about the problem.
+   Note, however, that any error codes returned here may have
+   arrived from several layers down in the internals, and may not
+   have a single specific interpretation here. When
+   possible/practical, f's error state gets updated with a
+   human-readable description of the problem.
+
+   ACHTUNG: all pending checking state is cleaned if this function
+   fails for any reason other than basic argument validation. This
+   means any queued files or tags need to be re-applied if the
+   client wants to try again. That is somewhat of a bummer, but this
+   behaviour is the only way we can ensure that then the pending
+   checkin state does not get garbled on a second use. When in doubt
+   about the state, the client should call fsl_checkin_discard() to
+   clear it before try to re-commit. (Potential TODO: add a
+   success/fail state flag to the checkin state and only clean up on
+   success? OTOH, since something in the state likely caused the
+   problem, we might not want to do that.)
+
+   This operation does all of its db-related work i a transaction,
+   so it rolls back any db changes if it fails.
+
+   Some of the more notable, potentially not obvious, error
+   conditions:
+
+   - Trying to commit against a closed leaf: FSL_RC_MISUSE
+
+   - An empty/NULL user name or commit message, or no files were
+   selected which actually changed: FSL_RC_RANGE. In these cases
+   f's error state describes the problem.
+
+   - Some resource is not found (e.g. an expected RID/UUID could not
+   be resolved): FSL_RC_NOT_FOUND. This would generally indicate
+   some sort of data consistency problem. i.e. it's quite possible
+   very bad if this is returned.
+
+   BUGS:
+
+   - It cannot currently properly distinguish a "no-op" commit, one in
+   which no files were modified. If, e.g.
+
+   @see fsl_checkin_file_enqueue()
+   @see fsl_checkin_file_dequeue()
+   @see fsl_checkin_discard()
+   @see fsl_checkin_T_add()
+*/
+FSL_EXPORT int fsl_checkin_commit(fsl_cx * f, fsl_checkin_opt const * opt,
+                       fsl_id_t * newRid, fsl_uuid_str * newUuid);
+
+/**
+   Works like fsl_deck_T_add(), adding the given tag information to
+   the pending checkin state. Returns 0 on success, non-0 on
+   error. A checkin may, in principal, have any number of tags, and
+   this may be called any number of times to add new tags to the
+   pending commit. This list of tags gets cleared by a successful
+   fsl_checkin_commit() or by fsl_checkin_discard().
+
+   @see fsl_checkin_file_enqueue()
+   @see fsl_checkin_file_dequeue()
+   @see fsl_checkin_commit()
+   @see fsl_checkin_discard()
+*/
+FSL_EXPORT int fsl_checkin_T_add( fsl_cx * f, fsl_tagtype_e tagType,
+                       fsl_uuid_cstr uuid, char const * name,
+                       char const * value);
+
+
+
+#if defined(__cplusplus)
+} /*extern "C"*/
+#endif
+#endif
+/* NET_FOSSIL_SCM_FSL_CHECKOUT_H_INCLUDED */

@@ -1,0 +1,275 @@
+/* Basic object literal tests. The prototype-supplied methods
+   are tested in a separate script.
+*/
+const o = {
+    a: 1, b: 2,
+    c
+:
+3,
+    4:'four',
+    5: 5,
+    array: [2,4,6],
+    "removed": true
+};
+
+o.self = o;
+o[((('d')))] = 42;
+assert o === o.self;
+assert 'array' === typename o.array;
+assert 1 === o.a;
+assert 2 === o['b'];
+assert 3 === o.self['self'].self.c;
+assert 'four' === o.4;
+assert 5 === o[3+2];
+//assert 5 === o.(3+2);
+assert o.removed;
+assert undefined === unset o.self.removed, o.removed /*does not fail on missing properties*/;
+assert 'undefined' === typename o.removed;
+
+//unset o.self /* cannot JSON-output cyclical objects */;
+scope {
+    const proto = { a:0 }, o = { prototype:proto, a:1 };
+    assert o inherits proto;
+    assert 1 === o.a;
+    unset o.a;
+    assert 0 === o.a;
+    unset o.a;
+    assert 0 === o.a;
+
+    o.a = 1;
+    ++o.a;
+    assert 2 === o.a;
+    o.a += -1;
+    assert 1 === o.a;
+
+    o.prototype = null /* 'null' or 'undefined' assignment removes a prototype... */;
+    assert undefined === o.prototype /* ... which looks like this afterwards */;
+    assert !(o inherits proto);
+    assert o !inherits proto;
+    assert 'CWAL_RC_TYPE' === catch{o.prototype = 1}.codeString();
+}
+
+scope {
+    const g = {x:0};
+    assert 1 === ++g.x;
+    assert ++g.x < 3 /* must not error b/c of missing "this" via dot op */;
+    assert g.x++ === 2 /* must not error b/c of missing "this" via dot op */;
+
+    // Former BUG:
+    g.x++ ? g.x-- : --g.x /* Must not error with: Unexpected LHS (X++ operation) for X?Y:Z operator. */;
+    g /* trailing expr. needed to trigger the bug. */;
+    ;;
+}
+
+assert catch{{a:1, b:2, }}.codeString() === 'CWAL_SCR_SYNTAX';
+assert catch{{a:1,,  b:2, }}.codeString() === 'CWAL_SCR_SYNTAX';
+assert catch{{,a:1,  b:2, }}.codeString() === 'CWAL_SCR_SYNTAX';
+assert catch{{,}}.codeString() === 'CWAL_SCR_SYNTAX';
+// Bugfix 20171111: disallow trailing semicolon in value-part expressions:
+assert catch{{a:1;}}.message.indexOf('semicolon')>0;
+assert catch{{a:1;,b:0}}.message.indexOf('semicolon')>0;
+
+scope {
+    /**
+       Added 20171201: JS-like shortcut syntax:
+
+       {a, b, c} ==> {a:a, b:b, c:c}
+    */
+    const a = 1, b = "hi", c = [1,2,3];
+    const o = {a, x:4, b, c, y: 5};
+    assert 1 === o.a;
+    assert "hi" === o.b;
+    assert c === o.c;
+    assert 4 === o.x;
+    assert 5 === o.y;
+    assert catch{{x$x$x}}.codeString() === 'CWAL_RC_NOT_FOUND' /* unknown identifier */;
+    assert catch{{"x"}}.codeString() === 'CWAL_SCR_SYNTAX' /* non-identifier */;
+}
+
+scope {
+    /*
+      Added 20191117: use an expression as an object literal key:
+
+      const x = 'c';
+      const o = {a:1, b: 2, [x]: 3}
+    */ 
+    const x = 'c';
+    const o = {prototype: null, a:1, b: 2, [x]: 3};
+    assert 3 === o[x];
+    assert 3 === o.c;
+    assert 1 === {
+        prototype:null,
+        [scope{
+            for(;;) break "hi, "+"world";
+        }]: 1
+    }["hi, world"];
+
+    assert 1 === {
+        ["abc äbc"[4][0][0][0][0][0]]: 1
+    }.ä;
+    
+    assert 0 === catch {{[x, break]: 1}}
+        .message.indexOf("Unhandled 'break' in object literal.");
+    assert 0 === catch {{[x, return]: 1}}
+        .message.indexOf("Unhandled 'return' in object literal.");
+    assert 0 === catch {{[x, continue]: 1}}
+        .message.indexOf("Unhandled 'continue' in object literal.");
+    ;;
+}
+
+assert 999 === scope {
+    /*
+      2016-02-03: testing fix:
+
+      https://fossil.wanderinghorse.net/r/cwal/info/5041ab1deee33194
+
+      If it's broken, this will crash if built in debug mode,
+      triggering a cwal-level assertion, possibly a different one
+      depending on the type of the scope result value's type.
+    */
+    {a: 999}.a
+    /* 2020-02-20: The code that was testing has since disappeared: it
+       seems that the related feature was no longer needed once cwal
+       added scope push/pop APIs and cwal_scope_pop2(), both of which
+       allowed that behaviour to be relegated to cwal. */
+};
+
+scope {
+    /** 2020-02-06: dot-length operator (lhs.#) now works on non-list
+        containers, resolving to the number of properties. */
+    assert 2 === import.# /* path+doPathSearch properties */;
+    assert 3 === {a:1, b:1, c:1}.#;
+}
+
+scope {
+    /** 2020-02-18: {x:=y} sets x as a const property. */
+    const p = {x:1};
+    const o = {a:1, b:=2, c:3, prototype:=undefined};
+    assert 2 === o.b;
+    assert 'CWAL_RC_CONST_VIOLATION' === catch {o.b = 1}.codeString();
+    assert p === (o.prototype = p)
+      /* consting the prototype has no effect b/c we don't have a way
+         to flag/enforce that constraint at the C level. */;
+    assert 0 === o.clearProperties().#
+           /* also removes const properties! Bug or feature? */;
+    assert 1 === (o.b=1 /* constness was lost via clearProperties() */);
+}
+
+scope {
+    /** 2020-02-18: x.y:=z sets x as a const property. */
+    const o= {a:1};
+    assert 2 === (o.a=2);
+    assert 3 === (o.a:=3);
+    assert 'CWAL_RC_CONST_VIOLATION' === catch {o.a = 1}.codeString();
+    assert 'CWAL_RC_CONST_VIOLATION' === catch {o['a'] = 1}.codeString();
+    assert 'CWAL_RC_CONST_VIOLATION' === catch {o.a := 1}.codeString();
+
+    assert 'CWAL_SCR_SYNTAX' === catch {o := 1}.codeString()
+      /* := op only works for property assignment. */;
+    assert 1 === o.#;
+    assert o === o.clearProperties();
+    assert 0 === o.#;
+}
+
+scope {
+    /** 2020-02-20: inline expansion of object properties into an
+        object literal, similar to JS's {...otherObj}, which it calls
+        "spread" syntax. We use the @ prefix because already use that
+        for @array expansion, which is semantically very similar to
+        what we use it for here.
+    */
+    var o = {a: 1, b: 2, c:3};
+    var o2 = {@o};
+    assert o.# === o2.#;
+    foreach(o=>k,v) assert o2[k]==v;
+
+    o2 = {@o, c:4};
+    assert o.# === o2.#;
+    assert 4 === o2.c;
+
+    o2 = {a:4, @o, d:5};
+    assert o.#+1 === o2.#;
+    assert o.a === o2.a;
+    assert 5 === o2.d;
+
+    o2 = {d:5, @o};
+    assert o.#+1 === o2.#;
+    assert 5 === o2.d;
+
+    o2 = {@{a:1, b:2}};
+    assert 2 === o2.#;
+    assert 1 === o2.a;
+    assert 2 === o2.b;
+
+    o2 = {@proc(){return {a:1,b:2}}(), c:3};
+    assert 3 === o2.#;
+    assert 1 === o2.a;
+    assert 2 === o2.b;
+    assert 3 === o2.c;
+    
+    var ex = catch{ {a:1, @, b:1} };
+    assert 'CWAL_SCR_SYNTAX' === ex.codeString();
+    assert ex.message.indexOf('empty expression') > 0;
+
+    ex = catch{ {@3} };
+    assert 'CWAL_RC_TYPE' === ex.codeString();
+    assert ex.message.indexOf('container') > 0;
+
+    assert 'CWAL_RC_CONST_VIOLATION' === catch o2 = {a:=1, @o}.codeString();
+    o2 = {@o, a:=3};
+    assert 3 === o2.a;
+    assert 'CWAL_RC_CONST_VIOLATION' === catch {o2.a =1}.codeString();
+    
+    o = {
+        // Special case: constructor in an object literal is
+        // assigned as hidden/const, and hidden properties
+        // are not iterated over but do count towards the
+        // container.# operator...
+        __new:proc(){}
+    };
+    assert 1 === o.#;
+    o2 = {@o};
+    assert 0 === o2.#;
+
+    assert 'CWAL_RC_TYPE' === catch{
+        /*
+          The "problem" with enums is that they can use either object
+          or hash storage internally, so we would need to
+          differentiate between the two in the @ expansion.  We don't
+          currently do that, but maybe someday will.
+
+          ^^^^ that's outdated. enums now always use hashes.
+        */
+        {@enum {a,b,c}}
+    }.codeString();
+}
+
+scope {
+    /* 2021-06-24: ensure that vars declared in property access [] or ()
+       are not leaked into the current scope. e.g.
+
+       var o = {}; o[var x = 'hi'] = 1; assert 'hi'===x;
+    */
+    var o = {};
+    o[var xx = 'a'];
+    assert !typeinfo(isdeclared xx);
+    o.(var xx = 'b');
+    assert !typeinfo(isdeclared xx);
+    /* But we want standalone (...) to run in the current scope. */
+    1 && (var xx = 'y');
+    assert 'y' === xx;
+}
+
+scope {
+    /* 2021-07-09: Ensure that cwal_prop_key_can() prohibits certain
+       property key types... */
+    const o = {};
+    assert 'CWAL_RC_TYPE' === catch{
+        o[new s2.Buffer()] = 1;
+    }.codeString();
+    assert 'CWAL_RC_TYPE' === catch{
+        o[[#]] = 1;
+    }.codeString();
+}
+
+o /* propagate top-most o out for lifetime checks */;

@@ -1,0 +1,11 @@
+/* require() plugin which returns a handle to the repo Db object for
+   Fossil.require's shared Fossil.Context.  If no repo has been opened
+   when this is called, it opens the repo specified via the
+   --repo-db|-R=FILENAME CLI script flag.
+*/
+return requireS2(['fsl/context'], proc(F,args){
+    affirm const d = F.db;
+    d.config || F.openConfig();
+    affirm d.config;
+    return d.config;
+});

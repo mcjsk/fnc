@@ -1,0 +1,6 @@
+/* a placeholder. you'll know if you need it. */
+return {
+    isVirtual: true,
+    cacheIt: true,
+    load: proc(){ return {} }
+};

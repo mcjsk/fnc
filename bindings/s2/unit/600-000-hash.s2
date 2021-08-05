@@ -1,0 +1,212 @@
+const Hash = s2.Hash.new;
+
+scope {
+  var h = Hash();
+  assert h inherits s2.Hash;
+  var tableSize = h.hashSize();
+  assert 'integer' === typename tableSize;
+  assert tableSize > 0;
+  unset tableSize;
+  assert 0 === h.entryCount();
+
+  h.insert(1,-1.0);
+  assert 1 === h.entryCount();
+  assert -1.0 === h.search(1);
+  h.insert(0,1.0);
+  var c = 0;
+  h.eachEntry(function(k,v){
+    assert 'integer' === typename k;
+    assert 'double' === typename v;
+    c = c + 1;
+  });
+  assert h.entryCount() === c;
+
+  assert h.containsEntry(1);
+  assert !h.containsEntry(2);
+
+  var keys = h.entryKeys(), vals = h.entryValues();
+  assert 'array' === typename keys;
+  assert 'array' === typename vals;
+  assert vals.length() == c;
+  assert keys.length() == c;
+  unset keys, vals;
+
+  h.remove(-1);
+  assert 2 === h.entryCount();
+  h.insert(1, 0.0);
+  assert 2 === h.entryCount();
+  h.remove(1);
+  assert 1 === h.entryCount();
+  h.clearEntries();
+  assert 0 === h.entryCount();
+}
+
+scope {
+    var h1 = s2.Hash.new(11), h2 = s2.Hash.new(23);
+    h1.insert(1, 2);
+    h1.insert(2, 3);
+    h1.eachEntry(h2, h2.insert);
+    assert 2 === h2.entryCount();
+    h1.clearEntries();
+    assert !h1.entryCount();
+    h2.eachEntry(h1);
+    assert 2 === h1.entryCount();
+
+    var o = {};
+    h1.eachEntry(o, o.set);
+    assert 3 === o.2;
+    assert 2 === o.1;
+
+    h2.clearEntries();
+    h1.eachEntry(h2);
+    assert 2 === h2.entryCount();
+    assert 3 === h2.search(2);
+    assert 2 === h2.search(1);
+
+    h1.insert('f', proc f(){
+        assert f === this;
+        return this;
+    });
+
+    assert h1#'f' === (h1#'f')();
+    assert h1#'f' === h1#'f'();
+}
+
+scope {
+    var h = s2.Hash.new(11);
+    assert !h.hasEntries();
+    assert 11 === h.hashSize();
+    h.insert(1, 2);
+    assert h.hasEntries();
+    h.insert(3, 4);
+    assert 2 === h.entryCount();
+    h.resize(3);
+    assert 3 === h.hashSize();
+    assert 4 === h # 3;
+    assert 2 === h # 1;
+    assert 2 === h.entryCount();
+    assert h.hasEntries();
+    assert 'CWAL_RC_RANGE' === catch{h.resize(-1)}.codeString();
+    assert 'CWAL_RC_MISUSE' === catch{h.resize()}.codeString();
+}
+
+if(s2.getResultCodeHash){
+    const rch = s2.getResultCodeHash();
+    assert rch.entryCount() > 90 /* === 102 as of this writing */;
+    assert rch === s2.getResultCodeHash() /* result is cached */;
+    assert 'integer' === typename rch # 'CWAL_RC_OOM';
+    assert 'string' === typename rch # 0 /* the only code with a well-defined value! */;
+}
+
+scope{
+    var src, h;
+    const reset = proc(){
+        src = {a:1, b:-1, c:0};
+        h = s2.Hash.new(5);
+    };
+    reset();
+    h.insert('a', 'aaaa');
+    h.takeProperties(src,1);
+    assert 1 === h # 'a';
+    assert undefined === src.a;
+    assert undefined === src.b;
+    assert undefined === src.c;
+    assert(src.isEmpty());
+
+    reset();
+    h.insert('a', 'aaaa');
+    h.takeProperties(src,-1);
+    assert 'aaaa' === h # 'a';
+    assert 1 === src.a;
+    assert undefined === src.b;
+    assert undefined === src.c;
+    assert(!src.isEmpty());
+
+    reset();
+    h.insert('a', 'aaaa');
+    const ex = catch h.takeProperties(src,0);
+    assert ex;
+    assert 'CWAL_RC_ALREADY_EXISTS' === ex.codeString();
+    assert 1 === src.a;
+    /* src.b and src.c might have been moved already:
+       internal order is undefined and mutable
+       at runtime. */
+    assert !src.isEmpty();
+}
+
+scope { // 2021-07-24: X.takeProperties(X) (dest==src)
+    const h = {#a:1, b:2};
+    assert 2 === h.#;
+    h.a = 3;
+    assert 3 === h.a;
+    assert 1 === h#'a';
+    assert 1 === h.propertyCount();
+    h.takeProperties(h);
+    assert 0 === h.propertyCount();
+    assert 3 === h#'a';
+    assert 2 === h.#;
+    h.a = 4;
+    assert 'CWAL_RC_ALREADY_EXISTS'
+        === catch{h.takeProperties(h,0)}.codeString();
+    assert 2 === h.#;
+    h.takeProperties(h,-1);
+    assert 4 === h.a;
+    assert 3 === h#'a';
+    assert 2 === h.#;
+}
+
+assert 999 === scope {
+    /*
+      testing fix:
+
+      https://fossil.wanderinghorse.net/r/cwal/info/5041ab1deee33194
+
+      If it's broken, this will crash if built in debug mode,
+      triggering a cwal-level assertion, possibly a different one
+      depending on the type of the scope's result value.
+    */
+    {#a: 999}#'a'
+};
+
+scope {
+    /** 2020-02-06: dot-length operator (lhs.#) now, on hashes,
+        resolves to the number of hash entries.
+
+        2021-07-24: that now seems like a bug.
+    */
+    assert 3 === {# a:1, b:1, c:1}.#;
+}
+scope {
+    /* 2020-02-18: {#x:=y} assigns x as a const hash entry */
+    const h = {# a:1, b:=2};
+    assert 1 === h#'a';
+    assert 2 === h#'b';
+    assert 3 === h.insert('a',3);
+    assert 'CWAL_RC_CONST_VIOLATION' === catch h.insert('b',1).codeString();
+    assert 2 === h.#;
+    assert 2 === foreach(#h=>k,v) 'b'===k && break v;
+}
+
+scope {
+    /** 2020-02-20: inline expansion of object properties into an
+        object literal, similar to JS's {...otherObj}. This is
+        currently explicitly disallowed for hash literals because of
+        potential semantic ambiguities in handling of hash vs. object
+        properties.
+    */
+    const ex = catch{ {#@{a:1}} };
+    assert 'CWAL_RC_TYPE' === ex.codeString();
+    assert ex.message.indexOf('hash literal') > 0;
+}
+
+scope {
+    /* 2021-07-09: Ensure that cwal_prop_key_can() prohibits certain
+       property key types... */
+    const h = {#};
+    assert 'CWAL_RC_TYPE' === catch{
+        h.insert(new s2.Buffer(),1);
+    }.codeString();
+    assert 'CWAL_RC_TYPE' === catch{
+        h.insert([#], 1);
+    }.codeString();
+}

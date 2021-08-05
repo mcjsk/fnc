@@ -1,0 +1,39 @@
+const doSwitch = proc(switch, key, evalStrings = false){
+  affirm 'object' === typeinfo(name switch);
+  affirm undefined !== key;
+  var v = switch.(key), tv = typeinfo(name v);
+  ('undefined'===tv) && (tv = typeinfo(name (v = switch.default)));
+  v || return v;
+  ('function' === tv) && return v.call(switch);
+  (evalStrings && ('string'===tv)) && return eval -> v;
+  return v;
+};
+
+scope {
+  const switch = {
+    1: 'foo',
+    2: 'bar',
+    default: proc(){ return 'baz' }
+  };
+
+  assert 'foo' === doSwitch(switch,1);
+  assert 'bar' === doSwitch(switch,2);
+  assert 'baz' === doSwitch(switch,99);
+}
+
+scope {
+  const sw2 = {
+    1: '3+3',
+    bar: <<<EOF // remember, this is a string
+      var x = 3;
+      x * 4; EOF,
+    ref:proc(){
+      return doSwitch(this,1,true)
+    }
+  };
+
+  assert 6 === doSwitch(sw2,1,true);
+  assert 12 === doSwitch(sw2,'bar',true);
+  assert 6 === doSwitch(sw2,'ref',true);
+  assert undefined === doSwitch(sw2,'baz',true);
+}

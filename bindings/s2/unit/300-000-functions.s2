@@ -1,0 +1,301 @@
+var x = function X(a=1,b=0){
+  //print("argv =",argv);
+  assert 'array' === typename argv;
+  assert 'function' === typename X;
+  //print('"this" type =',typename this);
+  return a + b;
+};
+assert 'function' === typename x;
+assert 1 === x(1);
+assert 3 === x(1,2);
+//return;
+assert 3 === x(1,2,3);
+
+var o = { f: x };
+assert -1 === o.f(0,-1,1);
+unset o;
+
+var y = 1 || proc(){skipped}(args,skipped,too);
+
+// just to watch the dtor in debug output...
+// print('unsetting func'); unset x; print('after unset');
+
+unset x, y;
+// Fixed :-D
+//print('script location info from inside funcs will be wrong for a while:',
+//      catch proc(){throw    __FLC}()
+//);
+assert __LINE+1 === catch {
+  proc(){throw 0}()
+}.line;
+
+var recursive = proc r(a=1){
+  return a>3 ? a : r(a+1);
+};
+
+assert 4 === recursive();
+
+assert 4 === proc rec(a=1){
+  return a>3 ? a : rec(a+1);
+}();
+assert 'undefined' === typename rec;
+
+var x = function myfunc(a=myfunc.defaults.0, b=myfunc.defaults.1){
+  return a + b;
+};
+x.defaults = [1,-1];
+assert 0 === x();
+assert 1 === x(2);
+
+var o = {
+  name: 'fred',
+  f:function(){return this.name}
+};
+assert 'fred' === o.f();
+
+scope {
+    var x = 3, y = 4;
+    var f = function(c){
+        return a + b + c;
+    }.importSymbols({a: x, b: y});
+    assert 8 === f(1);
+    f.a = 1;
+    assert 8 === f(1) /* that's a different 'a' */;
+    var counter = 0;
+    f.eachProperty(proc(){
+        counter = counter + 1;
+        //print(argv);
+    });
+    assert 1 === counter
+    /* making sure that the importSymbols sym is hidden (does not get
+       iterated over). */;
+    f.clearProperties();
+    assert 9 === f(2) /* f.clearProperties() does not nuke imported
+                         symbols, as of 20160206. */;
+    f.importSymbols(false,{b: 3})
+    /* initial bool arg specifies whether or not to clear
+       existing imported properties before the import.
+       Added 20171227.
+    */;
+    assert 10 === f(4);
+}
+
+scope {
+  var o = {a:1};
+  var f = function(a){
+    return this.a + a;
+  };
+  assert 2 === f.apply(o,[1]);
+  assert 2 === f.call(o,1);
+
+}
+
+scope {
+  // Make sure that skip mode is honored
+  // for default parameters which are passed
+  // in by the caller...
+  var f = proc(a, c=(throw 'default param threw'), b=1){
+    assert 1===b;
+    assert 0===c;
+    assert -1===a;
+  };
+  f(-1,0);
+  assert 0 === catch{f(1) /* param c=throw... gets processed */}
+         .message.indexOf('default param');
+
+  // make sure sourceCode() is working.
+    assert f.sourceCode().indexOf("default param threw")>8;
+    assert proc(){/*comment*/}.sourceCode() === "proc(){}";
+    assert proc(/*comment*/){/*comment*/}.sourceCode() === "proc(){}";
+}
+
+scope {
+    /* The "using" pseudo-keyword... */
+    var x = 30, f = proc() using(x) {return x};
+    unset x;
+    assert 30 === f();
+    var f2 = proc() using({y:20, F:f}) {return F() * y};
+    assert 600 === f2();
+    f.importSymbols({x: 40});
+    unset f;
+    assert 800 === f2();
+    unset f2;
+
+    /* Alternate placement at the end of the function, primarily
+       because it makes migration from importSymbols() a simple
+       search/replace op: */
+    var x = 30, y = 20, f = proc() {return x*y} using(x, y);
+    unset x, y;
+    assert 600 === f();
+    var f2 = proc() {return F() * y} using({y:10, F:f});
+    assert 6000 === f2();
+    f.importSymbols({x: 40, y: 1});
+    unset f;
+    assert 400 === f2();
+    unset f2;
+
+    /* Another alternate syntax which takes a single object literal.
+       It does not accept an object expression or a hash literal.
+    */
+    assert 60 === proc() using {A: 30} { return A * argv.0 }(2);
+    assert -60 === proc() { return B * argv.0 } using {B: -30}(2);
+
+    assert 'CWAL_RC_TYPE' === catch {
+        proc() using {#a:1} {}
+    }.codeString() /* hash literal is not allowed */;
+
+    assert catch {
+        proc() using (true) {}
+    }.message.indexOf("eyword") > 0 /* keyword as identifier not allowed */;
+
+    assert catch {
+        proc() using () {}
+    }.message.indexOf("mpty") > 0 /* empty expression not allowed */;
+
+    /* Contrast empty () with empty {object}, which is allowed, though
+       not of much use... */
+    assert 0 === proc() using {} {return 0}();
+
+    assert catch {
+        var x;
+        proc() using (x ?) {}
+    }.message.indexOf("nexpected") > 0 /* illegal token */;
+
+    assert catch {
+        var x;
+        proc() using (x, 1) {}
+    }.message.indexOf("'integer'") > 0 /* illegal expr. type */;
+
+    assert catch {
+        proc() using x{}
+    }.message.indexOf("Expecting (...)") === 0 /*using requires () or {}*/;
+
+    assert catch {
+        proc() {} using x
+    }.message.indexOf("Expecting (...)") === 0 /*using requires () or {}*/;
+
+
+    // Demonstrate how using() deals with identifiers vs non-identifier/non-literal
+    // expressions:
+    var a = 0;;
+    assert catch {
+        proc() using(a.prototype, b) {}
+    }.message.indexOf("Unexpected token '.'") === 0
+    /* fails b/c a leading identifier triggers import of that identifier
+       and does not eval a sub-expression. */;
+    assert proc(){} using((a.prototype)) /* works b/c it doesn't start with an identifier */;
+    assert proc(){} using(0.prototype) /* works b/c it doesn't start with an identifier */;
+    unset a;
+    var obj = {a:1, b:2};
+    var f1 = proc(){return obj.a+obj.b} using(obj);
+    var f2 = proc(){return a+b} using((obj));
+    unset obj;
+    assert 3 === f1() /* because using(obj) resolves obj as an identifier. */;
+    assert 3 === f2() /* because using((obj)) triggers a sub-expression parse and
+                         imports the resulting properties. */;
+}
+
+scope {
+    // testing a parsing fix for prefix ++/-- ...
+    var f = proc(){return o} using{o:{x:1}};
+    assert 1 === f().x;
+    assert 1 === f().x++;
+    assert 3 === ++f().x;
+    assert 2 === --(f()).x;
+    //assert 3 === ++(f().x) /* doesn't work b/c (x) is resolved in a subexpression */;
+}
+
+var u = scope {
+    /* 20191209: using() keyword */
+    assert undefined === proc(){return using()}();
+    var f = proc(){return using()} using{a: 1};
+    var u = f();
+    assert typeinfo(isobject u);
+    assert !u.prototype;
+    assert 1 === u.a;
+    u.b = 2;
+    assert 2 === f().b;
+    assert undefined ===  using(proc(){});
+    assert 'CWAL_SCR_SYNTAX' === catch {using()}.codeString();
+    assert 'CWAL_RC_TYPE' === catch using(f.apply).codeString();
+    f = proc(){return using()} using{}
+    /* as fate would have it, using{} is legal, and creates an empty
+       imports object, but using() is not. The latter was an
+       intentional design decision but the former just a happy
+       accident. */;
+    u = f();
+    assert typeinfo(isobject u);
+    u.b = 1;
+    assert 1 === f().b;
+
+    /* imports must survive propagation out of a temporary value... */
+    u = using(proc()using{a:999}{});
+    ;;;;;;;; /* pedanticness: make sure sweepup triggers (though the temp function is already gone by now) */
+    assert typeinfo(isobject u);
+    assert 999 === u.a;
+
+    /**
+       20191211: using (without parens) is legal in function bodies as a shorthand
+       for using() (it's also more efficient).
+    */
+    assert catch {
+        using;
+    }.message.indexOf("Expecting (") === 0;
+    f = proc F()using{a:1}{
+        assert typeinfo(islocal a);
+        assert using(F) === using();
+        proc(){assert undefined===using /* not inherited from outer function */}();
+        return scope {using.a /*from containing function*/}
+    };
+    assert 1 === f();
+
+    /**
+       20191211: adding a dot after the "using" clause in a function
+       definition specifies that the imported symbols (whether via
+       this "using" decl or a future importSymbols() call) are NOT to
+       be declared as local variables at call()-time. Instead, they
+       may be accessed via the call-local "using" keyword.
+    */
+    f = proc F() using.{XXX: 1} {
+        assert !typeinfo(islocal XXX);
+        assert typeinfo(islocal F);
+        assert 1 === using.XXX;
+        assert 1 === using()['XXX'];
+        assert using.XXX === using(F).XXX;
+        return using['XXX'];
+    };
+    assert 1 === f();
+
+    assert 1 === proc(){
+        assert !typeinfo(islocal a);
+        return using.a;
+    } using.{a:1}();
+    /* 20191218 bugfix test:
+       1) Order of {body}using.{...} broke parser.
+       2) S2_FUNCSTATE_F_NO_USING_DECL flag was not being set
+       on the function when that order applied. 
+    */
+    ;
+
+    /* Confirm lifetime of imported symbols for functions defined
+       inside using(<here>)... */
+    assert "!wakawaka!" === using(proc(){}using{a:"!wakawaka!"}).a;
+    assert "/foo/bar/baz" === scope using(proc()using{a:"/foo/bar/baz"}{}).a;
+    var uo = using(proc()using{a:"/foo/bar/baz", b: 1000}{});
+    assert "/foo/bar/baz" === uo.a;
+    assert 1000 === uo.b;
+    unset uo;
+    assert using(proc(){}using{a:"!wakawaka!"}).a
+        === proc(){return using()}using{b:"!wakawaka!"}().b;
+    
+    /* imports can be added after the fact with importSymbols()... */
+    f = proc(){return using()};
+    assert undefined === f();
+    f.importSymbols({a: 1000});
+    assert 1000 === f().a;
+    /* imports must survive propagation out of this scope... */
+    f() /* scope result */;
+};
+assert typeinfo(isobject u);
+assert 1000 === u.a;
+

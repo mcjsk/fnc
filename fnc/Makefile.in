@@ -1,0 +1,59 @@
+all:
+OBJ.DIR := .# KLUDGE for libfossil-specific hack in deps generator
+include ../subdir-inc.make
+#$(error $(TOP_INCDIR))
+#CPPFLAGS += -I$(TOP_INCDIR)
+CPPFLAGS += -I$(TOP_DIR)/include
+CPPFLAGS += -I$(TOP_DIR)/src# workaround for in-tree sqlite3.h
+#INCLUDES_PATH ?= $(HOME)/include /usr/local/include /usr/include
+
+LIBFOSSIL.LDFLAGS := -L.. -L../src -lfossil
+ifeq (0,@LIBFOSSIL_SHARED@)
+  # In static build, we need some extra flags...
+  LIBFOSSIL.LDFLAGS += $(LDFLAGS_MODULE_LOADER) -lpthread -lz
+endif
+
+# To build fnc, we need the curses and pthread libraries; not sure what
+# this requires on Linux, but the following covers OpenBSD and macOS.
+PLATFORM := $(shell sh -c 'uname 2>/dev/null || echo Unknown')
+ifneq ($(filter $(PLATFORM),Darwin OpenBSD),)
+  CPPFLAGS += -D_XOPEN_SOURCE_EXTENDED
+  LIBFOSSIL.LDFLAGS += -lpanel -lcurses -lutil -lz -lpthread
+endif
+
+TEST_BINS_LDFLAGS := $(LIBFOSSIL.LDFLAGS) $(EXTRA_LIBS) @SH_LINKFLAGS@
+
+TEST_BINS_LIBDEPS := $(wildcard ../libfossil.*)
+ifneq (,$($(TEST_BINS_LIBDEPS)))
+ifeq (,$(strip $(filter distclean clean,$(MAKECMDGOALS))))
+$(TEST_BINS_LIBDEPS):
+	$(MAKE) -C ..
+endif
+endif
+
+########################################################################
+# INC_SEARCH: $(call)able function. $(1) should be the the name of
+# a C header file to search for under $(INCLUDES_PATH).
+define INC_SEARCH
+$(call ShakeNMake.CALL.FIND_FILE,$(1),$(INCLUDES_PATH))
+endef
+
+########################################################################
+# Sets up binary build rules for binary named $1. This only works
+# for the basic test binaries which all have common compile/link
+# bits. Assumes sources are in $1.c.
+define RULES_F_BIN
+$(1).BIN.OBJECTS += $(1).o
+$(1).BIN.LDFLAGS += $$(TEST_BINS_LDFLAGS)
+$(call ShakeNMake.CALL.RULES.BIN,$(1))
+$$($(1).BIN): $$(TEST_BINS_LIBDEPS)
+all: $$($(1).BIN)
+CLEAN_BINS += $$($(1).BIN)
+endef
+F_BINS := \
+	fnc
+
+test.BIN.LDFLAGS += -lz
+
+$(foreach fbin,$(F_BINS),$(eval $(call RULES_F_BIN,$(fbin))))
+

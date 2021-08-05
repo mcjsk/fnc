@@ -1,0 +1,43 @@
+/**
+   Test/demo require.s2 DataModel module the modeler module
+   and/or the DataModel plugin.
+*/
+return {
+    //__typename: 'Testing that this will not get overwritten',
+    /**
+       Gets called by the modeler framework when this module's
+       (inherited) new() method is called. In the context of this
+       function, "this" will be the new Model instance, which inherits
+       this object.
+       
+       The return value is ignored by the modeler framework.
+    */
+    initialize: proc(a,b,c){
+        print(__FLC, 'initialize()ing', typename this, this);
+        print(__FLC, 'argv =', argv);
+        print(__FLC, 'super =',super);
+        assert __FILE.indexOf(typename this)>=0
+        /* __typename gets automatically set from the file name
+           when the model is loaded if it does not set one itself. */;
+        this.attr('a',a)
+            .attr('b',b)
+            .attr('c',c);
+    },
+    /**
+       Attributes defined in the prototype are visible via the
+       inherited attr() method, but do not get serialized via the
+       inherited toJSON() method unless their values have been
+       explicitly set in the most-derived model instance.
+    */
+    attributes:{
+        foo: -1
+    }
+};
+/*.withThis(proc(){
+    return ('undefined' === typename requireS2)
+        ? this
+        : ((const that=this),
+           requireS2(['modeler'],proc(M){
+               return M.extendModel(that)
+           }));
+});*/

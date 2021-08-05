@@ -1,0 +1,161 @@
+
+scope {
+    // make sure we can chain calls...
+    const P = proc f(){return f};
+    P.x = P;
+    assert P === P('from P()');
+    assert P === P.x('from P.x()');
+    assert P === P.x['x']('from P.x["x"]()');
+
+    // Demonstrate skip-mode's effect on function calls:
+    false && P.x.y.z(foo);
+    true || P.x.y.z(foo);
+
+    assert P === (P.x)('from (P.x)()');
+
+    var o = {
+        p: P
+    };
+    assert P === o.p('from o.p()');
+
+    if(s2.isCallable){
+        assert s2.isCallable(s2.isCallable, false);
+        assert s2.isCallable(s2.isCallable, true);
+        assert s2.isCallable(s2.isCallable);
+        o = {
+            prototype: proc(){
+                ++this.value;
+                this.args = argv;
+                return argv;
+            },
+            value: 0
+        };
+        assert 0 === o.value;
+        assert undefined === o.args;
+        assert o(1,2,3) === o.args;
+        assert 1 === o.value;
+        assert 3 === o.args.2;
+        assert s2.isCallable(o) /* searches up through prototypes */;
+        assert !s2.isCallable(o,false) /* does not search prototypes */;
+        assert s2.isCallable(o,true) /* searches up through prototypes */;
+    }
+}
+
+scope { // exploring "callable" objects...
+    var obj = {
+        foo: proc(){
+            assert this === obj;
+        }
+    }.eachProperty(proc(k,v){
+        //print(__FLC,'eachprop',k);
+        v.importSymbols(nameof this);
+    });
+
+    // let's change up "this" a bit...
+    var f = obj.foo;
+    obj.foo();
+    f();
+    obj.bar = proc(name){
+        //print(name,this);
+        return this === eval -> name;
+    };
+    assert obj.bar(nameof obj);
+    var x =obj.bar;
+    assert x(nameof x);
+}
+
+scope {
+    /* Prior to 20181015, completely empty functions were optimized
+       away at call()-time. This led to side-effects in their
+       parameter/argument lists not happening, e.g.: proc(){}(assert 0) did not
+       fail. Make sure that's no longer the case...
+
+       We now optimize away the call() part but still process the
+       argument list, if any, so that side-effects can trigger.
+    */
+    var f = proc(){}, x = 3, y;
+    f(y=x);
+    assert x === y /* side-effects in argument list trigger */;
+    assert (catch proc(){}(affirm 0)).message.indexOf('Affirmation') >= 0 /* affirmation must trigger */;
+
+    /* Let's test some more complicated cases involving default
+       parameter values which use call()-time imported symbols... */
+    y = 0;
+    f = proc callee(a=(y=Z), b=(z=callee.foo)){} using{Z:2};
+    f.foo = 7;
+    assert 0 === y;
+    var z;
+    f();
+    assert 2 === y /* side effect of default param value using imported symbol */;
+    assert 7 === z /* side effect of default param value using imported symbol */;
+    y = 0;
+    f.foo = 8;
+    f(1);
+    assert 0 === y /* skipped side effect of default param value */;
+    assert 8 === z /* side effect of default param value using imported symbol */;
+    z = 0;
+    f(1,2);
+    assert 0 === z /* skipped side effect of default param value */;
+
+    z = 0;
+    f = proc(a=(z=this.foo)){};
+    f.foo = 7;
+    f();
+    assert 7 === z /* 'this' was set up before default parameter values were processed */;
+}
+
+scope {
+    // Check for handling of errant continue/break...
+    // Prior to 20181104 continue/break in call param lists
+    // were handled incorrectly.
+
+    const ar = [], f=proc(){};
+    foreach(@[1,2,3]=>v) f(ar[] = v%2 ? v : continue);
+    assert 2 === ar.#;
+    assert 1===ar.0;
+    assert 3===ar.1;
+
+    ar.length(0);
+    foreach(@[1,2,3]=>v) f(ar[] = v%2 ||| break);
+    assert 1 === ar.#;
+    assert 1===ar.0;
+
+    var ex = catch foreach(@ar=>v) proc(){continue}();
+    assert typeinfo(isexception ex);
+    assert 0===ex.message.indexOf("Unhandled 'continue'");
+
+    ex = catch foreach(@ar=>v) proc(){break}();
+    assert typeinfo(isexception ex);
+    assert 0===ex.message.indexOf("Unhandled 'break'");
+}
+
+scope {
+    /**
+       20190820: confirm fix of @-expansion bug when a newline preceeds
+       the @expr in a function call. */
+    const f = proc(){}, args = [1,2,3];
+    f(1,2,3,
+      @args);
+    // ^^^ previously, that would fail with "'@' is not allowed here
+}
+
+scope {
+    /**
+       2020-02-18: var keyword now supports the := op to assign as
+       const, but it is explicitly disabled for function parameters
+       (which are handled by the same C-level code
+       (s2_keyword_f_var_impl())) because of inconsistencies in
+       parameters with and without default values. Namely, we can
+       easily make the argument to proc(a:=2){...} const whether or
+       not an argument is passed to the function call but we have no
+       syntax to saying that it sould be const unless it has a default
+       value. e.g. we could not make that same parameter const in
+       proc(a){...}.
+    */
+
+    var f = proc(a:=1){} /* params are not parsed yet, so won't fail
+                            here. */;
+    var ex = catch f();
+    assert 'CWAL_SCR_SYNTAX' === ex.codeString();
+    assert ex.message.indexOf(':=') > 0;
+}

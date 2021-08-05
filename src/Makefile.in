@@ -1,0 +1,285 @@
+all:
+include ../subdir-inc.make
+#$(error $(TOP_SRCDIR))
+CPPFLAGS += -DBUILD_libfossil -DSQLITE_CORE
+#CPPFLAGS += -I$(TOP_INCDIR)
+#CPPFLAGS += -I$(TOP_SRCDIR)/include
+#CPPFLAGS += -I$(TOP_SRCDIR)/src# workaround for in-tree sqlite3.h
+EXTRA_LIBS := -lz
+EXTRA_LIBS +=  $(LDFLAGS_MODULE_LOADER)
+
+#INCLUDES_PATH ?= $(HOME)/include /usr/local/include /usr/include
+
+
+# FSL.SRC.BASE = all sources which can go in the amalgamation build
+# FSL.SRC = FSL.SRC.BASE + generated/added sources
+FSL.SRC.BASE := \
+	fsl.c \
+	appendf.c \
+	auth.c \
+	bag.c \
+	buffer.c \
+	cache.c \
+	checkin.c \
+	checkout.c \
+	cli.c \
+	content.c \
+	config.c \
+	cx.c \
+	db.c \
+	deck.c \
+	delta.c \
+	diff.c \
+	encode.c \
+	event.c \
+	ext_regexp.c \
+	fs.c \
+	forum.c \
+	glob.c \
+	io.c \
+	leaf.c \
+	list.c \
+	md5.c \
+	merge3.c \
+	popen.c \
+	pq.c \
+	repo.c \
+	schema.c \
+	search.c \
+	sha1.c \
+	sha3.c \
+	strftime.c \
+	tag.c \
+	ticket.c \
+	utf8.c \
+	vfile.c \
+	vpath.c \
+	wiki.c \
+	zip.c
+
+FSL.SRC := $(FSL.SRC.BASE)
+
+ifneq (,$(wildcard sqlite3.c))
+  FSL.SRC += sqlite3.c
+  HAVE_OWN_SQLITE := 1
+else
+  HAVE_OWN_SQLITE := 0
+endif
+
+FSL.OBJ := $(patsubst %.c,%.o,$(FSL.SRC))
+
+########################################################################
+# Transform schema SQL files into source form. We don't use fossil(1)'s
+# approach because it relies on unspecified length limits on C string
+# literals. Yeah, it works, but i'm funny about the C Standard.
+#include $(TOP_SRCDIR_REL)/tools.make
+DIR.TOOLS := $(TOP_SRCDIR_REL)/tools
+BIN.TEXT2C := $(DIR.TOOLS)/text2c
+$(BIN.TEXT2C): $(DIR.TOOLS)/text2c.c
+	cc $< -o $@
+CLEAN_FILES += $(BIN.TEXT2C)
+
+define SQL2C
+$(2):
+$(1).c: $(2) $$(BIN.TEXT2C) $$(MAIN_MAKEFILES)
+	@echo "Creating $$@ from $(2)..."; \
+	{ \
+		echo '/* Binary form of file $(2) */'; \
+		echo '/** @page page_$(1) Schema: $$(notdir $(2))'; \
+		echo '@code'; \
+		cat "$(2)"; \
+		echo ' @endcode'; \
+		echo ' @see $$(subst _cstr,,$(1))()'; \
+		echo '*/'; \
+		$$(BIN.TEXT2C) fsl_$(1) < $(2); \
+		echo '/* end of $(2) */'; \
+	} > $$@;
+FSL.SRC += $(1).c
+FSL.SRC.BASE += $(1).c
+FSL.OBJ += $(1).o
+DISTCLEAN_FILES += $(1).c
+sql: $(1).c
+endef
+
+SQL.DIR := $(TOP_SRCDIR_REL)/sql
+$(eval $(call SQL2C,schema_config_cstr,$(SQL.DIR)/config.sql))
+$(eval $(call SQL2C,schema_repo1_cstr,$(SQL.DIR)/repo-static.sql))
+$(eval $(call SQL2C,schema_repo2_cstr,$(SQL.DIR)/repo-transient.sql))
+$(eval $(call SQL2C,schema_ckout_cstr,$(SQL.DIR)/checkout.sql))
+$(eval $(call SQL2C,schema_ticket_cstr,$(SQL.DIR)/ticket.sql))
+$(eval $(call SQL2C,schema_ticket_reports_cstr,$(SQL.DIR)/ticket-reports.sql))
+$(eval $(call SQL2C,schema_forum_cstr,$(SQL.DIR)/forum.sql))
+# end SQL transformation bits
+########################################################################
+
+# These are the flags used by fossil's embedded sqlite3:
+sqlite3.o: CPPFLAGS+=-DNDEBUG=1 \
+                 -DSQLITE_DQS=0 \
+                 -DSQLITE_THREADSAFE=0 \
+                 -DSQLITE_DEFAULT_MEMSTATUS=0 \
+                 -DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1 \
+                 -DSQLITE_LIKE_DOESNT_MATCH_BLOBS \
+                 -DSQLITE_OMIT_DECLTYPE \
+                 -DSQLITE_OMIT_PROGRESS_CALLBACK \
+                 -DSQLITE_OMIT_SHARED_CACHE \
+                 -DSQLITE_OMIT_LOAD_EXTENSION \
+                 -DSQLITE_MAX_EXPR_DEPTH=0 \
+                 -DSQLITE_USE_ALLOCA \
+                 -DSQLITE_ENABLE_LOCKING_STYLE=0 \
+                 -DSQLITE_DEFAULT_FILE_FORMAT=4 \
+                 -DSQLITE_ENABLE_EXPLAIN_COMMENTS \
+                 -DSQLITE_ENABLE_FTS4 \
+                 -DSQLITE_ENABLE_DBSTAT_VTAB \
+                 -DSQLITE_ENABLE_JSON1 \
+                 -DSQLITE_ENABLE_FTS5 \
+                 -DSQLITE_ENABLE_STMTVTAB \
+                 -DSQLITE_HAVE_ZLIB \
+                 -DSQLITE_INTROSPECTION_PRAGMAS \
+                 -DSQLITE_ENABLE_DBPAGE_VTAB \
+                 -DSQLITE_TRUSTED_SCHEMA=0
+
+# FIXME: update libf sql tracing: -DSQLITE_OMIT_DEPRECATED
+
+sqlite3.o: CFLAGS+=-Wno-sign-compare
+ifneq (,$(filter clang,$(CC)))
+# Workaround for clang
+sqlite3.o: CFLAGS+=-Wno-unused-const-variable
+endif
+
+CLEAN_FILES += $(FSL.OBJ)
+ifeq (1,$(HAVE_OWN_SQLITE))
+# in-tree sqlite3
+# -lm: one of the sqlite build opts (FTS?) requires log(3).
+  EXTRA_LIBS += -lm
+else
+# system/external sqlite3
+  EXTRA_LIBS += -lpthread
+endif
+
+libfossil.DLL.OBJECTS := $(FSL.OBJ)
+libfossil.DLL.LDFLAGS := @SH_LDFLAGS@ $(EXTRA_LIBS)
+libfossil.LIB.OBJECTS := $(libfossil.DLL.OBJECTS)
+########################################################################
+# Shared lib
+ifeq (1,@LIBFOSSIL_SHARED@)
+$(eval $(call ShakeNMake.CALL.RULES.DLLS,libfossil))
+all: $(libfossil.DLL)
+$(libfossil.DLL): $(libfossil.DLL.OBJECTS)
+endif
+
+# Static lib
+ifeq (1,@LIBFOSSIL_STATIC@)
+$(eval $(call ShakeNMake.CALL.RULES.LIBS,libfossil))
+all: $(libfossil.LIB)
+$(libfossil.LIB): $(libfossil.LIB.OBJECTS)
+endif
+
+########################################################################
+# A quick-n-dirty amalgamation build...
+INCD := $(TOP_INCDIR)/fossil-scm
+AMAL_D := $(TOP_SRCDIR_REL)
+AMAL_C := $(AMAL_D)/libfossil.c
+AMAL_H := $(AMAL_D)/libfossil.h
+AMAL_CONF.H := $(AMAL_D)/libfossil-config.h
+CLEAN_FILES += $(AMAL_H) $(AMAL_C) $(AMAL_CONF.H)
+
+############################################################
+# AMAL_C.SRC = the list of source files (.c and private .h) to include
+# in $(AMAL_C).
+AMAL_C.SRC := \
+	fossil-ext_regexp.h \
+	$(FSL.SRC.BASE)
+
+ifeq (0,1)
+# the tcl bits currently break the amalgamation
+AMAL_C.SRC += \
+	$(COMPAT_DIR)/javavm/export/jni_md.h \
+	$(COMPAT_DIR)/javavm/export/jni.h \
+	$(COMPAT_DIR)/tcl-8.6/generic/tcl.h \
+	$(COMPAT_DIR)/tcl-8.6/generic/tclDecls.h \
+	$(COMPAT_DIR)/tcl-8.6/generic/tclPlatDecls.h
+endif
+
+############################################################
+# AMAL_H.SRC = the list of public header files to include
+# in $(AMAL_H).
+AMAL_H.SRC := \
+	$(INCD)/fossil-config.h \
+	$(INCD)/fossil.h \
+	$(INCD)/fossil-util.h \
+	$(INCD)/fossil-core.h \
+	$(INCD)/fossil-db.h \
+	$(INCD)/fossil-hash.h \
+	$(INCD)/fossil-repo.h \
+	$(INCD)/fossil-checkout.h \
+	$(INCD)/fossil-confdb.h \
+	$(INCD)/fossil-vpath.h \
+	$(INCD)/fossil-internal.h \
+	$(INCD)/fossil-auth.h \
+	$(INCD)/fossil-forum.h \
+	$(INCD)/fossil-pages.h \
+	$(INCD)/fossil-cli.h
+$(AMAL_H.SRC):
+$(AMAL_C.SRC):
+$(AMAL_H): $(MAKEFILE_LIST) $(AMAL_H.SRC) $(AMAL_CONF.H)
+$(AMAL_C): $(MAKEFILE_LIST) $(AMAL_H) $(AMAL_C.SRC)
+$(AMAL_CONF.H): $(MAIN_MAKEFILES)
+	@echo "Generating $@ ..."
+	cd $(TOP_SRCDIR_REL) && sh configure --amal
+
+$(AMAL_H): 
+	@echo "Creating $@..."
+	@{ \
+		echo '#if !defined(FSL_AMALGAMATION_BUILD)'; \
+		echo '#define FSL_AMALGAMATION_BUILD 1'; \
+		echo '#endif'; \
+		echo '#include "$(notdir $(AMAL_CONF.H))"'; \
+	} > $@
+	@{ \
+		for i in $(AMAL_H.SRC); do \
+			echo "/* start of file $$i */"; \
+			cat $$i; \
+			echo "/* end of file $$i */"; \
+		done; \
+	} | sed  \
+		 -e '/[ ]*#[ ]*include[ ]*.*fossil.*\.h[>"]/d' \
+		 -e '/[ ]*#[ ]*include[ ]*.*".*config\.h"/d' \
+		>> $@
+
+$(AMAL_C):
+	@echo "Creating $@..."
+	@echo '#include "$(notdir $(AMAL_H))"' > $@
+	@{ \
+		for i in $(AMAL_C.SRC); do \
+			echo "/* start of file $$i */"; \
+			cat $$i; \
+			echo "/* end of file $$i */"; \
+		done; \
+	} | sed \
+		 -e '/[ ]*#[ ]*include[ ]*.*fossil.*\.h[>"]/d' \
+		>> $@
+
+AMAL_CPP_FLAGS := -I$(TOP_INCDIR)
+AMAL_CPP_FLAGS += -I.# for local sqlite3.h
+amal: $(AMAL_C)
+	@echo "Amalgamation files:"; \
+	ls -la $(AMAL_C) $(AMAL_H) $(AMAL_CONF.H)
+	@if which gcc >/dev/null; then \
+		echo "Trying GCC C89..."; \
+		gcc -c -pedantic -Wstrict-aliasing -Wall -Werror -std=c89 -Wno-long-long $(AMAL_CPP_FLAGS) $(AMAL_C) || exit;\
+		echo "Trying GCC C99..."; \
+		gcc -c -pedantic -Wstrict-aliasing -Wall -Werror -std=c99 $(AMAL_CPP_FLAGS) $(AMAL_C) || exit; \
+	fi
+	@if which tcc >/dev/null; then \
+		echo "Trying tcc..."; \
+		tcc -c -pedantic -Wall -Werror $(AMAL_CPP_FLAGS) $(AMAL_C) || exit; \
+		echo "Man, that was FAST!"; \
+	 fi
+	@if which clang >/dev/null; then \
+		echo "Trying clang..."; \
+		clang -c -pedantic -Wall -Werror $(AMAL_CPP_FLAGS) $(AMAL_C) || exit; \
+	fi
+	@echo "Reminder: it will need these sqlite3 files to build:"; \
+	echo "sqlite3.h, sqlite3ext.h, and optionally a local copy of sqlite3.c"
+# /amalgamation
+########################################################################

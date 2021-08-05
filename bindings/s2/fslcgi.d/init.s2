@@ -1,0 +1,197 @@
+/**
+   Post-bootstrap initialization code for s2's fslcgi. Must live in the
+   root of "resource directory", but that (with sufficient hacking) may
+   live outside of the web-root.
+*/
+affirm 'undefined' !== typename $CGI /* expecting CGI module to be loaded under this name */;
+affirm Fossil.require;
+
+
+$CGI.config = {
+    resourceDir: Fossil.file.canonicalName(__FILEDIR,true),
+    cgiRoot: '<TODO:cgiRoot>'
+};
+scope {
+    const C = $CGI;
+    var uri = s2.getenv('SCRIPT_NAME');
+    // Set up cgiRoot (the "standard" way of getting the root dir
+    // for link-building purposes). This kludgery is not generic...
+    if(uri) { C.config.cgiRoot = uri + '/' }
+    else{
+        uri = s2.getenv('REQUEST_URI');
+        C.request.ENV || (C.request.REQUEST_URI = uri);
+        if(uri){
+            var head = uri.split('fslcgi',2).0;//, head = adj.0;
+            C.config.cgiRoot = head ||| '/empty';
+            //('/' === head) ? head : head + '/'; //.concat('fslcgi', '/');
+        }
+    }
+    
+    C.config.localServerMode =
+        (var serverName = s2.getenv('SERVER_NAME'))
+        && (0<serverName.indexOf(".local"));
+    ;;
+}
+
+/**
+   A convenience alias for s2.io.output (or functionally
+   equivalent).
+*/
+$CGI.out = s2.io.output;
+
+/**
+   Sends its RHS argument output to the (buffered) response body.
+   Returns this object (so it can be chained).
+*/
+$CGI.'operator<<' = proc(self,arg){
+    return s2.io.output(arg), this;
+};
+
+/**
+    Removes "potentially security-relevant" properties from the
+    exception ex. Returns ex.
+*/
+$CGI.scrubException = proc(ex){
+    if(this.config.scrubExceptions){
+        unset ex.script, ex.stackTrace, ex.line, ex.column // security-relevant
+    }
+    return ex;
+};
+
+$CGI.util = {
+    /**
+       Converts all key/value pairs from obj to a string of urlencoded
+       key value pairs, separated by '&'. If addQMark is true then the
+       result is prefixed by a '?', otherwise it is not.
+
+       If obj has no properties then an empty string is returned,
+       regardless of addQMark.
+
+       Property key order in the result string is unspecified.
+    */
+    objToUrlOpt: proc(obj, addQMark = false){
+        affirm obj && obj.eachProperty /* expecting an Object */;
+        buf.reset();
+        var counter = 0;
+        obj.eachProperty(each);
+        return buf.isEmpty()
+            ? ''
+            : (addQMark ? '?' : '')+buf.toString();
+    }.importSymbols({
+        buf: s2.Buffer.new(),
+        each: proc(k,v){
+            counter++ && buf.append('&');
+            buf.append($CGI.urlencode(''+k),'=',$CGI.urlencode(''+v));
+            /* Reminder to self: $CGI.urlencode() and friends require
+               that $CGI be their 'this' because they reuse an internal
+               buffer on each call to save on allocations.
+            */
+        }
+    }),
+
+    absoluteLink: proc(path,label=path, urlOpt){
+        affirm 'string' === typename path;
+        const hasQ = path.indexOf('?')>=0,
+          optStr = this.objToUrlOpt(urlOpt, !hasQ );
+        return fmt.applyFormat(
+            $CGI.config.cgiRoot,
+            $CGI.urlencode(path)+(optStr ? hasQ ? '&' + optStr : optStr : ''),
+            label);
+    }.importSymbols({
+        fmt: "<a href='%1$s%2$s'>%3$s</a>"
+    });
+};
+
+
+$CGI.resourcePath = proc(name){
+    return this.config.resourceDir + name;
+};
+
+$CGI.resolveResource = proc(name){
+    const path = this.config.resourceDir + name;
+    return Fossil.file.isFile(path) ? path : undefined;
+};
+
+// incomplete... not yet sure what i want.
+$CGI.request.pathInfoList = scope {
+    var ps, p = s2.getenv('PATH_INFO');
+    if(p && '/'!==p){
+        ps = p.split('/');
+        // Trim leading/trailing null entries caused
+        // by leading/trailing slashes:
+        ps.0 || ps.shift();
+        ps[ps.length()-1] || ps.pop();
+    }
+    ps;
+};
+
+if(0){ // only for testing
+    $CGI.setContentType('application/json');
+    print({request: $CGI.request,
+          config: $CGI.config}.toJSONString(2));
+}else if(1){
+    const c = $CGI;
+    c.setContentType('text/plain');
+    print("$CGI sanity checks...");
+    c << 'Fossil.time.cpuTime() says: '
+        << Fossil.time.cpuTime()
+        << '\n'
+    ;
+
+    const f = c.fossilInstance;
+    f.db || f.openCheckout();
+    c << 'Fossil context: ' << f << ' repo db: ' << f.db.repo.filename << '\n';
+    c << "pathInfoList = "<<c.request.pathInfoList<<'\n';
+    c << "resourcePath(foo/bar.baz)==>"
+        << c.resourcePath('foo/bar.baz')
+        << '\n';
+    c << "resolveResource('init.s2')==>"
+        << c.resolveResource('init.s2')
+        << '\n';
+    c << "resolveResource('x')==>"
+        << c.resolveResource('x')
+        << '\n';
+
+    if(1) {
+        c << '$CGI.config = ' << $CGI.config.toJSONString(2) << '\n';
+    }
+
+    c << "Most recent timeline event: "
+        << f.db.selectRow('SELECT * FROM event ORDER BY mtime DESC')
+        .toJSONString(2)
+        << '\n';
+
+    if(0){
+        // Workaround: c is a Native, and those are rejected
+        // by the C-level toJSON bits:
+        var obj = {};
+        c.eachProperty(proc(k,v){obj[k]=v});
+        c << '$CGI properties:\n' << obj.toJSONString(4) << '\n';
+    }
+    if(1){
+        c << 'objToUrlOpt: '
+            << c.util.objToUrlOpt({a:3,c:'a b'})
+            << '\n';
+        c << 'objToUrlOpt again (should be empty): '
+            << c.util.objToUrlOpt({},true)
+            << '\n';
+        c << 'absoluteLink: '
+            << c.util.absoluteLink('foo/bar/baz?x=y', 'link', {a:1,b:'hi !'})
+            << '\n';
+        c << 'absoluteLink again: '
+            << c.util.absoluteLink('foo/bar/', 'link', {a:1,b:'hi !'})
+            << '\n';
+        c << 'Fossil.artifactTypes = '<<Fossil.artifactTypes<<'\n';
+        
+    }
+
+    0 && Fossil.require(['tmpl-compiled!layout/default.tmpl.s2'],proc(t){
+        t.evalContents('default layout');
+    });
+
+    c << '\nThe end. Fossil.time.cpuTime() says: '
+        << Fossil.time.cpuTime()
+        << '\n';
+
+    //throw exception(-666,"testing discarding of buffered output");
+}

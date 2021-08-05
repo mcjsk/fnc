@@ -1,0 +1,204 @@
+affirm s2.json /* we need this as our basis */;
+affirm s2.json.stringify /* was added later, might not be in all (two?) trees yet (ha!) */;
+/**
+   This object basically acts as a (mostly) drop-in replacement for
+   s2.json, and it uses s2.json to implement most of its
+   functionality. It uses a custom, script-side stringify() which is
+   orders of magnitude less efficient (on several levels) than
+   s2.json.stringify() (which is implemented in C), but allows
+   overriding of to-JSON behaviour on a per-container or per-prototype
+   basis.
+*/
+return {
+    /** See s2.json.parse(). */
+    parse: s2.json.parse,
+    /** See s2.json.parseFile(). */
+    parseFile: s2.json.parseFile,
+    /**
+       Converts the value v into a JSON string (or throws while trying).
+
+       indention may be either a falsy value (for no intenation), a
+       string (which gets prepended N times for N levels of
+       indentation), or an integer: a positive value indents that many
+       spaces and a negative value indents that many tabs.
+
+       v need not be a root-level value (Object or Array), but may be
+       a string, number, or boolean.
+
+       Returns a string on success, throws on error.
+
+       Notes about special cases:
+
+       - If v or a prototype of v contains a function property named
+       toJSON() then v.toJSON() is used in place of v for
+       to-JSON-string conversion. The function must return some
+       JSON-able form of v. e.g. an implementation for a Hashtable
+       might return an Object in the form {keys:[...], values:[...]}.
+
+       - Object _keys_ which are _not_ of type (string, integer, double)
+       are elided from the output. Keys of numeric types are converted
+       to strings for JSON key purposes.
+
+       - Objects elide any keys which have value counterpart of
+       undefined. JSON does not know 'undefined'. We "could" translate
+       it to null here, but we instead opt to elide it.
+
+       - The undefined value: if passed to this function, the string
+       'null' is returned. undefined is also translated to 'null' in
+       the context of array empty entries.
+    */
+    stringify: proc stringify(v, indention = stringify.config.indention){
+        affirm ++stringify.level > 0;
+        const ex = catch{
+            typeinfo(isderefable v) && typeinfo(iscallable v.toJSON) && (v = v.toJSON());
+            const f = tmap # typename v;
+            affirm f /* Argument must be a known JSON-able type or have a toJSON() method. */;
+            if('string'===typename f){
+                affirm --stringify.level>=0;
+                return f;
+            }else if(!f.buffered){
+                /* "Simple" conversions which do not recurse */
+                const rc = f(v);
+                affirm --stringify.level>=0;
+                return rc;
+            }else if(stringify.level>stringify.config.maxOutputDepth){
+                throw exception('CWAL_RC_RANGE',
+                                "Output depth limit ("+stringify.config.maxOutputDepth+
+                                ") exceeded while generating JSON.");
+            }else{
+                affirm f.buffered /* f.buffered is set, so... */;
+                const jbuf = s2.Buffer.new() /* gets appended to by f() */;
+                f(v) /* appends all output to jbuf */;
+                affirm --stringify.level>=0;
+                affirm !jbuf.isEmpty();
+                return jbuf.takeString();
+            }
+        };
+        affirm --stringify.level>=0;
+        assert ex /* or we couldn't have gotten this far */;
+        throw ex;
+    }.withThis(proc(){
+        /**
+           Public configuration for stringify(). Change these
+           options to modify the defaults.
+        */
+        this.config = {
+            /* Default indention used by stringify(). */
+            indention: undefined,
+            /* Separator for entries in arrays and object lists. */
+            commaSeparator: ', ',
+            /* Separator for keys and value in objects. */
+            keyValSeparator: ': ',
+            /* Max object/array depth to allow before erroring
+               out. Remember that cycles will generally be detected
+               before this happens, so this doesn't necessarily
+               indicate that any cycles were encountered.
+            */
+            maxOutputDepth: 15
+        };
+        this.level = 0;
+        return this;
+    }).importSymbols({
+        // some crazy scoping and var accesses going on here...
+        /**
+           Indents the output, if appropriate, based on the current
+           call level (or the level specified by the 2nd
+           parameter). If addNL is true, a newline is appended before
+           the indentation. This is a no-op if stringify() is called
+           with a falsy indention parameter.
+         */
+        indent: proc callee(addNL=true, level = stringify.level){
+            indention || return;
+            callee.idbuf || (callee.idbuf = s2.Buffer.new(64));
+            if(callee.prevLevel !== level){
+                callee.prevLevel = level;
+                if('integer'===typename indention){
+                    const len = (indention<0) ? -indention : indention;
+                    affirm len >= 0;
+                    callee.idbuf.length( len * level )
+                        .fill((indention<0) ? 0x09 : 0x20);
+                }else if('string' === typename indention){
+                    callee.idbuf.reset();
+                    for(var i = 0; i < level; ++i){
+                        callee.idbuf << indention;
+                    }
+                }
+            }
+            addNL && (jbuf << '\n');
+            jbuf << callee.idbuf;
+        },
+        /**
+           A hashtable mapping typenames to either strings (for static
+           conversions) or a function taking a value parameter. Those
+           functions normally return a string, but if the function has
+           a 'buffered' property which is truthy then its return
+           result is ignored and instead a Buffer value named jbuf is
+           made available to them, and they are expected to append all
+           output there.
+         */
+        tmap: scope {
+            const proxy4Obj = proc(v){
+                v.mayIterate() || throw exception('CWAL_RC_CYCLES_DETECTED',"Cycles detected.");
+                jbuf << '{';
+                proxyEachProp.first = true;
+                //proxyEachProp('LEVEL', stringify.level);
+                const ex = catch v.eachProperty(proxyEachProp);
+                indention && indent(true,stringify.level-1);
+                jbuf << '}';
+                ex && throw ex;
+            }.importSymbols({
+                // Object.eachProperty() proxy.
+                proxyEachProp: proc callee(k,v){
+                    undefined === v && return;
+                    callee.first
+                        ? callee.first = false
+                        : jbuf << stringify.config.commaSeparator;
+                    indention && indent();
+                    const tk = typename k;
+                    if('string'===tk){
+                        jbuf << k.toJSONString();
+                    }else if('integer'===tk||'double'===tk){
+                        jbuf << '"' << k << '"';
+                    }else{
+                        return;
+                    }
+                    jbuf << stringify.config.keyValSeparator
+                        << stringify(v,indention);
+                }
+            });
+            const proxy4Array = proc(v){
+                v.mayIterate() || throw exception('CWAL_RC_CYCLES_DETECTED',"Cycles detected.");
+                jbuf << '[';
+                proxyEachIndex.first = true;
+                v.eachIndex(proxyEachIndex);
+                indention && indent(true,stringify.level-1);
+                jbuf << ']';
+            }.importSymbols({
+                proxyEachIndex: proc callee(v){
+                    callee.first
+                        ? callee.first = false
+                        : jbuf << stringify.config.commaSeparator;
+                    indention && indent();
+                    jbuf << stringify(v,indention);
+                }
+            });
+
+            proxy4Obj.buffered =
+                proxy4Array.buffered = true
+            /* tells stringify() to set up a buffer to send the
+               results to. */;
+            const nativeImpl = s2.json.stringify;
+            {#
+                array: proxy4Array,
+                bool: nativeImpl,
+                double: nativeImpl,
+                exception: proxy4Obj,
+                integer: nativeImpl,
+                null: 'null',
+                object: proxy4Obj,
+                string: nativeImpl,
+                undefined: 'null'
+            }; // scope result
+        }
+    })/*stringify()*/
+};

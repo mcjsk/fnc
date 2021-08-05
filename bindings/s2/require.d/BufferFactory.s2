@@ -1,0 +1,18 @@
+/**
+   A require.s2 module which returns an object containing "factory
+   methods" for creating Buffers.
+*/
+return {
+    /**
+       Usage:
+
+       var buffer = thisObj.new([reservedMemorySize=0]);
+    */
+    new: s2.Buffer.new,
+    /**
+       Usage:
+
+       var buffer = thisObj.readFile(filename);
+    */
+    readFile: s2.Buffer.readFile
+}

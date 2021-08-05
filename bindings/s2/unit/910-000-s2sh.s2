@@ -1,0 +1,11 @@
+
+if(s2.sealObject) {
+    const o = {a:1};
+    assert 1 === o.a;
+    assert 2 === (o.b=2);
+    assert o === s2.sealObject(o);
+    assert 2 === o.b;
+    assert catch {o.b=3}.codeString() === 'CWAL_RC_DISALLOW_PROP_SET';
+    assert catch s2.sealObject().codeString() === 'CWAL_RC_MISUSE';
+    assert catch s2.sealObject(0).codeString() === 'CWAL_RC_TYPE';
+};

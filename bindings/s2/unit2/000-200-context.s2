@@ -1,0 +1,125 @@
+assert 'Fossil' === typename Fossil;
+assert 'Db' === typename Fossil.Db;
+assert 'Stmt' === typename Fossil.Db.Stmt;
+assert 'Context' === typename Fossil.Context;
+
+scope {
+    var f = new Fossil.Context({traceSql:false});
+    //print('f =',f);
+    assert 'Context' === typename f;
+    assert f inherits Fossil.Context;
+    const DB = f.db;
+    assert DB inherits Fossil.Db;
+    assert DB.name === 'main' /* this is our "main" db */;
+    assert !DB.checkout;
+    assert !DB.repo;
+    assert !DB.config;
+
+    assert f === f.openCheckout();
+    assert DB inherits Fossil.Db;
+    assert DB.repo inherits Fossil.Db;
+    assert DB.checkout inherits Fossil.Db;
+
+    assert DB.checkout.name = 'ckout';
+    assert DB.repo.name === 'repo';
+    assert DB.filename === ':memory:'
+        || DB.filename === '' /* similar mechanism with different
+                                 semantics vis-a-vis temp storage */;
+    assert DB.checkout.filename;
+    assert DB.filename !== DB.checkout.filename;
+    assert DB.repo.filename;
+    assert DB.repo.filename !== DB.checkout.filename;
+
+    assert !DB.config;
+    f.openConfig();
+    assert DB.config inherits Fossil.Db;
+    assert DB.config.name === 'cfg';
+    assert DB.config.filename;
+    if(0){
+        print('DB.name =',DB.name);
+        print('DB.filename =',DB.filename);
+        print('DB.repo.name =',DB.repo.name);
+        print('DB.repo.filename =',DB.repo.filename);
+        print('DB.checkout.name =',DB.checkout.name);
+        print('DB.checkout.filename =',DB.checkout.filename);
+        print('DB.config.name =',DB.config.name);
+        print('DB.config.filename =',DB.config.filename);
+    }
+    var counter = 0;
+    assert DB === DB.each({
+        sql:<<<_SQL
+            SELECT mtime FROM event LIMIT 2
+        _SQL,
+        callback:'++counter'
+    });
+    assert 2 === counter;
+    unset counter;
+
+    /* These UUIDs are only valid for the libfossil tree... */
+    assert '99237c3636730f20ed07b227c5092c087aea8b0c' === f.symToUuid('rid:1');
+    assert 1 === f.symToRid('99237c3636730f20');
+
+    const trunkUuid = f.symToUuid('trunk');
+    assert (var b = f.loadBlob('trunk')) inherits s2.Buffer;
+    assert !b.isCompressed();
+    assert b.length() > 0;
+    assert b.sha1() === trunkUuid;
+
+    b.reset() << "fossil";
+    assert b.sha3() === '226558c59bda6533fb0869abd36dec2e8fee1003247b98390b5cb639285c0b79';
+    //const trunkZCard = b.toString(b.length()-33, 32);
+    //print(b,trunkZCard);
+
+    b = f.artifactDiff('prev', trunkUuid, {
+        // all available options (not all combinations make sense and some trump others):
+        html: false,
+        text: true,
+        inline: false,
+        sbsWidth: 60,
+        contextLines: 5,
+        invert: false
+    });
+    assert b inherits s2.Buffer;
+    assert b.length() > 10;
+    assert !b.isCompressed();
+    unset b;
+
+    assert 'object' === typename (var d =  f.loadManifest('trunk'));
+    assert d.uuid === trunkUuid;
+    assert d.D > 1.0;
+    assert 'array' === typename d.F;
+    assert 40 === d.P.0.length();
+    //assert d.Z === trunkZCard; // doh: fsl_deck does not expose the Z-card b/c it's only internally generated/used.
+    //print(d);
+    unset d;
+    
+//    if(typeinfo(isfunction Fossil.Db.selectValue /* installed by init script, but the
+//                                                    valgrind tests don't load that. */)){
+//        assert 0 < f.db.config.selectValue("select count(*) from global_config");
+//    }
+
+    scope {
+        var loginCookie = f.loginCookieName();
+        assert 'string' === typename loginCookie;
+        assert 0 === loginCookie.indexOf('fossil-');
+        assert 23 === loginCookie.length();
+    }
+
+    if(1){
+        if(0){
+            /* Has the same effect as else block below... */
+            f.finalize();
+            assert !f.db;
+        }else{
+            assert f === f.close();
+            assert !f.db;
+            assert undefined === f.finalize() /* explicitly frees all C-level resources (or leave it to GC) */;
+        }
+        assert 0 === catch{f.openCheckout()}.message.indexOf("'this' is not") /* native was disconnected in finalize() */;
+        //f.openCheckout();
+        assert 0 === catch{DB.prepare('select 1')}.message.indexOf("'this' is not")
+        /* The native DB handle held by DB was (with valgrind's help!) disconnected
+           from it when f.close() or f.finalize() were called.
+        */;
+    }
+}

@@ -1,0 +1,12 @@
+/**
+   Works like the tmpl plugin, but passes the file's contents
+   throughs s2.tmpl() before returning it.
+*/
+return {
+    cacheIt: false,
+    // prefix: uses the defaults
+    suffix: ['.tmpl'],
+    load: proc(fn){
+        return s2.tmpl(s2.Buffer.readFile(fn))
+    }
+};

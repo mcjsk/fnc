@@ -1,0 +1,39 @@
+/**
+   A set of wiki-related utilities.
+*/
+return requireS2(
+    ['fsl/context', 'fsl/db/repo'],
+    proc(fsl, repo){
+        return {
+            getPageNames: proc( caseSensitive ){
+                const st = repo.prepare(<<<_SQL
+                                        select distinct(substr(tagname,6)) name from tag t,
+                                        tagxref x where x.tagid=t.tagid and t.tagname
+                                        like 'wiki-%' order by name _SQL
+                                        + (caseSensitive
+                                           ? '' : ' collate nocase'));
+                var rc = [];
+                const ex = catch {
+                    while(st.step()) rc[] = st.get(0);
+                };
+                st.finalize();
+                ex ? throw ex : return rc;
+            }.importSymbols(nameof repo),
+            
+            getLatestRid: proc(pageName){
+                affirm pageName && 'string' === typename pageName;
+                return repo.selectValue(<<<_SQL
+                                        SELECT x.rid FROM tag t, tagxref x 
+                                        WHERE x.tagid=t.tagid
+                                        AND t.tagname=?
+                                        ORDER BY mtime DESC LIMIT 1
+                                        _SQL,
+                                        'wiki-'+pageName
+                                       );
+            }.importSymbols(nameof repo),
+            
+            loadPageArtifact: proc(pageName){
+                return fsl.loadManifest( this.getLatestRid(pageName) );
+            }.importSymbols(nameof fsl)
+        }
+    });

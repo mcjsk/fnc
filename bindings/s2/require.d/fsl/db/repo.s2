@@ -1,0 +1,18 @@
+/* require() plugin which returns a handle to the repo Db object for
+   Fossil.require's shared Fossil.Context.  If no repo has been opened
+   when this is called, it opens the repo specified via the
+   --repo-db|-R=FILENAME CLI script flag.
+*/
+return requireS2(['fsl/context','cliargs'], proc(F,args){
+    affirm const d = F.db;
+    if(!d.repo){
+        const f = args.takeFlag('repo-db',args.takeFlag('R'))
+            ||| throw "No repo db specified. "+
+            "Pass the --repo-db|-R=filename "+
+            "SCRIPT flag (after --) to the interpreter or open a checkout.";
+        ('string' === typename f) || throw "Invalid argument type for the --repo-db|-R=DBFILE flag";
+        F.openRepo(f);
+    }
+    affirm d.repo;
+    return d.repo;
+});

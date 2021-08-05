@@ -1,0 +1,64 @@
+requireS2(['time','nocache!Ticker'], proc(time, Ticker){
+    affirm 'Ticker' === typeinfo(name Ticker);
+    const t = new Ticker();
+    affirm t inherits Ticker;
+    affirm 'Ticker' === typeinfo(name t);
+    const callback = proc(){print('fired:',this.name)};
+    var ev;
+    affirm typeinfo(isfunction callback);
+    // Repeating event, every 3rd tick:
+    ev = t.addEvent(3, true, callback);
+
+    ev.name = "threeer";
+    ev.priority = 3;
+    /*
+      Event priority is used to break ties for events firing at
+      the same virtual time. It sorts by value, so a lower value
+      has a higher priority. Events have a default priority of 0.
+    */
+
+    // Add a repeating event which fires every tick:
+    ev = t.addEvent(1, true, callback);
+    ev.name = "oner";
+    ev.priority = -1;
+
+
+    // Add a one-time event, fired once, four ticks from now:
+    affirm typeinfo(isfunction callback);
+    ev = t.addEvent(4, callback);
+    ev.name = "fourer";
+    ev.priority = 4;
+
+    // Add a repeating event, firing every 2nd tick:
+    ev = t.addEvent({interval: 2, what: callback, name: "twoer"});
+
+    print(__FLC,typeinfo(name t),':',t);
+
+    // Now advance our virtual clock a few times...
+    var i = 1, max = 10, sleepTimeMs = 100;
+
+    print("Ticking",max,"times, sleeping",sleepTimeMs," millis between ticks...");
+    //const timeFmt = {%Y-%m-%d %H:%M:%S}
+    //const startTime = strftime(timeFmt, time())
+    for( ;i<=max; i=i+1){
+        print("TICK #"+i);
+        time.mssleep(sleepTimeMs);
+        t.tick();
+    }
+    //const endTime = strftime(timeFmt, time());
+    print('After loop: Tick =',t.ts);
+    //print('Start time:',startTime,'\nEnd time  :',endTime);
+    if(0) {
+        print('"Manually" ticking...');
+        t.tick(6); // note how priority sorting kinda breaks down here
+        // potential workaround: run ticks>1 in a loop of smaller ticks,
+        // but how small? Maybe set tickerInstance.timeUnit=integer to
+        // set the smallest time unit, and loop in increments of that unit?
+    }
+    //t.tick(5);
+    //print(__FLC,"Done:",t);
+
+    //dumpInternedStrings();
+    t.reset();
+    affirm t.tlist.isEmpty();
+});

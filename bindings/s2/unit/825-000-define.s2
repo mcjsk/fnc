@@ -1,0 +1,28 @@
+assert typeinfo(isfunction define);
+const o = {a:1};
+assert o === define('__OO',o);
+assert o === __OO;
+assert 'CWAL_RC_ALREADY_EXISTS' ===
+    catch define('__OO',1).codeString();
+assert 'CWAL_RC_ACCESS' ===
+    catch define('if',1).codeString();
+assert 'CWAL_SCR_SYNTAX' ===
+    catch define('non-identifier',1).codeString();
+assert 'CWAL_RC_ALREADY_EXISTS' ===
+    catch {var __OO = 1}.codeString();
+assert 1 === (1 ||| defined(wrong)) /*behaves in skip-mode*/;
+assert 'CWAL_RC_UNSUPPORTED' ===
+    catch define('x',undefined).codeString();
+assert 'CWAL_RC_RANGE' ===catch define('','').codeString();
+assert 'CWAL_RC_RANGE' ===
+    catch define(
+        'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+        1
+    ).codeString() /* name too long */;
+define('__z',1);
+define('__zz',2);
+define('__zzz',3);
+assert o === __OO;
+assert 3 === __zzz;
+assert 2 === __zz;
+assert 1 === __z;

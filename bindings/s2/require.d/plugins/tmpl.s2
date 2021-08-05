@@ -1,0 +1,10 @@
+/** Loads file content as a buffer, intended
+    for use with .tmpl files (for s2.tmpl()). */
+return {
+    cacheIt: false,
+    // prefix: uses the defaults
+    suffix: ['.tmpl'],
+    load: function(name){
+        return s2.Buffer.readFile(name);
+    }
+};

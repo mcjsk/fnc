@@ -1,0 +1,315 @@
+/**
+   A require.s2 module implementing an abstract timer class. See the
+   inlined docs (down below) for details.
+
+   Example usage:
+
+
+   const Ticker = require(['Ticker']).0;
+   const t = new Ticker();
+   t.addEvent(1, true, proc(){print("repeating event")});
+   t.addEvent(3, proc(){print("one-time event")});
+
+   t.tick();
+   t.tick();
+   t.tick();
+   // or: t.tick(3)
+
+   Will output the following, though the order of events at firing at
+   the same logical time (the last two lines here) is not defined and
+   may change during the lifetime of repeating events or differ
+   depending on whether the clock is incremented one tick at a time or
+   more than one:
+
+   repeating event
+   repeating event
+   one-time event
+   repeating event
+*/
+/**
+   Ticker is a utility class implementing an abstract
+   timer. It doesn't know anything about time - it keeps
+   track of time in abstract ticks. Events can be added
+   to it which are fired after a certain number of ticks,
+   optionally repeating every N ticks.
+    
+   To create a new instance, call this function. Its return
+   value inherits this function.
+
+   It's functionally similar to JavaScript's setTimeout()
+   and setInterval() except for:
+
+   a) It is strictly synchronous.
+
+   b) It has no clock. The client has to tell it that X amount of
+   (abstract) time has passed.
+
+   c) It currently has no way to properly remove events (and doing so
+   from an event handler may mess up its iteration for the time being).
+*/
+
+
+return {
+    __typename: 'Ticker',
+    /** Internal list of events */
+    //tlist: [],
+
+    /** Current timestamp (tick counter) */
+    //ts: 0,
+
+    /** Internal helper to sort event entries by their timestamp.
+        Empty/null entries are sorted as less than any others
+        because this make them easy to remove.
+    */
+    sortEvents:function f(){
+        f.sorter || (f.sorter=function(l,r){
+            // sort nulls to the LEFT (easier (but more memmov'ing) to lop them off that way)
+            l || return r ? -1 : 0;
+            r || return 1;
+            return compare(l.when, r.when) |||
+                compare(l.priority, r.priority) |||
+                compare(l.ts,r.ts) |||
+                compare(l.id,r.id);
+        });
+        this.tlist.sort(f.sorter);
+    }.importSymbols({compare: function(l,r){
+        return (l<r) ? -1 : ((l>r) ? 1 : 0);
+	}}),
+
+    /**
+       Returns an incremental integer value on each call.
+    */
+    nextEventId: function(){
+        this.idCounter || (this.idCounter = 0);
+        return ++this.idCounter;
+    },
+    
+    /**
+       Adds a timer event to (potentially) be triggered
+       via advancement of the timer (see tick()).
+
+       'when' is the relative tick number (in the future) in which
+       to fire the event. Must be a positive value.
+
+       'repeats' is a boolean. Repeating events trigger every 'when'
+       ticks.
+
+       'what' is a Function which gets called when the event timer
+       is triggered. When called, what's 'this' will be the
+       event Object containing 'what'.
+
+       If called with two arguments then it is treated as if
+       (when, false, what) are passed in.
+
+       If called with one argument then it is equivalent to calling
+       addEvent2().
+    
+       Returns an Object describing the event. Clients may add
+       their own properties to it and use those from the
+       what() handler (accessible via this.PROPERTY).
+
+       Callers can control the ordering of events fired at
+       the same time by setting a priority numeric property
+       on the returned event object. Priority sorts using
+       normal numeric comparison, so lower values sort first.
+       The default priority is 0 and negative values are legal.
+
+       This class supports the following event object properties
+       (and ignores all others):
+
+       id: has no meaning but is used as a fallback option when sorting.
+       Clients may set this to what they wish, and a default value
+       (incremental integers) is set.
+
+       ts: the current "timestamp", in ticks, of this ticker. It is
+       incremented by calling tick().
+
+       when: the tick time at which the event will next fire.
+
+       what: the function to call when the event fires.
+
+       interval: an integer specifying that the event should repeat
+       every this-many ticks. If not set, or set to a falsy value,
+       the event is a one-time event and will be removed after firing
+       by the tick() process.
+
+       priority: an integer value which determines run order for
+       events firing at the same tick (lower values sort first). For
+       "overlapping" ticks (with a time span of more than one tick)
+       this order might be somewhat intuitive: all "overlap" runs of
+       a given event handler are processed before the next
+       event. i.e. the priority order is maintained, but each event
+       may be run multiple times in succession before another event
+       with a higher (or the same) priority value.
+
+       client: this property name is reserved solely for use by
+       client code. This API promises never to use that property
+       key in event objects.
+    */
+    addEvent:function(when, repeats, what ){
+        const argc = argv.length();
+        (1===argc) && return this.addEvent2(when);
+        if(2===argc && typeinfo(isfunction repeats)){
+            what = repeats;
+            repeats = false;
+        }
+        affirm when>0;
+        affirm typeinfo(isfunction what);
+        this.idCounter || (this.idCounter = 0);
+        const ev = {
+            id: this.nextEventId(),
+            ts: this.ts,
+            when: this.ts + when,
+            what: what,
+            priority: 0
+        };
+        repeats && (ev.interval = when);
+        this.tlist.push(ev);
+        return ev;
+    },
+
+    /**
+       An alternate form of addEvent() which takes an object.
+
+       Returns the object passed to it, after enriching it
+       with event state and adding it to the list.
+
+       If the object has a an 'interval' property but no 'when'
+       property then its 'when' is set to the interval value.
+       Likewise, if 'when' is set and 'repeats' is set to a truthy
+       value, 'interval' gets set to 'when'.
+
+       Example:
+
+       ticker.addEvent({interval: 3, what:myFunc});
+
+       will set up a repeating event, firing first in 3 ticks,
+       and then ever 3 ticks after that.
+    */
+    addEvent2:function(obj){
+        affirm typeinfo(iscontainer obj);
+        affirm typeinfo(isfunction obj.what);
+        if(obj.repeats && !obj.interval){
+            obj.interval = obj.when;
+        }
+        unset obj.repeats;
+        if(obj.interval && !obj.when){
+            obj.when = obj.interval;
+        }
+        affirm obj.when > 0;
+        obj.ts = this.ts;
+        obj.priority || (obj.priority = 0);
+        obj.id || (obj.id = this.nextEventId());
+        this.tlist[] = obj;
+        return obj;
+    },
+
+    /**
+       Removes all event handlers and resets the tick counter to 0.
+    */
+    reset: function(){
+        this.ts = 0;
+        this.tlist.clear();
+        return this;
+    },
+
+    /**
+       Increments the tick count by incr (default=1) and triggers any
+       events whose time comes. If incr is greater than one and a
+       repeating event would normally have been triggered multiple
+       times within that span, this function calls it the number of
+       times it would have been called had tick() been called in
+       increments of 1. The order of event callbacks is unspecified
+       by default - they continually get re-sorted based on their
+       trigger time. Clients can control the order of like-timed
+       events by setting a priority level on an event - see
+       addEvent() for details.
+
+       Events added to this object by an event handler will NOT
+       be called in this invocation of tick() - they are queued up
+       and added to the event list after tick() has finished processing
+       any pending handlers.
+
+       Returns this object.
+    */
+    tick: function(incr=1){
+        affirm typeinfo(isinteger incr);
+        affirm incr >= 0; // a tick value of 0 might be interesting for something
+        const li = this.tlist;
+        var n = li.length();
+        affirm typeinfo(isarray li);
+        this.ts += incr;
+        n || return this;
+
+        /* Remove any expired-and-fired events here (as opposed to afterwards)
+           because (it turns out) this simplifies things. */
+        this.sortEvents(); // moves nulls to the left
+        while(n && !li.0){
+            /* Remove any expired events */
+            li.shift();
+            --n;
+        }
+        n || return this;
+
+        // Move this.tlist so that adding events while looping does not affect us.        
+        const listSentry = this.tlist;
+        this.tlist = [];
+
+        /*
+          Loop over events until we find one with a 'when'
+          set in the future. All current events will be to the
+          left of that one.
+        */
+        const tm = this.ts;
+        for(var i = 0, e, shiftCount = 0, repeater = 0;
+            i<n; ++i){
+
+            e = repeater ||| li[i];
+            repeater = 0;
+            if(e.when>tm){ break } /* first in-the-future event. */
+            else {
+                affirm e.when > e.ts;
+                if(var err=catch{e.what()}){
+                    print(__FLC,"WARNING: tick handler threw. Removing it.",e,err);
+                    unset e.interval;
+                }
+                if(e.interval){ /* Set this one up to run again */
+                    e.ts = e.ts + e.interval;
+                    e.when = e.ts + e.interval;
+                    if(e.when <= tm){
+                        /* timespan skipped one or more intervals. Run them now. */
+                        //print(__FLC,"firing again for overlap:",e);
+                        --i /* fudge the loop counter to repeat this entry.
+                               May break this.tlist is modified by
+                               callback. */;
+                        repeater = e;
+                        continue;
+                    }
+                }else{ /* remove the event */
+                    li[i] = undefined;
+                    ++shiftCount;
+                }
+            }
+        }
+        /* Move this.tlist back... */
+        if(this.tlist.isEmpty()){ /* no changes made during iteration */
+            this.tlist = listSentry;
+        }else{
+            /* Events added while looping. Integrate them now.
+               We swap tlist here so that we can keep the original
+               array (as a minor potential allocation optimization). */
+            this.tlist.eachIndex(integrateTlist);
+            this.tlist = listSentry;
+        }
+        return this;
+    }/*tick()*/.importSymbols({
+        integrateTlist: proc(i,v){ listSentry.push(v) }
+    }),
+    /**
+       Constructor function for new instances.
+    */
+    __new: proc(){
+        this.tlist = [];
+        this.ts = 0;
+    }
+};

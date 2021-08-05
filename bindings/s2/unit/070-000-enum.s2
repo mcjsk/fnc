@@ -1,0 +1,318 @@
+
+
+const countEach = proc callee(k,v){
+    if(1===++callee.count){
+        assert 'unique' === typeinfo(name v);
+        assert 'string' === typeinfo(name k);
+        assert this inherits enumProto;
+    }
+};
+
+const enumProto = (enum {a}).prototype;
+
+scope {
+    assert 'enum' === typeinfo(name enum{a,b,c});
+    assert 'CWAL_SCR_SYNTAX' === catch{enum {a,b,c, /* extra trailing comma */}}.codeString();
+    assert 'CWAL_SCR_SYNTAX' === catch{enum {a,,c /* extra comma */}}.codeString();
+    assert 'CWAL_SCR_SYNTAX' === catch{enum {a:,,c /* missing value after ':' */}}.codeString()
+}
+
+scope {
+    const E = enum MyEnum {
+        // This small enum will use an Object for storage.
+        A, B, C
+    };
+
+    assert 'MyEnum' === typeinfo(name E);
+    assert E inherits enumProto;
+    assert 3 === E.#;
+    assert E.A;
+    assert undefined === E.A.prototype
+        /* prototype pseudo-property is allowed but (currently) evals
+	   to undefined */;
+    assert E.hasEnumEntry(E.A);
+    assert E.hasEnumEntry('A');
+    assert !E.hasEnumEntry('a');
+    assert 'C' === E[E.('C')];
+    assert catch {E.x}.message.indexOf('Unknown')>=0;
+    assert catch {E.A = 1}.message.indexOf('disallowed')>=0;
+    var ar = E.getEnumKeys();
+    assert 'array' === typeinfo(name ar);
+    assert 3 === ar.length();
+    assert ar.indexOf('C') >= 0;
+    assert ar.indexOf('D') < 0;
+
+    E.eachEnumEntry(countEach);
+    assert 3 === countEach.count;
+}
+
+scope {
+    const Big = enum {
+        ☺,b,c,d,e,
+        f,g,h,i,j,
+        k,l,m,n,o,
+        p,q,r,s,t,
+        u,v,
+        こんにちは
+    };
+    const bigLen = Big.#;
+    assert 23 === bigLen;
+    assert 'enum' === typeinfo(name Big);
+    assert Big inherits enumProto;
+    assert 'c' === Big[Big.c];
+    assert '☺' === Big[Big.☺];
+    assert 'こんにちは' === Big[Big.こんにちは];
+    assert Big.こんにちは === Big.'こんにちは';
+    assert Big[<<<X こんX + 'にちは'] === Big->'こんにちは';
+    assert catch {Big.z}.message.indexOf('Unknown')>=0;
+    assert catch {Big.b = 1}.message.indexOf('disallowed')>=0;
+
+    var ar = Big.getEnumKeys();
+    assert 'array' === typeinfo(name ar);
+    assert bigLen === ar.length();
+    assert ar.indexOf('☺') >= 0;
+    assert ar.indexOf('B') < 0;
+
+    countEach.count = 0;
+    Big.eachEnumEntry(countEach);
+    assert bigLen === countEach.count;
+}
+
+scope {
+    var x = enum {a,b,c,d,e,f,g,h,i,j,k};
+    assert 'unique' === typeinfo(name x.a);
+    /**
+       20191210: we may disallow enum prototype reassignment in the
+       future, so don't rely on this feature. It's not a question of
+       whether it makes sense to allow it, but whether or not it's a
+       tolerable inconsistency vis-a-vis the disallowing of setting
+       non-prototype properties. For relevant commentary, search for
+       comments in s2.c near references to
+       CWAL_CONTAINER_DISALLOW_PROP_SET. "The problem" is that if we
+       allow it here, we always have to allow it on other "sealed"
+       objects, such as the one which the s2out keyword resolves to.
+    */
+    x.prototype = {
+        prototype: x.prototype,
+        z: 3
+    };
+    assert 'enum' === typeinfo(name x);
+    assert x.a;
+    assert 3===x.z;
+    assert 'CWAL_RC_DISALLOW_PROP_SET'
+        === catch{x.z = 1}.codeString();
+    // But...
+    x.prototype.z = 4;
+    assert 4===x.z /* modified in (mutable) prototype */;
+    var ar = x.getEnumKeys();
+    assert 'array' === typename ar;
+    assert x.# === ar.length();
+    assert 'CWAL_RC_NOT_FOUND'
+      === catch{x['x']}.codeString();
+
+}
+
+scope {
+   
+    var x = enum {'a',b,c,d,e,f,g,h,i,j,k};
+    assert 'unique' === typename x.a;
+    assert 'CWAL_RC_DISALLOW_PROP_SET' === (catch x.z = 1).codeString();
+    assert catch {x.z}.message.indexOf('Unknown')>=0;
+    x.prototype = {
+        prototype: x.prototype,
+        z: 3
+    };
+    assert undefined === catch {x.z};
+    assert 'enum' === typename x;
+    assert x.a;
+    assert 3===x.z;
+    ++x.prototype.z;
+    assert 4 === x.prototype.z;
+
+    assert 'a' === x.a.value;
+    assert 'a' === x::a;
+
+    var e = enum { E, A: 'Aa', "B": 'abc', C: 13, OBJ: {x: 1, y:0}, D};
+    assert 'enum' === typeinfo(name e);
+    assert 'Aa' === e.A.value;
+    assert 'abc' === e.B.value;
+    assert 13 === e.C.value;
+    assert 0 === e.OBJ.value.y;
+    assert 1 === e.OBJ['value'].x;
+    assert 1 === e.OBJ.('va'+'lue').x;
+    assert 'CWAL_RC_TYPE' === catch (e.OBJ.invalid).codeString();
+    assert e[e.A] === 'A';
+    assert 'D' === e.D.value;
+    assert 2 === e.A.value.length();
+}
+
+scope {
+    const e = enum {
+        a: {x:1, y:undefined},
+        b: proc(){return 1},
+        c,
+        d
+    };
+    assert 4 === e.#;
+    assert 1 === e.a.value.x;
+    assert 1 === e::a.x;
+    assert 1 === e::'a'.x;
+    assert 1 === e.b.value();
+    assert 1 === e::b();
+    assert undefined === e.a.value.y++;
+    assert e.a.value.x === e.a.value.y;
+    assert 2 === ++e::a.y;
+    assert 2 === e::a.y;
+    assert 2 === e::(scope{while(true) break 'a'}).y
+        /* reminder: parens needed b/c dot/dotdot treat all identifiers
+           on the RHS equally, and does not expand keywords as keywords. */;
+    assert e.c;
+    assert 'c' === e::c;
+    assert 'CWAL_RC_DISALLOW_PROP_SET' === (catch e.a = 1).codeString();
+    assert 'CWAL_RC_NOT_FOUND' === catch{e.x}.codeString();
+    assert 'CWAL_RC_NOT_FOUND' === catch {e::x}.codeString();
+}
+
+scope {
+    scope {
+        var e = enum {a:{x:1},b:{x:2}};
+        e.a.value.b = e.b;
+        e.b.value.a = e.a;
+    }
+    assert 1 /* must not crash during prior scope's cleanup (former
+                cwal bug in cleanup handling of Unique-type values).*/;
+    /* Must also properly upscope everything... */
+    assert 200 === scope {
+        var e = enum {a:{x:100},b:{x:200}};
+        e::a.b = e.b;
+        e::b.a = e.a; 
+        assert e.a.value.b === e::a.b;
+        assert e::a.b === e.b;
+        e.a.value.b/*===e.b*/
+    }.value.a/*===e.a*/.value.b.value.x;
+    assert scope {
+        enum {a:{x:100}}::a
+    }.x === 100;
+    assert enum {a:{x:-100}}::a.x === -100;
+}
+
+scope {
+    const o2e = proc(obj, name) {
+        affirm typeinfo(iscontainer obj);
+        var b = new s2.Buffer(100).append("enum ", name ||| '', '{'),
+            first = true;
+        foreach(obj=>k){
+            first ? first = false : b.append(", ");
+            b.append(k , ": obj.",k);
+        }
+        return b.append("}").evalContents(__FLC);
+    };
+    var obj = {a:1, b:{x:2}};
+    var e = o2e(obj, 'blah');
+    assert 'blah' === typeinfo(name e);
+    assert 2 === e.#;
+    //print(__FLC, e);
+    foreach(obj=>k, v) {
+        assert e::(k) === v;
+        assert e->(k).value === v;
+        assert e.(k).value === v;
+        assert v === ('e.'+k+'.value').evalContents(__FLC);
+        assert v === ('e::'+k).evalContents(__FLC);
+    }
+    
+    assert enum{a:enum{x:30}}::a::x + enum{b:30}::b === 60 /* lifetime(s) check */;
+}
+
+scope {
+    const e = enum {
+      f1: proc(){assert 'enum' === typeinfo(name E)},
+      f2: proc(){assert 'unique' === typeinfo(name E.f1)}
+    };
+    const imports = {E:e};
+    foreach(e=>k,v) v.value.importSymbols(imports);
+    e::f1();
+    e::f2();
+    e::f1.z = e.f1
+        /* will propagate e.f1 out of the scope. Formerly this crashed
+           during scope cleanup due to a mis-assertion in the Unique-type's
+           finalizer. Let's see what happens to it... */;
+}
+
+scope {
+    /* 20191210: it's now possible (though probably not wise) to set
+       the prototype property in an enum's body. Before this, that
+       handling was not well-defined. */
+    const x = {__typename: "X"};
+    assert catch {enum {prototype:x}}.message.indexOf("at least one") > 0;
+    var e = enum {prototype:x, a};
+    assert 'X' === typeinfo(name e);
+    assert e inherits x;
+    assert typeinfo(isenum e);
+    e = enum eee {prototype:x, b, c};
+    assert 'eee' === typeinfo(name e);
+    assert e inherits x;
+    assert typeinfo(isenum e);
+
+    e = enum hhh {prototype:x, b, c, d, e, f, g, h, i, j, k};
+    assert 'hhh' === typeinfo(name e);
+    assert e inherits x;
+    assert e.prototype === x;
+    assert typeinfo(isenum e);
+
+    e = enum { prototype: null /* remove prototype */, a };
+    assert catch {e.prototype}.message.indexOf('Unknown')===0;
+    /**
+       Interestingly, this formulation doesn't work:
+
+       assert catch e.prototype.message.indexOf('Unknown')===0;
+
+       Unexpected consecutive non-operators:
+         #3006 (KeywordCatch) ==> #1011 (Identifier)
+
+       At the ".message" part. Because... ???
+
+       Hmmm.
+    */
+
+    ;;; /* <=== for vacuum testing */
+}
+
+scope {
+    /* As of 2020-02-21, enums are always hashes, but the the
+       restriction against using the hash search operator persists
+       because it would otherwise behave exactly as the -> operator.
+       typeinfo(ishash) still evals to false for enums.
+    */
+    const e = enum{a};
+    assert typeinfo(isunique e.a);
+    assert 'a' === e::a;
+    assert e.a === e->'a';
+    assert catch {e#'a'}.codeString()==='CWAL_RC_TYPE' /* hash op is not allowed on enums */;
+    assert e::a === e.'a'.value;
+    assert typeinfo(is-enum e);
+    assert !typeinfo(is-hash e);
+}
+
+scope {
+    /* Examples from the user docs... */
+    const e = enum OptionalTypeName {
+        a, // its own name (a string) as its value
+        b: 2, // any value type is fine
+        f: proc(){return this}
+    };
+    assert 3 === e.#;
+    assert 'a' === e.a.value;
+    assert 'a' === e::a; // equivalent
+    assert 2 === e.b.value;
+    assert 2 === e::b; // equivalent unless the entry.value is a Function call:
+    assert e.f === e.f.value(); // e.f is bound as 'this'
+    assert e::f === e::f(); // no 'this', so e.f.value is its own 'this'
+    assert 'b' === e[e.b]; // get the string-form name of an entry
+    assert e.a === e['a']; // note that e['a'] is functionally identical to e.a.
+    assert 'OptionalTypeName' === typeinfo(name e);
+    assert undefined === e->'c'; //-> op does not throw for unknown properties
+    assert catch {e#'c'}.codeString()==='CWAL_RC_TYPE'; // hash op not allowed
+    assert catch {e::c}.codeString()==='CWAL_RC_NOT_FOUND'; // unknown property
+    assert catch {e.c}.codeString()==='CWAL_RC_NOT_FOUND'; // unknown property
+    assert catch {e.a = 1}.codeString()==='CWAL_RC_DISALLOW_PROP_SET';
+}

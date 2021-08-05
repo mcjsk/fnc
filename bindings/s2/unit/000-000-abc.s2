@@ -1,0 +1,9 @@
+assert true;  // if it were always this easy
+assert !false;
+assert 1;
+assert !0;
+assert !undefined;
+assert !null;
+assert !'';
+assert !(false && {another, error, skipped});
+assert   22 === ('☺', __COLUMN) /* must count non-ASCII chars properly */;

@@ -1,0 +1,42 @@
+
+var i;
+i = 0;
+do{++i}while(i<5);
+assert 5 === i;
+i = 0;
+do ++i; while(i<5);
+assert 5 === i;
+
+assert 'CWAL_SCR_SYNTAX' === catch{
+    do ++i while(true) /* missing semicolon after ++i */
+}.codeString();
+
+i = 0;
+do{
+    ++i
+}
+while(!i);
+assert 1 === i;
+
+assert -1 === do{
+    break -1;
+}while(true);
+
+assert undefined === do ; while(false)
+  /* if a for/while loop body may be empty, why not a do loop, too? */
+;
+
+
+i = 0;
+do ++i>2 && break; while(true);
+assert 3 === i;
+
+i = 0;
+do i++>2 && break; while(true);
+assert 4 === i /* yes, four */;
+
+i = 0;
+assert !catch{0 ? do ++i; while(i<2) : 1} /* no syntax error */;
+assert !i;
+assert !catch{1 ? do ++i; while(i<2) : 1} /* no syntax error */;
+assert 2 === i;

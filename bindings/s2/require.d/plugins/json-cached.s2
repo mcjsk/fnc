@@ -1,0 +1,4 @@
+/** A clone of the json plugin, except that cacheIt is set to true. */
+const mod = requireS2.getPlugin('json').copyPropertiesTo({});
+mod.cacheIt = true;
+return mod;

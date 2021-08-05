@@ -1,0 +1,557 @@
+# vim:se syn=tcl:
+#
+use cc cc-shared cc-lib
+
+options {
+    shared=1 => "Disable build of a shared library."
+    no-debug=0 => "Disable debug build options."
+    amal => "Generates a conservative config file for the amalgamation build."
+    static=1 => "Disable build of a static library."
+    loud=0 => "Enables 'loud' build mode."
+}
+
+
+# autosetup interceps 'debug' and 'enable-debug' flags :/
+#    prefix:=[get-env HOME /usr/local] -> "Installation prefix."
+
+define FSL_PACKAGE_NAME "libfossil"
+define FSL_LIBRARY_VERSION 0.0.1-alphabeta
+
+########################################################################
+# See if we can get the fossil schema version from the current
+# checkout. If so, use that one, otherwise fall back to some hard-coded
+# default.
+set auxSchema {}
+set contentSchema {}
+
+set fossilBin [find-an-executable fossil]
+if {[string length $fossilBin] > 0} {
+    puts "Found fossil binary: $fossilBin"
+    catch {
+        set auxSchema [string trimright \
+                       [exec echo \
+                            {SELECT value FROM config WHERE name='aux-schema';} \
+                            "|" $fossilBin sqlite3] ]
+        set contentSchema [string trimright \
+                       [exec echo \
+                            {SELECT value FROM config WHERE name='content-schema';} \
+                            "|" $fossilBin sqlite3] ]
+    } ex
+#    puts "exception=$ex"
+}
+
+#set uname [exec $fossilBin version -v "|" grep "Schema version"]
+#puts "uname=$uname"
+#return
+
+if {[string length $auxSchema] == 16} {
+    puts "Got aux-schema value from current repo: $auxSchema"
+    puts "Got content-schema value from current repo: $contentSchema"
+} else {
+    set auxSchema "2015-01-24"
+    # "2011-04-25 19:50"
+    set contentSchema 2
+    puts "Using hard-coded aux-schema: $auxSchema"
+    puts "Using hard-coded content-schema: $contentSchema"
+}
+define FSL_AUX_SCHEMA $auxSchema
+define FSL_CONTENT_SCHEMA $contentSchema
+
+########################################################################
+# Grab the code version and timestamp from manifest.uuid and manifest
+# files...
+#
+# This requires that the repo is NOT generating delta manifests. As
+# of 2020-03, the libfossil server uses the forbid-delta-manifest
+# setting.
+set timestamp [clock format [clock seconds] \
+                   -gmt 1 -format "%Y-%m-%d %H:%M"]
+set fp [open "manifest.uuid" r]
+set libVersionHash [string trimright [read $fp]]
+close $fp
+set fp [open "manifest"]
+# Get C-card:
+gets $fp
+# Get D-card:
+gets $fp line
+close $fp
+unset fp
+set manifestTimestamp [string map {"D " "" T " "} $line]
+unset line
+puts "libVersionHash = $libVersionHash"
+puts "manifestTimestamp = $manifestTimestamp"
+
+set FSL_PLATFORM_CONFIG_H "
+\#define FSL_LIB_VERSION_HASH \"$libVersionHash\"
+\#define FSL_LIB_VERSION_TIMESTAMP \"$manifestTimestamp UTC\"
+\#define FSL_LIB_CONFIG_TIME \"$timestamp GMT\"
+\#if defined(_MSC_VER)
+\#define FSL_PLATFORM_OS \"windows\"
+\#define FSL_PLATFORM_IS_WINDOWS 1
+\#define FSL_PLATFORM_IS_UNIX 0
+\#define FSL_PLATFORM_PLATFORM \"windows\"
+\#define FSL_PLATFORM_PATH_SEPARATOR \";\"
+\#define FSL_CHECKOUTDB_NAME \"./_FOSSIL_\"
+\/* define a __func__ compatibility macro *\/
+\#if _MSC_VER < 1500    /* (vc9.0; dev studio 2008) */
+/* sorry; cant do much better than nothing at all on those earlier ones */
+\#define __func__ \"(func)\"
+\#else
+\#define __func__ __FUNCTION__
+\#endif
+/* for the time being at least, don't complain about there being secure crt alternatives: */
+\#ifndef _CRT_SECURE_NO_WARNINGS
+\#define _CRT_SECURE_NO_WARNINGS
+\#endif
+/* for the time being at least, don't complain about using POSIX names instead of ISO C++: */
+\#pragma warning ( disable : 4996 )
+/* for the time being at least, suppresss some int conversion warnings */
+\#pragma warning ( disable : 4244 )     /*'fsl_size_t' to 'int'; this masks other problems that should be fixed*/
+\#pragma warning ( disable : 4761 )     /*'integral size mismatch in argument'; more size_t problems*/
+\#pragma warning ( disable : 4267 )     /*'size_t' to 'int'; crops up especially in 64-bit builds*/
+/* these were extracted from fossil's unistd.h */
+\#define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+\#include <io.h>
+\#elif defined(__MINGW32__)
+\#define FSL_PLATFORM_OS \"mingw\"
+\#define FSL_PLATFORM_IS_WINDOWS 1
+\#define FSL_PLATFORM_IS_UNIX 0
+\#define FSL_PLATFORM_PLATFORM \"windows\"
+\#define FSL_PLATFORM_PATH_SEPARATOR \";\"
+\#define FSL_CHECKOUTDB_NAME \"./.fslckout\"
+\#elif defined(__CYGWIN__)
+\#define FSL_PLATFORM_OS \"cygwin\"
+\#define FSL_PLATFORM_IS_WINDOWS 0
+\#define FSL_PLATFORM_IS_UNIX 1
+\#define FSL_PLATFORM_PLATFORM \"unix\"
+\#define FSL_PLATFORM_PATH_SEPARATOR \":\"
+\#define FSL_CHECKOUTDB_NAME \"./_FOSSIL_\"
+\#else
+\#define FSL_PLATFORM_OS \"unknown\"
+\#define FSL_PLATFORM_IS_WINDOWS 0
+\#define FSL_PLATFORM_IS_UNIX 1
+\#define FSL_PLATFORM_PLATFORM \"unix\"
+\#define FSL_PLATFORM_PATH_SEPARATOR \":\"
+\#define FSL_CHECKOUTDB_NAME \"./.fslckout\"
+\#endif
+"
+
+if {[opt-bool amal]} {
+    puts "Generating conservative config for the amalgamation build..."
+    set incGuard _NET_FOSSIL_SCM_FSL_AMALGAMATION_CONFIG_H_INCLUDED_
+    set ofile libfossil-config.h
+    set out [open $ofile w]
+    puts $out "\#if !defined($incGuard)
+\#define $incGuard 1
+\#define FSL_AUX_SCHEMA \"$auxSchema\"
+\#define FSL_CONTENT_SCHEMA \"$contentSchema\"
+\#define FSL_PACKAGE_NAME \"[get-define FSL_PACKAGE_NAME]\"
+\#define FSL_LIBRARY_VERSION \"[get-define FSL_LIBRARY_VERSION]\"
+/* Tweak the following for your system... */
+\#if !defined(HAVE_COMPRESS)
+\#  define HAVE_COMPRESS 1
+\#endif
+\#if !defined(HAVE_DLFCN_H)
+\#  define HAVE_DLFCN_H 0
+\#endif
+\#if !defined(HAVE_DLOPEN)
+\#  define HAVE_DLOPEN 0
+\#endif
+\#if !defined(HAVE_GETADDRINFO)
+\#  define HAVE_GETADDRINFO 0
+\#endif
+\#if !defined(HAVE_INET_NTOP)
+\#  define HAVE_INET_NTOP 0
+\#endif
+\#if !defined(HAVE_INTTYPES_H)
+\#  define HAVE_INTTYPES_H 0
+\#endif
+\#if !defined(HAVE_LIBDL)
+\#  define HAVE_LIBDL 0
+\#endif
+\#if !defined(HAVE_LIBLTDL)
+\#  define HAVE_LIBLTDL 0
+\#endif
+\#if !defined(_WIN32)
+\#if !defined(HAVE_LSTAT)
+\#  define HAVE_LSTAT 1
+\#endif
+\#if !defined(HAVE_LTDL_H)
+\#  define HAVE_LTDL_H 0
+\#endif
+\#if !defined(HAVE_LT_DLOPEN)
+\#  define HAVE_LT_DLOPEN 0
+\#endif
+\#if !defined(HAVE_OPENDIR)
+\#  define HAVE_OPENDIR 1
+\#endif
+\#if !defined(HAVE_PIPE)
+\#  define HAVE_PIPE 1
+\#endif
+\#if !defined(HAVE_STAT)
+\#  define HAVE_STAT 1
+\#endif
+\#if !defined(HAVE_STDINT_H)
+\#  define HAVE_STDINT_H 0
+\#endif
+\#if !defined(_DEFAULT_SOURCE)
+\#  define _DEFAULT_SOURCE 1
+\#endif
+\#if !defined(_XOPEN_SOURCE)
+\#  define _XOPEN_SOURCE 500
+\#endif
+\#else
+\#if !defined(HAVE_LSTAT)
+\#  define HAVE_LSTAT 0
+\#endif
+\#if !defined(HAVE_LTDL_H)
+\#  define HAVE_LTDL_H 0
+\#endif
+\#if !defined(HAVE_LT_DLOPEN)
+\#  define HAVE_LT_DLOPEN 0
+\#endif
+\#if !defined(HAVE_OPENDIR)
+\#  define HAVE_OPENDIR 1
+\#endif
+\#if !defined(HAVE_PIPE)
+\#  define HAVE_PIPE 0
+\#endif
+\#if !defined(HAVE_STAT)
+\#  define HAVE_STAT 0
+\#endif
+\#if !defined(HAVE_STDINT_H)
+\#  define HAVE_STDINT_H 0
+\#endif
+\#endif
+/* _WIN32 */
+
+$FSL_PLATFORM_CONFIG_H
+
+\#endif
+/* $incGuard */
+"
+    close $out
+    puts "Generated $ofile."
+    return
+}
+# end of --amal bootstrap config generation
+
+cc-check-c11
+
+cc-check-sizeof "void *"
+
+if {![cc-check-includes zlib.h] ||
+    ![cc-check-function-in-lib compress z]} {
+    user-error "Missing functional zlib"
+}
+cc-check-function-in-lib iconv iconv
+#if {![cc-check-functions iconv] &&
+#    ![cc-check-function-in-lib iconv iconv]} {
+#    user-error "Cannot find iconv(3) in libc or libiconv"
+#}
+
+########################################################################
+# Checks for C99 via (__STDC_VERSION__ >= 199901L). Returns 1 if so, 0
+# 0 if not.
+proc cc-check-c99 {} {
+    msg-checking "Checking for C99 via __STDC_VERSION__... "
+    if {[cctest -code {
+        #if !defined(__STDC_VERSION__) || __STDC_VERSION__<199901L
+        # error "Not C99"
+        #endif
+    }]} {
+        msg-result "got C99"
+        return 1
+    }
+    return 0
+}
+
+# The compiler may be able to run in C99 mode without -std=c99, but we
+# check for that flag anyway because without it we might inadvertently
+# be compiling against a newer C standard for purposes of flags like
+# -pedantic
+set CC_FLAG_C99 {-std=c99}
+if {![cc-check-flags $CC_FLAG_C99]} {
+    set CC_FLAG_C99 {}
+}
+if {![cc-check-c99]} {
+    user-error "As of 2021-02-21, libfossil requires C99."
+}
+
+define CC_FLAG_C99 $CC_FLAG_C99
+########################################################################
+# Module loader is currently used only by the s2 binding.
+define HAVE_LIBLTDL 0
+define HAVE_LIBDL 0
+define LDFLAGS_MODULE_LOADER ""
+define FSL_ENABLE_MODULE_LOADER 0
+if {[cc-check-includes ltdl.h] && [cc-check-function-in-lib lt_dlopen ltdl]} {
+    define HAVE_LIBLTDL 1
+    define LDFLAGS_MODULE_LOADER "-lltdl"
+    define FSL_ENABLE_MODULE_LOADER 1
+} elseif {[cc-with {-includes dlfcn.h} {
+	  cctest -link 1 -declare "extern char* dlerror(void);" -code "dlerror();"}]} {
+    msg-result "This system can use dlopen() w/o -ldl"
+    define HAVE_LIBDL 1
+    define LDFLAGS_MODULE_LOADER ""
+    define FSL_ENABLE_MODULE_LOADER 1
+} elseif {[cc-check-includes dlfcn.h]} {
+    msg-result "Found dlfcn.h."
+    define HAVE_LIBDL 1
+    if {[cc-check-function-in-lib dlopen dl]} {
+      msg-result "Found libdl."
+      define LDFLAGS_MODULE_LOADER "-ldl"
+    } else {
+      msg-result "No libdl found. Assuming dlopen is built-in."
+      define LDFLAGS_MODULE_LOADER ""
+    }
+    define FSL_ENABLE_MODULE_LOADER 1
+}
+
+if {![get-define FSL_ENABLE_MODULE_LOADER]} {
+    msg-result {No usable module loading library found. No worries, because we won't have a module system yet. :-D}
+} else {
+    msg-result {Found a module loader. Now we just need something to do with it.}
+}
+
+########################################################################
+# A proxy for cc-check-function-in-lib which "undoes" any changes that
+# routine makes to the LIBS define.
+proc my-check-function-in-lib {function libs {otherlibs {}}} {
+    set _LIBS [get-define LIBS]
+    set found [cc-check-function-in-lib $function $libs $otherlibs]
+    define LIBS $_LIBS
+    return $found
+}
+
+########################################################################
+# readline is only used (if at all) by s2sh. If it's not available, we
+# fall back to a tree-local copy of the BSD-licensed linenoise editing
+# library.
+if {[cc-check-includes readline/readline.h] &&
+    [my-check-function-in-lib readline readline]} {
+    define FSL_ENABLE_READLINE 1
+    define FSL_ENABLE_LINENOISE 0
+    msg-result "Enabling libreadline for f-s2sh line editing."
+} else {
+    msg-result "libreadline not found. f-s2sh will use the linenoise line editor."
+    define FSL_ENABLE_READLINE 0
+    define FSL_ENABLE_LINENOISE 1
+    define lib_readline ""
+}
+
+# cc-check-functions getcwd fopen
+cc-check-functions opendir stat pipe inet_ntop getaddrinfo
+#msg-result [cc-check-functions lstat]
+
+if {[cc-check-functions lstat]} {
+    # for lstat() on Linux and FreeBSD:
+    define _XOPEN_SOURCE 600
+    # alternate for lstat() on Linux:
+    # define _BSD_SOURCE 1
+    # ^^^^ causes warning (-Werror breakage) with glibc >=2.20
+    define _DEFAULT_SOURCE 1
+    define _POSIX_C_SOURCE 200112L
+}
+
+
+# Find some tools
+cc-check-tools ar ranlib strip
+
+set extra_objs {}
+
+if {[find-an-executable cygpath] ne "" || $::tcl_platform(os)=="Windows NT"} {
+  set cFlags {}
+} else {
+  set cFlags {-fPIC}
+}
+
+if {[opt-bool no-debug]} {
+    msg-result "Non-debug build."
+    set cFlags "$cFlags -O2"
+} else {
+    msg-result "Debug build enabled. Use --no-debug to build in non-debug mode."
+    set cFlags "$cFlags -g -DDEBUG -O0"
+}
+
+puts "Checking for compile_commands.json support..."
+if {[cctest -lang c -cflags {/dev/null -MJ} -source {}]} {
+    msg-result "Compiler supports compile_commands.json."
+    define MAKE_COMPILATION_DB yes
+} else {
+    msg-result "Compiler does not support compile_commands.json."
+    define MAKE_COMPILATION_DB no
+}
+
+define CFLAGS $cFlags
+
+if {[opt-bool shared]} {
+    msg-result "Enabling build of shared library."
+    define LIBFOSSIL_SHARED 1
+} else {
+    define LIBFOSSIL_SHARED 0
+    msg-result "Disabling build of shared library."
+}
+
+if {[opt-bool static]} {
+    msg-result "Enabling build of static library."
+    define LIBFOSSIL_STATIC 1
+} else {
+    define LIBFOSSIL_STATIC 0
+    msg-result "Disabling build of static library."
+}
+
+
+if {[opt-bool loud]} {
+    define BUILD_QUIETLY 0
+    puts "Using 'loud' build mode."
+} else {
+    define BUILD_QUIETLY 1
+    puts "Enabling quiet build mode. Use --loud to enable loud mode."
+}
+
+set dotBin [find-an-executable dot]
+if {[string length $dotBin]} {
+    define DOXYGEN_HAVE_DOT YES
+    msg-result "Adding HAVE_DOT=YES to doxyfile."
+} else {
+    define DOXYGEN_HAVE_DOT NO
+}
+
+
+# Creates mkefile(-like) file $name from $name.in but explicitly makes
+# the output read-only, to avoid inadvertent editing (who, me?).
+proc makeFromDotIn {name} {
+    catch { exec chmod u+w $name }
+    make-template $name.in $name
+    catch { exec chmod u-w $name }
+}
+# Each generated Makefile requires an input file with a .in extension:
+set makefiles {
+    config.make
+    Makefile
+    doc/Doxyfile
+    src/Makefile
+    fnc/Makefile
+    bindings/Makefile
+    bindings/cpp/Makefile
+}
+foreach {f} $makefiles {
+    makeFromDotIn $f
+}
+
+if {0} {
+    # Achtung: ordering of the -bare/-str options here is important
+    # because of the mixed use of strings and integers for #defines...
+    make-config-header include/fossil-scm/autoconfig.h \
+        -none {DOXYGEN_*} \
+        -bare {HAVE_*  FSL_ENABLE_* _DEFAULT_SOURCE _XOPEN_SOURCE} \
+        -str {FSL_* PACKAGE_*}
+}
+
+########################################################################
+# Generate our autconf header by hand to allow finer control
+# over the structure....
+set confH include/fossil-scm/autoconfig.h
+set incGuard _NET_FOSSIL_SCM_FSL_AUTO_CONFIG_H_INCLUDED_
+if {[opt-bool amal]} {
+    set confH libfossil-config.h
+    set incGuard _NET_FOSSIL_SCM_FSL_AMALGAMATION_CONFIG_H_INCLUDED_
+}
+puts "Generating config header $confH"
+    set out [open $confH w]
+    puts $out "\#if !defined($incGuard)
+\#define $incGuard 1
+\#define FSL_AUX_SCHEMA \"$auxSchema\"
+\#define FSL_CONTENT_SCHEMA \"$contentSchema\"
+\#define FSL_PACKAGE_NAME \"[get-define FSL_PACKAGE_NAME]\"
+\#define FSL_LIBRARY_VERSION \"[get-define FSL_LIBRARY_VERSION]\"
+\#define FSL_SHA1_HARDENED 1
+/* Tweak the following for your system... */
+\#if !defined(HAVE_GETADDRINFO)
+\#  define HAVE_GETADDRINFO [get-define HAVE_GETADDRINFO 0]
+\#endif
+\#if !defined(HAVE_INET_NTOP)
+\#  define HAVE_INET_NTOP [get-define HAVE_INET_NTOP 0]
+\#endif
+\#if !defined(_WIN32)
+\#if !defined(HAVE_DLFCN_H)
+\#  define HAVE_DLFCN_H [get-define HAVE_DLFCN_H 0]
+\#endif
+\#if !defined(HAVE_DLOPEN)
+\#  define HAVE_DLOPEN [get-define HAVE_DLOPEN 0]
+\#endif
+\#if !defined(HAVE_LIBDL)
+\#  define HAVE_LIBDL [get-define HAVE_LIBDL 0]
+\#endif
+\#if !defined(HAVE_LIBLTDL)
+\#  define HAVE_LIBLTDL [get-define HAVE_LIBLTDL 0]
+\#endif
+\#if !defined(HAVE_LSTAT)
+\#  define HAVE_LSTAT [get-define HAVE_LSTAT 1]
+\#endif
+\#if !defined(HAVE_LTDL_H)
+\#  define HAVE_LTDL_H [get-define HAVE_LTDL_H 0]
+\#endif
+\#if !defined(HAVE_LT_DLOPEN)
+\#  define HAVE_LT_DLOPEN [get-define HAVE_LT_DLOPEN 0]
+\#endif
+\#if !defined(HAVE_OPENDIR)
+\#  define HAVE_OPENDIR [get-define HAVE_OPENDIR 1]
+\#endif
+\#if !defined(HAVE_PIPE)
+\#  define HAVE_PIPE [get-define HAVE_PIPE 1]
+\#endif
+\#if !defined(HAVE_STAT)
+\#  define HAVE_STAT [get-define HAVE_STAT 1]
+\#endif
+\#if !defined(_DEFAULT_SOURCE)
+\#  define _DEFAULT_SOURCE [get-define _DEFAULT_SOURCE 1]
+\#endif
+\#if !defined(_XOPEN_SOURCE)
+\#  define _XOPEN_SOURCE [get-define _XOPEN_SOURCE 500]
+\#endif
+\#else
+/* _WIN32: */
+\#if !defined(HAVE_DLFCN_H)
+\#  define HAVE_DLFCN_H 0
+\#endif
+\#if !defined(HAVE_DLOPEN)
+\#  define HAVE_DLOPEN 0
+\#endif
+\#if !defined(HAVE_LIBDL)
+\#  define HAVE_LIBDL 0
+\#endif
+\#if !defined(HAVE_LIBLTDL)
+\#  define HAVE_LIBLTDL 0
+\#endif
+\#if !defined(HAVE_LSTAT)
+\#  define HAVE_LSTAT 0
+\#endif
+\#if !defined(HAVE_LTDL_H)
+\#  define HAVE_LTDL_H 0
+\#endif
+\#if !defined(HAVE_LT_DLOPEN)
+\#  define HAVE_LT_DLOPEN 0
+\#endif
+\#if !defined(HAVE_OPENDIR)
+\#  define HAVE_OPENDIR 1
+\#endif
+\#if !defined(HAVE_PIPE)
+\#  define HAVE_PIPE 0
+\#endif
+\#if !defined(HAVE_STAT)
+\#  define HAVE_STAT 0
+\#endif
+\#endif
+/*_WIN32*/
+
+$FSL_PLATFORM_CONFIG_H
+
+\#endif
+/* $incGuard */
+"
+    close $out
+    puts "Generated $confH."
+    return
+}

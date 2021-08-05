@@ -1,0 +1,63 @@
+/**
+   Bootstrap script for the s2/libfossil CGI bits.
+*/
+const $CGI = scope {
+    /* Load the CGI module and bail out with an HTTP-correct response if it fails. */
+    var c;
+    var err = catch{
+        c = s2.loadModule2('cgimod').cgi;
+        affirm c;
+        affirm 'function' === typename c.send;
+    };
+    if(err){
+        const out = s2.io.output;
+        out("Status: 500 Could not load CGI module.\r\n");
+        out("Content-type: text/plain\r\n");
+        out("\r\n");
+        if(1){
+            // potentially security-relevant (absolute paths, etc)
+            out(err.toJSONString(2));
+        }else{
+            out("Could not load CGI module.");
+        }
+        exit;
+    }
+    c;
+};
+//print('cgi =',typename $CGI);
+/* Start output buffering before the page gets a chance to output anything. */
+const $ob = s2.ob;
+$ob.push();
+var err = catch Fossil.require(
+['cliargs','fsl/context', 'fsl/db/repoOrCheckout'/*to get it opened*/],
+proc(cliargs, F){
+    // TODO: get our routing/dispatching in place, and import/call it here...
+    const resDir = cliargs.takeFlag('resource-dir');
+    typeinfo(isstring resDir) || throw "Set the --resource-dir=/path SCRIPT flag (after --) in the main CGI script.";
+    $CGI.fossilInstance = F;
+    requireS2.getPlugin('default').prefix[] = resDir;
+    requireS2.getPlugin('tmpl').suffix[] = '.tmpl.s2';
+    requireS2.getPlugin('tmpl-compiled').suffix[] = '.tmpl.s2';
+    s2.import(Fossil.file.canonicalName(resDir,false)+'/init.s2');
+    //$CGI.dispatchRoute();
+    //$CGI.setContentType('text/plain');
+    //$CGI.request.PATH_INFO = s2.getenv('PATH_INFO') ||| 'try adding a path';
+    //print('(ammended) $CGI.request:');
+    //print($CGI.request.toJSONString(2));
+    //throw "This causes generated (buffered) output to be discarded.";
+});
+
+if(err){ // transform exception to a JSON object.
+    // discard accumulated output, but keep one buffering level for our own use...
+    var obLevel = $ob.level();
+    for( ; obLevel > 1; $ob.pop(), --obLevel) {}
+    if(obLevel){ $ob.clear() }
+    else { $ob.push() /* so our headers get sent properly */ }
+    if($CGI.httpStatus() < 500){
+        $CGI.httpStatus(500, "Caught Exception");
+    }
+    $CGI.scrubException && (err = $CGI.scrubException(err));
+    $CGI.setContentType('application/json');
+    print({exception:err}.toJSONString(-1));
+}
+$CGI.send() /* will flush all $ob buffers after emiting headers */;
