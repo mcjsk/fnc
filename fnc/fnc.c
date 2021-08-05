@@ -2630,8 +2630,8 @@ diff_wiki(fsl_buffer *buf, struct fnc_commit_artifact *commit,
 		if (d->P.used > 0)
 			commit->puuid = fsl_strdup(d->P.list[0]);
 		else {
-		    fsl_buffer_append(buf, d->W.mem, d->W.used);
-		    goto end;
+			fsl_buffer_append(buf, d->W.mem, d->W.used);
+			goto end;
 		}
 	}
 
