@@ -2045,7 +2045,9 @@ regex_t *regex)
 
 	if (regexec(regex, commit->user, 1, &regmatch, 0) == 0 ||
 	    regexec(regex, (char *)commit->uuid, 1, &regmatch, 0) == 0 ||
-	    regexec(regex, commit->comment, 1, &regmatch, 0) == 0)
+	    regexec(regex, commit->comment, 1, &regmatch, 0) == 0 ||
+	    (commit->branch && regexec(regex, commit->branch, 1, &regmatch, 0)
+	     == 0))
 		return true;
 
 	return false;
