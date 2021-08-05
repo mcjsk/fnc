@@ -388,7 +388,7 @@ static int		 block_main_thread_signals(void);
 static int		 build_commits(struct fnc_tl_thread_cx *);
 static int		 signal_tl_thread(struct fnc_view *, int);
 static int		 draw_commits(struct fnc_view *);
-static char		*parse_emailaddr_username(char *);
+static void		 parse_emailaddr_username(char **);
 static int		 formatln(wchar_t **, int *, const char *, int, int);
 static int		 multibyte_to_wchar(const char *, wchar_t **, size_t *);
 static int		 write_commit_line(struct fnc_view *,
@@ -1293,8 +1293,8 @@ draw_commits(struct fnc_view *view)
 			rc = fsl_errno_to_rc(errno, FSL_RC_OOM);
 			return rc;
 		}
-		if (strpbrk(user, "<@") != NULL)
-			user = parse_emailaddr_username(user);
+		if (strpbrk(user, "<@>") != NULL)
+			parse_emailaddr_username(&user);
 		rc = formatln(&usr_wcstr, &usrlen, user, view->ncols, 0);
 		if (max_usrlen < usrlen)
 			max_usrlen = usrlen;
@@ -1331,22 +1331,20 @@ end:
 	return rc;
 }
 
-static char *
-parse_emailaddr_username(char *username)
+static void
+parse_emailaddr_username(char **username)
 {
-	char	*lt, *at, *usr;
+	char	*lt, *usr;
 
-	if ((lt = strchr(username, '<')) && lt[1] != '\0')
-		++lt;
-	if ((at = strchr(username, '@')))
-		*at = '\0';
+	lt = strchr(*username, '<');
+	if (lt && lt[1] != '\0') {
+		usr = fsl_strdup(++lt);
+		fsl_free(*username);
+	} else
+		usr = *username;
+	usr[strcspn(usr, "@>")] = '\0';
 
-	if (lt) {
-		usr = fsl_strdup(lt);
-		fsl_free(username);
-		return usr;
-	}
-	return username;
+	*username = usr;
 }
 
 static int
@@ -1491,8 +1489,8 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	user = fsl_strdup(commit->user);
 	if (user == NULL)
 		goto end;
-	if (strpbrk(user, "<@") != NULL)
-		 user = parse_emailaddr_username(user);
+	if (strpbrk(user, "<@>") != NULL)
+		parse_emailaddr_username(&user);
 	rc = formatln(&usr_wcstr, &usrlen, user, view->ncols - col_pos,
 	    col_pos);
 	if (rc)
