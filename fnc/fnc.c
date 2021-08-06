@@ -421,8 +421,8 @@ static int		 write_commit_meta(struct fnc_diff_view_state *);
 static int		 add_line_offset(fpos_t **, size_t *, fpos_t);
 static int		 diff_commit(fsl_buffer *, struct fnc_commit_artifact *,
 			    int, bool, int, int);
-static int		 diff_wiki(fsl_buffer *, struct fnc_commit_artifact *,
-			    int, int, int);
+static int		 diff_non_checkin(fsl_buffer *, struct
+			    fnc_commit_artifact *, int, int, int);
 static int		 verbose_diff(void *, void *);
 static int		 diff_file_artifact(fsl_buffer *, fsl_id_t,
 			    fsl_card_F const *, fsl_id_t, fsl_card_F const *,
@@ -2282,7 +2282,7 @@ create_diff(struct fnc_diff_view_state *s)
 		diff_commit(&s->buf, s->selected_commit, s->diff_flags,
 		    s->verbose, s->context, s->sbs);
 	} else
-		diff_wiki(&s->buf, s->selected_commit, s->diff_flags,
+		diff_non_checkin(&s->buf, s->selected_commit, s->diff_flags,
 		    s->context, s->sbs);
 
 	/*
@@ -2605,15 +2605,20 @@ end:
 	return rc;
 }
 
-/* TODO: Rename and refactor as this actually diffs technotes too. */
+/*
+ * Parse the deck of non-checkin commits to present a 'fossil ui' equivalent
+ * of the corresponding artifact when selected from the timeline.
+ * TODO: Rename this horrible function name.
+ */
 static int
-diff_wiki(fsl_buffer *buf, struct fnc_commit_artifact *commit,
+diff_non_checkin(fsl_buffer *buf, struct fnc_commit_artifact *commit,
     int diff_flags, int context, int sbs)
 {
 	fsl_cx		*f = fcli_cx();
 	fsl_buffer	 wiki = fsl_buffer_empty;
 	fsl_buffer	 pwiki = fsl_buffer_empty;
 	fsl_id_t	 prid = 0;
+	fsl_size_t	 idx;
 	int		 rc = 0;
 
 	fsl_deck *d = NULL;
@@ -2624,8 +2629,27 @@ diff_wiki(fsl_buffer *buf, struct fnc_commit_artifact *commit,
 	fsl_deck_init(f, d, FSL_SATYPE_ANY);
 	if ((rc = fsl_deck_load_rid(f, d, commit->rid, FSL_SATYPE_ANY)))
 		goto end;
-	fsl_buffer_append(&wiki, d->W.mem, d->W.used);
 
+	/*
+	 * Present ticket commits as a series of field: value tuples as per
+	 * the Fossil UI /info/UUID view.
+	 */
+	if (d->type == FSL_SATYPE_TICKET) {
+		for (idx = 0; idx < d->J.used; ++idx) {
+			fsl_card_J *ticket = d->J.list[idx];
+			bool icom = !fsl_strncmp(ticket->field, "icom", 4);
+			fsl_buffer_appendf(buf, "%d. %s:%s%s%c\n", idx + 1,
+			    ticket->field, icom ? "\n\n" : " ", ticket->value,
+			    icom ? '\n' : ' ');
+		}
+		goto end;
+	}
+
+	/*
+	 * If not a ticket, we may have a parent commit to diff against. If
+	 * not, append the entire wiki card content.
+	 */
+	fsl_buffer_append(&wiki, d->W.mem, d->W.used);
 	if (commit->puuid == NULL) {
 		if (d->P.used > 0)
 			commit->puuid = fsl_strdup(d->P.list[0]);
@@ -2635,14 +2659,19 @@ diff_wiki(fsl_buffer *buf, struct fnc_commit_artifact *commit,
 		}
 	}
 
+	/* Diff the artifacts if a parent is found. */
 	if ((rc = fsl_sym_to_rid(f, commit->puuid, FSL_SATYPE_ANY, &prid)))
 		goto end;
 	if ((rc = fsl_deck_load_rid(f, d, prid, FSL_SATYPE_ANY)))
 		goto end;
 	fsl_buffer_append(&pwiki, d->W.mem, d->W.used);
 
-	rc = fsl_diff_text_to_buffer(&pwiki, &wiki, buf,
-                        context, sbs, diff_flags);
+	rc = fsl_diff_text_to_buffer(&pwiki, &wiki, buf, context, sbs,
+	    diff_flags);
+
+	/* If a technote, provide the full content after its diff. */
+	if (d->type == FSL_SATYPE_TECHNOTE)
+		fsl_buffer_appendf(buf, "\n---\n\n%s", wiki.mem);
 
 end:
 	fsl_buffer_clear(&wiki);
