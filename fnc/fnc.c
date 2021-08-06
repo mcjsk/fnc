@@ -2558,17 +2558,17 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 					}
 				}
 			}
-			/*
-			 * TODO: The diff algorithm seems to choke on this file.
-			 * Presumably because it has really long lines, which
-			 * causes it to be classified as a binary file.
-			 */
-			if (!fsl_strcmp(fc1->name, "skins/bootstrap/css.txt"))
-				continue;
 			/* Same filename in both commits: modified files. */
 			rc = diff_file_artifact(buf, id1, fc1, id2, fc2,
 			    diff_flags, verbose, context, sbs);
-			if (rc)
+			/* Binary file can't be diffed. */
+			if (rc == FSL_RC_RANGE) {
+				fsl_buffer_append(buf,
+				    "\nBinary files cannot be diffed\n", -1);
+				rc = 0;
+				fsl_cx_err_reset(f);
+				continue;
+			} else if (rc)
 				goto end;
 			else
 				fsl_deck_F_next(&d1, &fc1);
