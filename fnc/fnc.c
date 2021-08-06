@@ -2114,7 +2114,7 @@ join_tl_thread(struct fnc_tl_view_state *s)
 			return fsl_cx_err_set(f, rc, "mutex unlock fail");
 		if ((rc = pthread_join(s->thread_id, &err)) ||
 		    err == PTHREAD_CANCELED)
-			return fsl_cx_err_set(f, rc ? rc : (int)err,
+			return fsl_cx_err_set(f, rc ? rc : (intptr_t)err,
 			    "pthread_join");
 		if ((rc = pthread_mutex_lock(&fnc_mutex)))
 			return fsl_cx_err_set(f, rc, "mutex lock fail");
@@ -3531,7 +3531,7 @@ usage_blame(void)
 }
 
 static int
-cmd_diff()
+cmd_diff(fcli_command const *argv)
 {
 	/* Not yet implemened. */
 	f_out("%s diff can not yet be called from the command line;\naccess "
@@ -3541,7 +3541,7 @@ cmd_diff()
 }
 
 static int
-cmd_blame()
+cmd_blame(fcli_command const *argv)
 {
 	/* Not yet implemened. */
 	f_out("%s blame is not yet implemented.\n", getprogname());
