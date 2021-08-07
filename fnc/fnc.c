@@ -117,6 +117,7 @@ static struct fnc_setup {
 	const char	*artifact1;	/* Second diff (required) argument. */
 	short		 context;	/* Number of context lines. */
 	bool		 ws;		/* Ignore whitespace-only changes. */
+	bool		 colour;	/* Toggle colour in diff output. */
 
 	/* Blame options. */
 	const char	*path;		/* Show blame of REQUIRED <path> arg. */
@@ -127,7 +128,7 @@ static struct fnc_setup {
 	fcli_command	   cmd_args[4];			/* App commands. */
 	const char	*(*fnc_usage_cb[3])(void);	/* Command usage. */
 	fcli_cliflag	   cliflags_timeline[10];	/* Timeline options. */
-	fcli_cliflag	   cliflags_diff[5];		/* Diff options. */
+	fcli_cliflag	   cliflags_diff[6];		/* Diff options. */
 	fcli_cliflag	   cliflags_blame[2];		/* Blame options. */
 } fnc_init = {
 	false,		/* err fnc error state. */
@@ -145,6 +146,7 @@ static struct fnc_setup {
 	NULL,		/* artifact1 diff command second required argument. */
 	5,		/* context defaults to five context lines. */
 	false,		/* ws defaults to acknowledge whitespace. */
+	true,		/* colour defaults to on. */
 	NULL,		/* path blame command required argument. */
 
 	{ /* fnc_help global app help details. */
@@ -205,6 +207,10 @@ static struct fnc_setup {
 	}, /* End cliflags_timeline. */
 
 	{ /* cliflags_diff diff command related options. */
+	    FCLI_FLAG_BOOL("c", "no-colour", &fnc_init.colour,
+            "Disable coloured diff output, which is enabled by default on\n    "
+            "supported terminals. Colour can also be toggled pressing 'c' "
+            "\n    in diff view when this option is not used."),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
             "Display diff command help and usage."),
 	    FCLI_FLAG_BOOL("i", "invert", NULL,
@@ -252,6 +258,18 @@ enum fnc_search_state {
 	SEARCH_CONTINUE,
 	SEARCH_COMPLETE,
 	SEARCH_NO_MATCH
+};
+
+enum diff_colours {
+	FNC_DIFF_META = 1,
+	FNC_DIFF_MINUS,
+	FNC_DIFF_PLUS,
+	FNC_DIFF_CHNK,
+};
+
+struct fnc_colour {
+	regex_t	regex;
+	uint8_t	scheme;
 };
 
 struct fnc_commit_artifact {
@@ -322,6 +340,7 @@ struct fnc_diff_view_state {
 	struct fnc_view			*timeline_view;
 	struct fnc_commit_artifact	*selected_commit;
 	fsl_buffer			 buf;
+	fsl_list			 colours;
 	FILE				*f;
 	int				 first_line_onscreen;
 	int				 last_line_onscreen;
@@ -336,6 +355,7 @@ struct fnc_diff_view_state {
 	bool				 ignore_ws;
 	bool				 invert;
 	bool				 verbose;
+	bool				 colour;
 };
 
 TAILQ_HEAD(view_tailhead, fnc_view);
@@ -414,6 +434,7 @@ static int		 init_diff_commit(struct fnc_view **, int,
 static int		 open_diff_view(struct fnc_view *,
 			    struct fnc_commit_artifact *, int, bool, bool, bool,
 			    struct fnc_view *);
+static int		 set_diff_colours(fsl_list *);
 static void		 show_diff_status(struct fnc_view *);
 static int		 create_diff(struct fnc_diff_view_state *);
 static int		 create_changeset(struct fnc_commit_artifact *);
@@ -433,6 +454,7 @@ static int		 fsl_ckout_mtime(fsl_cx *, fsl_id_t, fsl_card_F const *,
 			    fsl_time_t *, fsl_time_t *);
 static int		 show_diff(struct fnc_view *);
 static int		 write_diff(struct fnc_view *, const char *);
+static int		 match_line(const void *, const void *);
 static int		 write_matched_line(int *, const char *, int, int,
 			    WINDOW *, regmatch_t *);
 static void		 draw_vborder(struct fnc_view *);
@@ -445,6 +467,7 @@ static int		 diff_search_next(struct fnc_view *);
 static int		 view_close(struct fnc_view *);
 static int		 close_timeline_view(struct fnc_view *);
 static int		 close_diff_view(struct fnc_view *);
+static int		 fsl_list_colour_free(void *, void *);
 static int		 view_resize(struct fnc_view *);
 static int		 screen_is_split(struct fnc_view *);
 static bool		 screen_is_shared(struct fnc_view *);
@@ -591,6 +614,11 @@ init_curses(void)
 	intrflush(stdscr, FALSE);
 	keypad(stdscr, TRUE);
 	curs_set(0);
+
+	if (fnc_init.colour && has_colors()) {
+		start_color();
+		use_default_colors();
+	}
 
 	if ((rc = sigaction(SIGPIPE,
 	    &(struct sigaction){{sigpipe_handler}}, NULL)))
@@ -2213,7 +2241,11 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *cmt2,
 	s->ignore_ws = ignore_ws;
 	s->invert = invert;
 	s->timeline_view = timeline_view;
+	s->colours = fsl_list_empty;
+	s->colour = fnc_init.colour;
 
+	if (fnc_init.colour && has_colors())
+		set_diff_colours(&s->colours);
 	if (timeline_view && screen_is_split(view))
 		show_timeline_view(timeline_view); /* draw vborder */
 	show_diff_status(view);
@@ -2229,6 +2261,47 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *cmt2,
 	view->close = close_diff_view;
 	view->search_init = diff_search_init;
 	view->search_next = diff_search_next;
+
+	return rc;
+}
+
+static int
+set_diff_colours(fsl_list *s)
+{
+	struct fnc_colour	*colour;
+	fsl_cx			*f = fcli_cx();
+	fsl_size_t		 idx;
+	const char		*regexp[4] = {
+				    "^((checkin|wiki|ticket|technote) [0-9a-f]|"
+				    "hash [+-] |\\[[+~>-]] |[+-]{3} )",
+				    "^-", "^\\+", "^@@"
+				 };
+	int			 pairs[4][2] = {
+				    {FNC_DIFF_META, COLOR_GREEN},
+				    {FNC_DIFF_MINUS, COLOR_MAGENTA},
+				    {FNC_DIFF_PLUS, COLOR_CYAN},
+				    {FNC_DIFF_CHNK, COLOR_YELLOW}
+				 };
+	int			 rc = 0;
+
+	for (idx = 0; idx < nitems(regexp); ++idx) {
+		colour = fsl_malloc(sizeof(*colour));
+		if (colour == NULL)
+			return fsl_cx_err_set(f, FSL_RC_OOM, "malloc");
+		rc = regcomp(&colour->regex, regexp[idx],
+		    REG_EXTENDED | REG_NEWLINE | REG_NOSUB);
+		if (rc) {
+			static char regerr[512];
+			regerror(rc, &colour->regex, regerr, sizeof(regerr));
+			free(colour);
+			return fsl_cx_err_set(f, fsl_errno_to_rc(rc,
+			    FSL_RC_ERROR), "regcomp: %s [%s]", regerr,
+			    regexp[idx]);
+		}
+		colour->scheme = pairs[idx][0];
+		init_pair(colour->scheme, pairs[idx][1], -1);
+		fsl_list_append(s, colour);
+	}
 
 	return rc;
 }
@@ -2437,17 +2510,17 @@ write_commit_meta(struct fnc_diff_view_state *s)
 
 		switch (file_change->change) {
 			case FILE_CHANGED:
-				changeline = "~  ";
+				changeline = "[~] ";
 				break;
 			case FILE_ADDED:
-				changeline = "+  ";
+				changeline = "[+] ";
 				break;
 			case FILE_RENAMED:
-				changeline = fsl_mprintf(">  %s -> ",
+				changeline = fsl_mprintf("[>] %s -> ",
 				   file_change->fc->priorName);
 				break;
 			case FILE_DELETED:
-				changeline = "-  ";
+				changeline = "[-] ";
 				break;
 		}
 		if ((n = fsl_fprintf(s->f, "%s%s\n", changeline,
@@ -2900,6 +2973,7 @@ write_diff(struct fnc_view *view, const char *headln)
 	struct fnc_diff_view_state	*s = &view->state.diff;
 	fsl_cx				*f = fcli_cx();
 	regmatch_t			*regmatch = &view->regmatch;
+	struct fnc_colour		*c = NULL;
 	wchar_t				*wcstr;
 	char				*line;
 	size_t				 linesz = 0;
@@ -2909,6 +2983,7 @@ write_diff(struct fnc_view *view, const char *headln)
 	int				 max_lines = view->nlines;
 	int				 nlines = s->nlines;
 	int				 rc = 0, nprintln = 0;
+	int				 match = -1;
 
 	line_offset = s->line_offsets[s->first_line_onscreen - 1];
 	if (fsetpos(s->f, &line_offset))
@@ -2960,6 +3035,11 @@ write_diff(struct fnc_view *view, const char *headln)
 			goto end;
 		}
 
+		if (s->colour && (match = fsl_list_index_of(&s->colours, line,
+		    match_line)) != -1)
+			c = s->colours.list[match];
+		if (c)
+			wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 		if (s->first_line_onscreen + nprintln == s->matched_line &&
 		    regmatch->rm_so >= 0 && regmatch->rm_so < regmatch->rm_eo) {
 			rc = write_matched_line(&wstrlen, line, view->ncols, 0,
@@ -2971,6 +3051,10 @@ write_diff(struct fnc_view *view, const char *headln)
 			if (rc)
 				goto end;
 			waddwstr(view->window, wcstr);
+		}
+		if (c) {
+			wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
+			c = NULL;
 		}
 		if (wstrlen <= view->ncols - 1)
 			waddch(view->window, '\n');
@@ -2997,6 +3081,15 @@ end:
 	free(wcstr);
 	free(line);
 	return rc;
+}
+
+static int
+match_line(const void *ln, const void *key)
+{
+	struct fnc_colour *c = (struct fnc_colour *)key;
+	const char *line = ln;
+
+	return regexec(&c->regex, line, 0, NULL, 0);
 }
 
 static bool
@@ -3159,9 +3252,12 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		while (i++ < view->nlines - 1 && s->first_line_onscreen > 1)
 			--s->first_line_onscreen;
 		break;
+	case 'c':
 	case 'i':
 	case 'v':
 	case 'w':
+		if (ch == 'c')
+			s->colour = s->colour == false;
 		if (ch == 'i')
 			s->diff_flags ^= FSL_DIFF_INVERT;
 		if (ch == 'v')
@@ -3331,9 +3427,21 @@ close_diff_view(struct fnc_view *view)
 		rc = fsl_cx_err_set(f, fsl_errno_to_rc(errno, FSL_RC_IO),
 		    "fclose");
 	free(s->line_offsets);
+	fsl_list_clear(&s->colours, fsl_list_colour_free, NULL);
 	s->line_offsets = NULL;
 	s->nlines = 0;
 	return rc;
+}
+
+static int
+fsl_list_colour_free(void *elem, void *state)
+{
+	struct fnc_colour *c = (struct fnc_colour *)elem;
+
+	regfree(&c->regex);
+	fsl_free(c);
+
+	return 0;
 }
 
 static void
@@ -3516,8 +3624,8 @@ usage_timeline(void)
 const char *
 usage_diff(void)
 {
-	return fsl_mprintf(" %s diff [-h|--help] [-i|--invert] "
-	    "[-w|--whitespace] [-x|--context lines] artifact1 artifact2\n"
+	return fsl_mprintf(" %s diff [-h|--help] [-c|--no-colour] [-i|--invert]"
+	    " [-w|--whitespace] [-x|--context lines] artifact1 artifact2\n"
 	    "  e.g.: %s diff --context 3 d34db33f c0ff33",
 	    getprogname(), getprogname());
 }
