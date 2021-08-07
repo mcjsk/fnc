@@ -475,7 +475,7 @@ static void		 fnc_resizeterm(void);
 static int		 join_tl_thread(struct fnc_tl_view_state *);
 static void		 fnc_free_commits(struct commit_queue *);
 static void		 fnc_commit_artifact_close(struct fnc_commit_artifact*);
-static int		 fsl_list_object_close(void *, void *);
+static int		 fsl_list_artifact_free(void *, void *);
 static void		 sigwinch_handler(int);
 static void		 sigpipe_handler(int);
 static void		 sigcont_handler(int);
@@ -2183,13 +2183,13 @@ fnc_commit_artifact_close(struct fnc_commit_artifact *commit)
 	fsl_free(commit->user);
 	fsl_free(commit->uuid);
 	fsl_free(commit->puuid);
-	fsl_list_clear(&commit->changeset, fsl_list_object_close, NULL);
+	fsl_list_clear(&commit->changeset, fsl_list_artifact_free, NULL);
 	fsl_list_reserve(&commit->changeset, 0);
 	fsl_free(commit);
 }
 
 static int
-fsl_list_object_close(void *elem, void *state)
+fsl_list_artifact_free(void *elem, void *state)
 {
 	struct fsl_file_artifact *ffa = (struct fsl_file_artifact *)elem;
 
