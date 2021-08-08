@@ -229,6 +229,11 @@ static struct fnc_setup {
 	}, /* End cliflags_blame. */
 };
 
+enum fsl_list_object {
+	FNC_ARTIFACT_OBJ,
+	FNC_COLOUR_OBJ
+};
+
 enum date_string {
 	ISO8601_DATE_ONLY = 10,
 	ISO8601_TIMESTAMP = 20
@@ -270,6 +275,10 @@ enum diff_colours {
 struct fnc_colour {
 	regex_t	regex;
 	uint8_t	scheme;
+};
+
+struct fsl_list_state {
+	enum fsl_list_object	obj;
 };
 
 struct fnc_commit_artifact {
@@ -467,7 +476,6 @@ static int		 diff_search_next(struct fnc_view *);
 static int		 view_close(struct fnc_view *);
 static int		 close_timeline_view(struct fnc_view *);
 static int		 close_diff_view(struct fnc_view *);
-static int		 fsl_list_colour_free(void *, void *);
 static int		 view_resize(struct fnc_view *);
 static int		 screen_is_split(struct fnc_view *);
 static bool		 screen_is_shared(struct fnc_view *);
@@ -475,7 +483,7 @@ static void		 fnc_resizeterm(void);
 static int		 join_tl_thread(struct fnc_tl_view_state *);
 static void		 fnc_free_commits(struct commit_queue *);
 static void		 fnc_commit_artifact_close(struct fnc_commit_artifact*);
-static int		 fsl_list_artifact_free(void *, void *);
+static int		 fsl_list_object_free(void *, void *);
 static void		 sigwinch_handler(int);
 static void		 sigpipe_handler(int);
 static void		 sigcont_handler(int);
@@ -2176,6 +2184,8 @@ fnc_free_commits(struct commit_queue *commits)
 static void
 fnc_commit_artifact_close(struct fnc_commit_artifact *commit)
 {
+	struct fsl_list_state	st = { FNC_ARTIFACT_OBJ };
+
 	fsl_free(commit->branch);
 	fsl_free(commit->comment);
 	fsl_free(commit->timestamp);
@@ -2183,21 +2193,35 @@ fnc_commit_artifact_close(struct fnc_commit_artifact *commit)
 	fsl_free(commit->user);
 	fsl_free(commit->uuid);
 	fsl_free(commit->puuid);
-	fsl_list_clear(&commit->changeset, fsl_list_artifact_free, NULL);
+	fsl_list_clear(&commit->changeset, fsl_list_object_free, &st);
 	fsl_list_reserve(&commit->changeset, 0);
 	fsl_free(commit);
 }
 
 static int
-fsl_list_artifact_free(void *elem, void *state)
+fsl_list_object_free(void *elem, void *state)
 {
-	struct fsl_file_artifact *ffa = (struct fsl_file_artifact *)elem;
+	struct fsl_list_state *st = state;
 
-	if (ffa->fc)
-		fsl_free(ffa->fc);
-
-	if (ffa)
-		fsl_free(ffa);
+	switch (st->obj) {
+	case FNC_ARTIFACT_OBJ: {
+		struct fsl_file_artifact *ffa = elem;
+		if (ffa->fc)
+			fsl_free(ffa->fc);
+		if (ffa)
+			fsl_free(ffa);
+		break;
+	}
+	case FNC_COLOUR_OBJ: {
+		struct fnc_colour *c = elem;
+		regfree(&c->regex);
+		fsl_free(c);
+		break;
+	}
+	default:
+		return fcli_err_set(FSL_RC_MISSING_INFO,
+		    "fsl_list_state.obj missing or invalid: %d", st->obj);
+	}
 
 	return 0;
 }
@@ -3420,6 +3444,7 @@ static int
 close_diff_view(struct fnc_view *view)
 {
 	struct fnc_diff_view_state	*s = &view->state.diff;
+	struct fsl_list_state		st = { FNC_COLOUR_OBJ };
 	fsl_cx				*f = fcli_cx();
 	int				 rc = 0;
 
@@ -3427,21 +3452,10 @@ close_diff_view(struct fnc_view *view)
 		rc = fsl_cx_err_set(f, fsl_errno_to_rc(errno, FSL_RC_IO),
 		    "fclose");
 	free(s->line_offsets);
-	fsl_list_clear(&s->colours, fsl_list_colour_free, NULL);
+	fsl_list_clear(&s->colours, fsl_list_object_free, &st);
 	s->line_offsets = NULL;
 	s->nlines = 0;
 	return rc;
-}
-
-static int
-fsl_list_colour_free(void *elem, void *state)
-{
-	struct fnc_colour *c = (struct fnc_colour *)elem;
-
-	regfree(&c->regex);
-	fsl_free(c);
-
-	return 0;
 }
 
 static void
