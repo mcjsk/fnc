@@ -1,0 +1,326 @@
+.\"
+.\" Copyright (c) 2021 Mark Jamsek <mark@jamsek.com>
+.\"
+.\" Permission to use, copy, modify, and distribute this software for any
+.\" purpose with or without fee is hereby granted, provided that the above
+.\" copyright notice and this permission notice appear in all copies.
+.\"
+.\" THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+.\" WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+.\" MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+.\" ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+.\" WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+.\" ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+.\" OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+.\"
+.Dd $Mdocdate$
+.Dt FNC 1
+.Os
+.Sh NAME
+.Nm fnc
+.Nd Read-only ncurses-based Fossil repository browser
+.Sh SYNOPSIS
+.Nm
+.Op Ar command
+.Op Fl h | -help
+.Nm
+.Op Fl h | -help
+.Op Fl v | -version
+.Nm
+.Cm timeline
+.Op Fl z
+.Op Fl T Ar tag
+.Op Fl b Ar branch
+.Op Fl c Ar hash
+.Op Fl n Ar number
+.Op Fl t Ar type
+.Op Fl u Ar user
+.Nm
+.Cm diff
+.Op Fl ciw
+.Op Fl x Ar number
+.Ar artifact1
+.Ar artifact2
+.Nm
+.Cm blame
+.Op Fl c Ar hash
+.Ar file
+.Sh DESCRIPTION
+.Nm
+is an interactive read-only browser for
+.Xr fossil 1
+repositories,
+and supports multiple views to display repository data:
+.Bl -tag -width Ds
+.It Timeline view
+Display commits from the repository's history in chronologically
+descending order.
+.Br
+If no
+.Ar command
+or
+.Ar arg
+are specified,
+.Nm
+will default to displaying this view.
+.It Diff view
+Display changes introduced in the specified commit.
+.It Blame view
+Display historical attribution of each line in the specified file.
+.El
+.Pp
+.Nm
+provides both global and command-specific options and in-app key
+bindings.  Global options are specified absent a command name; these
+options are as follows:
+.Bl -tag -width 6v
+.It Fl h , -help
+Display program help and usage information then exit.
+.It Fl v , -version
+Display program version then exit.
+.El
+.Pp
+Note that any global options preceding a command name will be
+interpreted as the command-specific variant if such an option exists.
+.Pp
+Global key bindings are as follows:
+.Bl -tag -width Ds
+.It Cm Tab
+Switch focus between open views.
+.It Cm f
+Toggle the active view between fullscreen and splitscreen mode.  Note
+that
+.It Cm Q
+Immediatey quit
+.Nm .
+.It Cm q
+Quit the active view.
+.Nm
+will automatically open a view in splitscreen if the terminal width is
+equal to or greater than 120 columns wide.
+.El
+.Pp
+Commands available to
+.Nm
+are as follows:
+.Bl -tag -width 4v
+.It Cm timeline Oo Fl T | -tag Ar tag Oc Oo Fl b | -branch Ar branch Oc \
+Oo Fl c | -commit Ar hash Oc Oo Fl h | -help Oc Oo Fl n | -limit Ar n Oc \
+Oo Fl t | -type Ar type Oc Oo Fl u | -username Ar user Oc Oo Fl z | -utc Oc
+.Pp
+Display commit history of a repository.  This command must be executed
+from within or below the repository root; that is, it assumes a local
+checkout is open in or above the current working directory.
+.Pp
+If no command is explicitly specified,
+.Nm
+will execute this command by default.
+.Pp
+Options for
+.Cm fnc timeline
+are as follows:
+.Bl -tag -width Ds
+.It Fl T , -tag Ar tag
+Only display commits with T cards containing
+.Ar tag .
+By default,
+.Nm
+will indiscriminately display all commits irrespective of T card
+.Ar tag .
+.It Fl b , branch Ar branch
+Display commits that reside on the specified
+.Ar branch .
+The expected argument is the symbolic name of a branch. By default,
+.Nm
+will display all commits irrespective of the branch on which they
+reside.
+.It Fl c , commit Ar hash
+Open the timeline from the commit identified by
+.Ar hash .
+The expected argument is either the name of a branch, which will resolve
+to the latest commit on the given branch, or (a unique abbreviated
+prefix of) a valid commit UUID SHA1 or SHA3 hash. When this option is
+not supplied,
+.Nm
+will open the timeline to the latest leaf on the trunk of the repository
+tree.  Note that this option also accepts
+.Lk https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki "Fossil's Special Tags"
+.It Fl h , -help
+Display timeline command help and usage information then exit.
+.It Fl n , -limit Ar n
+Limit the timeline to
+.Ar n
+latest commits.
+By default,
+.Nm
+will load the entire history of the repository's local checkout.
+Negative values are a no-op.
+.It Fl t , -type Ar type
+Only display
+.Ar type
+commits. Valid
+.Ar type
+values are as follows:
+.Bl -column YXZ description
+.Sy ci Ta check-in
+.Sy w Ta wiki
+.Sy t Ta ticket
+.Sy e Ta technote
+.Sy f Ta forum post
+.El
+.Pp
+By default, when this option is not supplied,
+.Nm
+will indiscriminately load all commits irrespective of
+.Ar type .
+Note that this is a repeatable flag.
+.It Fl u , -username Ar user
+Only display commits authored by
+.Ar user .
+.It Fl z , -utc
+Use Coordinated Universal Time (UTC) rather than local time when
+displaying commit dates and timestamps.
+.El
+.Pp
+The key bindings for
+.Cm fnc timeline
+are as follows:
+.Bl -tag -width Ds
+.It Cm Arrow-down, j, >, \&.
+Move selection cursor down the timeline.
+.It Cm Arrow-up, k, <, \&,
+Move selection cursor up the timeline.
+.It Cm Ctrl+f, Page-down
+Move selection cursor one page down the timeline.
+.It Cm Ctrl+b, Page-up
+Move selection cursor one page up the timeline.
+.It Cm Enter, Space
+Open a
+.Cm diff
+view displaying the changeset of the currently selected commit.
+.It Cm /
+Prompt to enter a search term to begin searching for commits matching
+the pattern provided.  The search term is an extended regular expression,
+which is cross-referenced against a commit's comment, the username of
+its author, branch, and UUID SHA1 or SHA3 hash.  See
+.Xr re_format 7
+for regular expression syntax.
+.It Cm n
+Find the next commit that matches the current search term.  The search
+will continue until either a match is found or the earliest commit on
+the timeline is consumed.
+.It Cm N
+Find the previous commit that matches the current search term.  The
+search will continue until either a match is found or the latest commit
+on the timeline is consumed.
+.El
+.It Cm diff Oo Fl c | -no-colour Oc Oo Fl h | -help Oc Oo Fl i | -invert \
+Oc Oo Fl w | -whitespace Oc Oo Fl x | -context Ar n Oc \
+Ar artifact1 Ar artifact2
+Display the differences between two repository artifacts.  Both
+.Ar artifact1
+and
+.Ar artifact2
+must be of the same type, which is expected to be: either (a unique
+abbreviated prefix of) a file or commit artifact UUID SHA1 or SHA3 hash;
+symbolic branch name; or ISO 8601 formatted date.
+.Pp
+Options for
+.Cm fnc diff
+are as follows:
+.Bl -tag -width Ds
+.It Fl c , -no-colour
+Disable coloured diff output, which is enabled by default on supported
+terminals. Colour can also be toggled on and off by pressing the
+.Sy c
+key in diff view when this option is not supplied.
+.It Fl h | -help
+Display diff command help and usage information then exit.
+.It Fl i | -invert
+Invert the difference between artifacts when displaying the diff.
+.It Fl w | -whitespace
+Ignore whitespace-only changes when displaying the diff.
+.It Fl x | -context Ar n
+Set
+.Ar n
+context lines to be shown in the diff.  By default, 5 context lines are
+shown.
+.El
+.Pp
+The key bindings for
+.Cm fnc diff
+are as follows:
+.Bl -tag -width Ds
+.It Cm c
+Toggle coloured diff output.
+.Nm
+will default to displaying changes and diff metadata in colour.
+.It Cm i
+Toggle inversion of diff output.
+.It Cm v
+Toggle verbosity of diff output. By default,
+.Nm
+will display the entire content of newly added or deleted files.
+.It Cm w
+Toggle display of whitespace-only changes in diff output.
+.It Cm Arrow-down, j
+Scroll down one line of diff output.
+.It Cm Arrow-up, k
+Scroll up one line of diff output.
+.It Cm Ctrl+f, Page-down
+Scroll down one page of diff output.
+.It Cm Ctrl+b, Page-up
+Scroll up one page of diff output.
+.It Cm \&-, \&_
+Decrease the number of context lines shown in diff output.
+.It Cm \&=, \&+
+Increase the number of context lines shown in diff output.
+.It Cm Ctrl+k, K, <, \&,
+Move up the
+.Cm timeline
+to the previous (i.e., more recent) commit and display its diff.
+.It Cm Ctrl+j, J, >, \&.
+Move down the
+.Cm timeline
+to the next (i.e., earlier) commit and display its diff.
+.It Cm /
+Prompt to enter a search term to begin searching the diff output for
+lines matching the pattern provided.  The search term is an extended
+regular expression, which is documented in
+.Xr re_format 7 .
+.It Cm n
+Find the next line which matches the current search term.
+.It Cm N
+Find the previous line which matches the current search term.
+.El
+.It Cm blame Oo Fl c | -commit Ar hash Oc Ar file
+Show commit attribution history for each line of the specified
+.Ar file .
+.Pp
+The key bindings for
+.Cm fnc blame
+are as follows:
+.Bl -tag -width Ds
+.It Cm NYI
+Not yet implemented.
+.El
+.Pp
+The options for
+.Cm fnc blame
+are as follows:
+.Bl -tag -width Ds
+.It Fl c , -commit Ar hash
+Open the timeline from the commit identified by
+.Ar hash .
+The expected argument is either the name of a branch, which will resolve
+to the latest commit on the given branch, or (a unique abbreviated
+prefix of) a valid commit UUID SHA1 or SHA3 hash.
+.El
+.El
+.Sh EXIT STATUS
+.Ex -std fnc
+.Sh SEE ALSO
+.Xr fossil 1 ,
+.Xr re_format 7
+.Sh AUTHOR
+.An Mark Jamsek Aq Mt mark@jamsek.com
