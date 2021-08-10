@@ -1184,6 +1184,21 @@ int fcli_fingerprint_check(bool reportImmediately){
   return rc;
 }
 
+char const * fcli_progname(){
+  if(!fcli.appName || !*fcli.appName) return NULL;
+  char const * z = fcli.appName;
+  char const * zEnd = z + fsl_strlen(z) - 1;
+  for( ; zEnd > z; --zEnd ){
+    switch((int)*zEnd){
+      case (int)'/':
+      case (int)'\\':
+        return zEnd+1;
+      default: break;
+    }
+  }
+  return zEnd;
+}
+
 #undef FCLI_V3
 #undef fcli_empty_m
 #undef fcli__error

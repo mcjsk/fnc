@@ -1031,6 +1031,14 @@ FSL_EXPORT int fcli_args_to_vfile_ids(fsl_id_bag *tgt, fsl_id_t vid,
 */
 FSL_EXPORT int fcli_fingerprint_check(bool reportImmediately);
 
+/**
+   Returns the "tail" part of the argv[0] string which was passed to
+   fcli_setup() or fcli_setup2(), or NULL if neither of those have yet
+   been called. The "tail" part is the part immediately after the
+   final '/' or '\\' character.
+*/
+FSL_EXPORT char const * fcli_progname();
+
 #if defined(__cplusplus)
 } /*extern "C"*/
 #endif
