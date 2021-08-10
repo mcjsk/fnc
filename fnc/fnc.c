@@ -16,6 +16,18 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+/* This _POSIX_C_SOURCE bit really belongs in a config.h, but in the
+   same of expedience...
+*/
+#if !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 199309L
+/* Needed for sigaction(), sigemptyset() on Linux. */
+#endif
+#if !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE
+/* Needed for strsep() on glibc >= 2.19. */
+#endif
+
 #include <sys/queue.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
@@ -59,7 +71,9 @@
 /* Utility macros. */
 #define MIN(a, b)	(((a) < (b)) ? (a) : (b))
 #define MAX(a, b)	(((a) > (b)) ? (a) : (b))
-#define CTRL(key)	((key) & 037)	/* CTRL+<key> input. */
+#if !defined(CTRL)
+#  define CTRL(key)	((key) & 037)	/* CTRL+<key> input. */
+#endif
 #define nitems(a)	(sizeof((a)) / sizeof((a)[0]))
 #define STRINGIFYOUT(s)	#s
 #define STRINGIFY(s)	STRINGIFYOUT(s)
@@ -73,6 +87,10 @@
 /* Portability macros. */
 #ifdef __OpenBSD__
 #define strtol(s, p, b)	strtonum(s, INT_MIN, INT_MAX, (const char **)p)
+#endif
+
+#if !defined(__dead)
+#define __dead
 #endif
 
 __dead void		 usage(void);
