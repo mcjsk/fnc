@@ -549,7 +549,7 @@ end:
 			rc = 0;
 		else {
 			fsl_error_set(&e, rc, NULL);
-			fsl_fprintf(stderr, "%s: %s %d\n", getprogname(),
+			fsl_fprintf(stderr, "%s: %s %d\n", fcli_progname(),
 			    fsl_rc_cstr(rc), rc);
 			fsl_fprintf(stderr, "-> %s\n", e.msg.mem);
 		}
@@ -3621,7 +3621,7 @@ usage(void)
 	fcli_command_help(fnc_init.cmd_args, false);
 	fsl_fprintf(f, "[usage]\n\n%s\n\n%s\n\n%s\n\n  note: %s "
 	    "with no args defaults to the timeline command.\n\n",
-	    usage_timeline(), usage_diff(), usage_blame(), getprogname());
+	    usage_timeline(), usage_diff(), usage_blame(), fcli_progname());
 
 	exit(fnc_init.err);
 }
@@ -3632,7 +3632,7 @@ usage_timeline(void)
 	return fsl_mprintf(" %s timeline [-T tag] [-b branch] [-c hash]"
 	    " [-h|--help] [-n n] [-t type] [-u user] [-z|--utc]\n"
 	    "  e.g.: %s timeline --type ci -u jimmy ",
-	    getprogname(), getprogname());
+	    fcli_progname(), fcli_progname());
 }
 
 const char *
@@ -3641,7 +3641,7 @@ usage_diff(void)
 	return fsl_mprintf(" %s diff [-h|--help] [-c|--no-colour] [-i|--invert]"
 	    " [-w|--whitespace] [-x|--context lines] artifact1 artifact2\n"
 	    "  e.g.: %s diff --context 3 d34db33f c0ff33",
-	    getprogname(), getprogname());
+	    fcli_progname(), fcli_progname());
 }
 
 const char *
@@ -3649,7 +3649,7 @@ usage_blame(void)
 {
 	return fsl_mprintf(" %s blame [-h|--help] [-c hash] artifact\n"
 	    "  e.g.: %s blame -c d34db33f src/foo.c" ,
-	    getprogname(), getprogname());
+	    fcli_progname(), fcli_progname());
 }
 
 static int
@@ -3658,7 +3658,7 @@ cmd_diff(fcli_command const *argv)
 	/* Not yet implemened. */
 	f_out("%s diff can not yet be called from the command line;\naccess "
 	"the diff view by selecting a commit from within the timeline.\n",
-	getprogname());
+	fcli_progname());
 	return FSL_RC_NYI;
 }
 
@@ -3666,13 +3666,13 @@ static int
 cmd_blame(fcli_command const *argv)
 {
 	/* Not yet implemened. */
-	f_out("%s blame is not yet implemented.\n", getprogname());
+	f_out("%s blame is not yet implemented.\n", fcli_progname());
 	return FSL_RC_NYI;
 }
 
 static void
 fnc_show_version(void)
 {
-	printf("%s %s\n", getprogname(), PRINT_VERSION);
+	printf("%s %s\n", fcli_progname(), PRINT_VERSION);
 }
 
