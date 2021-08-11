@@ -19,7 +19,7 @@
 /* This _POSIX_C_SOURCE bit really belongs in a config.h, but in the
    same of expedience...
 */
-#if !defined(_POSIX_C_SOURCE)
+#if defined __linux__ && !defined(_POSIX_C_SOURCE)
 #define _POSIX_C_SOURCE 199309L
 /* Needed for sigaction(), sigemptyset() on Linux. */
 #endif
@@ -91,6 +91,14 @@
 
 #if !defined(__dead)
 #define __dead
+#endif
+
+#ifndef TAILQ_FOREACH_SAFE
+/* Rewrite of OpenBSD 6.9 sys/queue.h for Linux builds. */
+#define TAILQ_FOREACH_SAFE(var, head, field, tmp)			\
+	for ((var) = ((head)->tqh_first);				\
+		(var) != (NULL) && ((tmp) = TAILQ_NEXT(var, field), 1);	\
+		(var) = (tmp))
 #endif
 
 __dead void		 usage(void);
