@@ -19,14 +19,21 @@
 /* This _POSIX_C_SOURCE bit really belongs in a config.h, but in the
    same of expedience...
 */
-#if defined __linux__ && !defined(_POSIX_C_SOURCE)
-#define _POSIX_C_SOURCE 199309L
-/* Needed for sigaction(), sigemptyset() on Linux. */
-#endif
-#if !defined(_DEFAULT_SOURCE)
-#define _DEFAULT_SOURCE
+#if defined __linux__
+#  if !defined(_XOPEN_SOURCE)
+#    define _XOPEN_SOURCE 700
+/* 
+ _POSIX_C_SOURCE >= 199309L needed for sigaction(), sigemptyset() on Linux,
+ but glibc docs claim that _XOPEN_SOURCE>=700 has the same effect, PLUS
+ we need _XOPEN_SOURCE>=500 for ncurses wide-char APIs on linux.
+*/
+#  endif
+#  if !defined(_DEFAULT_SOURCE)
+#    define _DEFAULT_SOURCE
 /* Needed for strsep() on glibc >= 2.19. */
+#  endif
 #endif
+
 
 #include <sys/queue.h>
 #include <sys/stat.h>
@@ -385,7 +392,7 @@ struct fnc_diff_view_state {
 	int				 matched_line;
 	int				 current_line;
 	size_t				 nlines;
-	fpos_t				*line_offsets;
+	off_t				*line_offsets;
 	bool				 eof;
 	bool				 ignore_ws;
 	bool				 invert;
@@ -474,7 +481,7 @@ static void		 show_diff_status(struct fnc_view *);
 static int		 create_diff(struct fnc_diff_view_state *);
 static int		 create_changeset(struct fnc_commit_artifact *);
 static int		 write_commit_meta(struct fnc_diff_view_state *);
-static int		 add_line_offset(fpos_t **, size_t *, fpos_t);
+static int		 add_line_offset(off_t **, size_t *, off_t);
 static int		 diff_commit(fsl_buffer *, struct fnc_commit_artifact *,
 			    int, bool, int, int);
 static int		 diff_non_checkin(fsl_buffer *, struct
@@ -976,7 +983,7 @@ show_timeline_view(struct fnc_view *view)
 	struct fnc_tl_view_state	*s = &view->state.timeline;
 	int				 rc = 0;
 
-	if (s->thread_id == NULL) {
+	if (!s->thread_id) {
 		rc = pthread_create(&s->thread_id, NULL, tl_producer_thread,
 		    &s->thread_cx);
 		if (rc)
@@ -2181,7 +2188,7 @@ join_tl_thread(struct fnc_tl_view_state *s)
 		if ((rc = pthread_mutex_lock(&fnc_mutex)))
 			return fsl_cx_err_set(f, rc, "mutex lock fail");
 
-		s->thread_id = NULL;
+		s->thread_id = 0;
 	}
 
 	if ((rc = pthread_cond_destroy(&s->thread_cx.commit_consumer)))
@@ -2370,11 +2377,11 @@ create_diff(struct fnc_diff_view_state *s)
 	fsl_cx	*f = fcli_cx();
 	FILE	*fout = NULL;
 	char	*line, *st = NULL;
-	fpos_t	 lnoff = 0;
+	off_t	 lnoff = 0;
 	int	 n, rc = 0;
 
 	free(s->line_offsets);
-	s->line_offsets = fsl_malloc(sizeof(fpos_t));
+	s->line_offsets = fsl_malloc(sizeof(off_t));
 	if (s->line_offsets == NULL)
 		return fsl_cx_err_set(f, FSL_RC_OOM, "fsl_malloc");
 	s->nlines = 0;
@@ -2461,10 +2468,10 @@ create_changeset(struct fnc_commit_artifact *commit)
 	while ((rc = fsl_stmt_step(st)) == FSL_RC_STEP_ROW) {
 		struct fsl_file_artifact *fdiff = NULL;
 		const char *path, *oldpath, *olduuid, *uuid;
-		int perm;
+		//int perm;
 
 		path = fsl_stmt_g_text(st, 0, NULL);	/* Current filename. */
-		perm = fsl_stmt_g_int32(st, 1);		/* File permissions. */
+		//perm = fsl_stmt_g_int32(st, 1);		/* File permissions. */
 		olduuid = fsl_stmt_g_text(st, 2, NULL);	/* UUID before change */
 		uuid = fsl_stmt_g_text(st, 3, NULL);	/* UUID after change. */
 		oldpath = fsl_stmt_g_text(st, 4, NULL);	/* Old name, if chngd */
@@ -2499,7 +2506,7 @@ write_commit_meta(struct fnc_diff_view_state *s)
 {
 	char		*line = NULL, *st = NULL;
 	fsl_size_t	 idx;
-	fpos_t		 lnoff = 0;
+	off_t		 lnoff = 0;
 	int		 n, rc = 0;
 
 	rc = add_line_offset(&s->line_offsets, &s->nlines, 0);
@@ -2588,10 +2595,10 @@ end:
 }
 
 static int
-add_line_offset(fpos_t **line_offsets, size_t *nlines, fpos_t off)
+add_line_offset(off_t **line_offsets, size_t *nlines, off_t off)
 {
 	fsl_cx	*f = fcli_cx();
-	fpos_t	*p;
+	off_t	*p;
 
 	p = fsl_realloc(*line_offsets, (*nlines + 1) * sizeof(off));
 	if (p == NULL)
@@ -3028,7 +3035,7 @@ write_diff(struct fnc_view *view, const char *headln)
 	char				*line;
 	size_t				 linesz = 0;
 	ssize_t				 linelen;
-	fpos_t				 line_offset;
+	off_t				 line_offset;
 	int				 wstrlen;
 	int				 max_lines = view->nlines;
 	int				 nlines = s->nlines;
@@ -3036,9 +3043,9 @@ write_diff(struct fnc_view *view, const char *headln)
 	int				 match = -1;
 
 	line_offset = s->line_offsets[s->first_line_onscreen - 1];
-	if (fsetpos(s->f, &line_offset))
+	if (fseeko(s->f, line_offset, SEEK_SET))
 		return fsl_cx_err_set(f, fsl_errno_to_rc(errno, FSL_RC_ERROR),
-		    "fsetpos");
+		    "fseeko");
 
 	/*
 	 * werase() fails to properly clear the parent screen when viewing
@@ -3424,7 +3431,7 @@ diff_search_next(struct fnc_view *view)
 	}
 
 	while (1) {
-		fpos_t offset;
+		off_t offset;
 
 		if (start_ln <= 0 || start_ln > (int)s->nlines) {
 			if (s->matched_line == 0) {

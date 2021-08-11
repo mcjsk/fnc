@@ -16,9 +16,14 @@ endif
 # To build fnc, we need the curses and pthread libraries; not sure what
 # this requires on Linux, but the following covers OpenBSD and macOS.
 PLATFORM := $(shell sh -c 'uname 2>/dev/null || echo Unknown')
-ifneq ($(filter $(PLATFORM),Darwin OpenBSD),)
+LIBCURSES := -lcurses
+ifneq ($(filter $(PLATFORM),Linux),)
+  LIBCURSES := -lncursesw
+endif
+
+ifneq ($(filter $(PLATFORM),Darwin OpenBSD Linux),)
   CPPFLAGS += -D_XOPEN_SOURCE_EXTENDED
-  LIBFOSSIL.LDFLAGS += -lpanel -lcurses -lutil -lz -lpthread
+  LIBFOSSIL.LDFLAGS += -lpanel $(LIBCURSES) -lutil -lz -lpthread
 endif
 
 TEST_BINS_LDFLAGS := $(LIBFOSSIL.LDFLAGS) $(EXTRA_LIBS) @SH_LINKFLAGS@
