@@ -2366,7 +2366,16 @@ create_diff(struct fnc_diff_view_state *s)
 	}
 	s->f = fout;
 
-	create_changeset(s->selected_commit);
+	if (!fsl_strcmp(s->selected_commit->type, "checkin")) {
+		rc = create_changeset(s->selected_commit);
+		if (rc) {
+			rc = fsl_cx_err_set(f, FSL_RC_DB, "create_changeset");
+			goto end;
+		}
+	} else
+		diff_non_checkin(&s->buf, s->selected_commit, s->diff_flags,
+		    s->context, s->sbs);
+
 	write_commit_meta(s);
 
 	/*
@@ -2378,16 +2387,14 @@ create_diff(struct fnc_diff_view_state *s)
 	    s->selected_commit->puuid != NULL) {
 		diff_commit(&s->buf, s->selected_commit, s->diff_flags,
 		    s->verbose, s->context, s->sbs);
-	} else
-		diff_non_checkin(&s->buf, s->selected_commit, s->diff_flags,
-		    s->context, s->sbs);
+	}
 
 	/*
 	 * Parse the diff buffer line-by-line to record byte offsets of each
 	 * line for scrolling and searching in diff view.
 	 */
 	st = fsl_strdup(fsl_buffer_str(&s->buf));
-	lnoff = (s->line_offsets)[s->nlines -1];
+	lnoff = (s->line_offsets)[s->nlines - 1];
 	while ((line = strsep(&st, "\n")) != NULL) {
 		n = fsl_fprintf(s->f, "%s\n", line);
 		lnoff += n;
@@ -2465,6 +2472,10 @@ create_changeset(struct fnc_commit_artifact *commit)
 
 	commit->changeset = changeset;
 	fsl_stmt_cached_yield(st);
+
+	if (rc == FSL_RC_STEP_DONE)
+		rc = 0;
+
 	return rc;
 }
 
@@ -2558,6 +2569,11 @@ write_commit_meta(struct fnc_diff_view_state *s)
 end:
 	free(st);
 	free(line);
+	if (rc) {
+		free(*&s->line_offsets);
+		s->line_offsets = NULL;
+		s->nlines = 0;
+	}
 	return rc;
 }
 
@@ -2567,7 +2583,7 @@ add_line_offset(off_t **line_offsets, size_t *nlines, off_t off)
 	fsl_cx	*f = fcli_cx();
 	off_t	*p;
 
-	p = fsl_realloc(*line_offsets, (*nlines + 1) * sizeof(off));
+	p = fsl_realloc(*line_offsets, (*nlines + 1) * sizeof(off_t));
 	if (p == NULL)
 		return fsl_cx_err_set(f, FSL_RC_OOM, "fsl_realloc");
 	*line_offsets = p;
@@ -2742,16 +2758,46 @@ diff_non_checkin(fsl_buffer *buf, struct fnc_commit_artifact *commit,
 		goto end;
 	}
 
+	if (d->type == FSL_SATYPE_CONTROL) {
+		for (idx = 0; idx < d->T.used; ++idx) {
+			fsl_card_T *ctl = d->T.list[idx];
+			fsl_buffer_appendf(buf, "Tag %d ", idx + 1);
+			switch (ctl->type) {
+			case FSL_TAGTYPE_CANCEL:
+				fsl_buffer_append(buf, "[CANCEL]", -1);
+				break;
+			case FSL_TAGTYPE_ADD:
+				fsl_buffer_append(buf, "[ADD]", -1);
+				break;
+			case FSL_TAGTYPE_PROPAGATING:
+				fsl_buffer_append(buf, "[PROPAGATE]", -1);
+				break;
+			default:
+				break;
+			}
+			if (ctl->uuid)
+				fsl_buffer_appendf(buf, "\ncheckin %s",
+				    ctl->uuid);
+			fsl_buffer_appendf(buf, "\n%s", ctl->name);
+			if (!fsl_strcmp(ctl->name, "branch"))
+				commit->branch = fsl_strdup(ctl->value);
+			if (ctl->value)
+				fsl_buffer_appendf(buf, " -> %s", ctl->value);
+			fsl_buffer_append(buf, "\n\n", 2);
+		}
+		goto end;
+	}
 	/*
-	 * If not a ticket, we may have a parent commit to diff against. If
-	 * not, append the entire wiki card content.
+	 * If neither a ticket nor control artifact, we assume it's a wiki, so
+	 * check if it has a parent commit to diff against. If not, append the
+	 * entire wiki card content.
 	 */
 	fsl_buffer_append(&wiki, d->W.mem, d->W.used);
 	if (commit->puuid == NULL) {
 		if (d->P.used > 0)
 			commit->puuid = fsl_strdup(d->P.list[0]);
 		else {
-			fsl_buffer_append(buf, d->W.mem, d->W.used);
+			fsl_buffer_copy(&wiki, buf);
 			goto end;
 		}
 	}
