@@ -451,7 +451,7 @@ static int		 build_commits(struct fnc_tl_thread_cx *);
 static int		 signal_tl_thread(struct fnc_view *, int);
 static int		 draw_commits(struct fnc_view *);
 static void		 parse_emailaddr_username(char **);
-static int		 formatln(wchar_t **, int *, const char *, int, int);
+static int		 formatln(char **, int *, const char *, int, int);
 static int		 multibyte_to_wchar(const char *, wchar_t **, size_t *);
 static int		 write_commit_line(struct fnc_view *,
 			    struct fnc_commit_artifact *, int);
@@ -1277,9 +1277,8 @@ draw_commits(struct fnc_view *view)
 	fsl_cx				*f = fcli_cx();
 	char				*headln = NULL, *idxstr = NULL;
 	char				*branch = NULL, *type = NULL;
-	char				*uuid = NULL;
-	wchar_t				*wcstr;
-	int				 ncommits = 0, rc = 0, wstrlen = 0;
+	char				*uuid = NULL, *strfmt = NULL;
+	int				 ncommits = 0, rc = 0, fmtlen = 0;
 	int				 max_usrlen = -1;
 
 	if (s->selected_commit && !(view->searching != SEARCH_DONE &&
@@ -1330,7 +1329,7 @@ draw_commits(struct fnc_view *view)
 	}
 	if (SPINNER[++tcx->spin_idx] == '\0')
 		tcx->spin_idx = 0;
-	rc = formatln(&wcstr, &wstrlen, headln, view->ncols, 0);
+	rc = formatln(&strfmt, &fmtlen, headln, view->ncols, 0);
 	if (rc)
 		goto end;
 
@@ -1338,21 +1337,20 @@ draw_commits(struct fnc_view *view)
 
 	if (screen_is_shared(view))
 		wstandout(view->window);
-	waddwstr(view->window, wcstr);
-	while (wstrlen < view->ncols) {
+	waddstr(view->window, strfmt);
+	while (fmtlen < view->ncols) {
 		waddch(view->window, ' ');
-		++wstrlen;
+		++fmtlen;
 	}
 	if (screen_is_shared(view))
 		wstandend(view->window);
-	fsl_free(wcstr);
+	fsl_free(strfmt);
 	if (view->nlines <= 1)
 		goto end;
 
 	/* Parse commits to be written on screen for the longest username. */
 	entry = s->first_commit_onscreen;
 	while (entry) {
-		wchar_t		*usr_wcstr;
 		char		*user;
 		int		 usrlen;
 		if (ncommits >= view->nlines - 1)
@@ -1364,10 +1362,10 @@ draw_commits(struct fnc_view *view)
 		}
 		if (strpbrk(user, "<@>") != NULL)
 			parse_emailaddr_username(&user);
-		rc = formatln(&usr_wcstr, &usrlen, user, view->ncols, 0);
+		rc = formatln(&strfmt, &usrlen, user, view->ncols, 0);
 		if (max_usrlen < usrlen)
 			max_usrlen = usrlen;
-		fsl_free(usr_wcstr);
+		fsl_free(strfmt);
 		fsl_free(user);
 		++ncommits;
 		entry = TAILQ_NEXT(entry, entries);
@@ -1416,8 +1414,22 @@ parse_emailaddr_username(char **username)
 	*username = usr;
 }
 
+/*
+ * Although we've removed wide char support, this function is still used to:
+ *
+ *   (a) truncate comment strings for the commit summary at the first newline;
+ *   (b) compute how many columns on the screen each character will occupy; and
+ *   (c) ensure formatted lines do not exceed the available column width.
+ *
+ * wcwidth() is reportedly the only accurate way of accomplishing (b)[0]; as
+ * such, we first convert src to a wchar_t *, then use wcwidth() to measure
+ * the columnar width of each character to satisfy (b) and (c). While (c) is
+ * self-explanatory, (b) is so we always know where the cursor is on the screen.
+ * When finished, use wcstombs() to put the formatted line as a char * in dest.
+ * [0]: http://utf8everywhere.org/#myth.strlen
+ */
 static int
-formatln(wchar_t **ptr, int *wstrlen, const char *mbstr, int column_limit,
+formatln(char **dest, int *destlen, const char *src, int column_limit,
     int start_column)
 {
 	fsl_cx		*f = fcli_cx();
@@ -1425,10 +1437,10 @@ formatln(wchar_t **ptr, int *wstrlen, const char *mbstr, int column_limit,
 	size_t		 i, wlen;
 	int		 rc = 0, cols = 0;
 
-	*ptr = NULL;
-	*wstrlen = 0;
+	*dest = NULL;
+	*destlen = 0;
 
-	rc = multibyte_to_wchar(mbstr, &wline, &wlen);
+	rc = multibyte_to_wchar(src, &wline, &wlen);
 	if (rc)
 		return rc;
 
@@ -1456,13 +1468,11 @@ formatln(wchar_t **ptr, int *wstrlen, const char *mbstr, int column_limit,
 			cols += width;
 			i++;
 		} else if (width == -1) {
-			if (wline[i] == L'\t') {
+			if (wline[i] == L'\t')
 				width = TABSIZE -
-				((cols + column_limit) % TABSIZE);
-			} else {
+				    ((cols + column_limit) % TABSIZE);
+			else
 				width = 1;
-				wline[i] = L'.';
-			}
 			if (cols + width > column_limit)
 				break;
 			cols += width;
@@ -1473,13 +1483,14 @@ formatln(wchar_t **ptr, int *wstrlen, const char *mbstr, int column_limit,
 		}
 	}
 	wline[i] = L'\0';
-	if (wstrlen)
-		*wstrlen = cols;
+	*dest = calloc((COLS), sizeof(**dest));
+	wcstombs(*dest, wline, COLS);
+	if (destlen)
+		*destlen = cols;
 end:
+	fsl_free(wline);
 	if (rc)
-		free(wline);
-	else
-		*ptr = wline;
+		free(*dest);
 	return rc;
 }
 
@@ -1527,7 +1538,7 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
     int max_usrlen)
 {
 	fsl_cx		*f = fcli_cx();
-	wchar_t		*usr_wcstr = NULL, *wcomment = NULL;
+	char		*strfmt = NULL;
 	char		*comment = NULL, *date = NULL, *pad = NULL;
 	char		*eol = NULL, *user = NULL;
 	size_t		 i = 0;
@@ -1560,11 +1571,13 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 		goto end;
 	if (strpbrk(user, "<@>") != NULL)
 		parse_emailaddr_username(&user);
-	rc = formatln(&usr_wcstr, &usrlen, user, view->ncols - col_pos,
+	rc = formatln(&strfmt, &usrlen, user, view->ncols - col_pos,
 	    col_pos);
 	if (rc)
 		goto end;
-	waddwstr(view->window, usr_wcstr);
+	waddstr(view->window, strfmt);
+	fsl_free(strfmt);
+	strfmt = NULL;
 	pad = fsl_mprintf("%*s",  max_usrlen - usrlen + 2, " ");
 	waddstr(view->window, pad);
 	col_pos += (max_usrlen + 2);
@@ -1581,11 +1594,19 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	if (eol)
 		*eol = '\0';
 	ncols_avail = view->ncols - col_pos;
-	rc = formatln(&wcomment, &commentlen, comment, ncols_avail, col_pos);
+	rc = formatln(&strfmt, &commentlen, comment, ncols_avail, col_pos);
 	if (rc)
 		goto end;
-	waddwstr(view->window, wcomment);
+	waddstr(view->window, strfmt);
 	col_pos += commentlen;
+	/*
+	 * Shouldn't be needed despite removal of wchar support because
+	 * we're still using formatln() to track character-column width;
+	 * however, I'm not entirely convinced formatln() covers all cases of
+	 * the weird and wonderful characters we might find in commit comments.
+	 * It was an arduous process fine tuning it to pass all current tests.
+	 */
+	/* getyx(view->window, x, col_pos); */	/* DEBUG */
 	while (col_pos < view->ncols) {
 		waddch(view->window, ' ');
 		++col_pos;
@@ -1593,10 +1614,9 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 end:
 	fsl_free(date);
 	fsl_free(user);
-	fsl_free(usr_wcstr);
+	fsl_free(strfmt);
 	fsl_free(pad);
 	fsl_free(comment);
-	fsl_free(wcomment);
 	return rc;
 }
 
@@ -3031,12 +3051,12 @@ write_diff(struct fnc_view *view, const char *headln)
 	fsl_cx				*f = fcli_cx();
 	regmatch_t			*regmatch = &view->regmatch;
 	struct fnc_colour		*c = NULL;
-	wchar_t				*wcstr;
+	char				*strfmt;
 	char				*line;
 	size_t				 linesz = 0;
 	ssize_t				 linelen;
 	off_t				 line_offset;
-	int				 wstrlen;
+	int				 fmtlen;
 	int				 max_lines = view->nlines;
 	int				 nlines = s->nlines;
 	int				 rc = 0, nprintln = 0;
@@ -3061,16 +3081,18 @@ write_diff(struct fnc_view *view, const char *headln)
 		    1 + s->current_line), nlines, headln)) == NULL)
 			return fsl_cx_err_set(f, fsl_errno_to_rc(errno,
 			    FSL_RC_ERROR), "mprintf");
-		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0);
+		rc = formatln(&strfmt, &fmtlen, line, view->ncols, 0);
 		if (rc)
 			goto end;
 
 		if (screen_is_shared(view))
 			wstandout(view->window);
-		waddwstr(view->window, wcstr);
+		waddstr(view->window, strfmt);
+		fsl_free(strfmt);
+		strfmt = NULL;
 		if (screen_is_shared(view))
 			wstandend(view->window);
-		if (wstrlen <= view->ncols - 1)
+		if (fmtlen <= view->ncols - 1)
 			waddch(view->window, '\n');
 
 		if (max_lines <= 1)
@@ -3099,21 +3121,21 @@ write_diff(struct fnc_view *view, const char *headln)
 			wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 		if (s->first_line_onscreen + nprintln == s->matched_line &&
 		    regmatch->rm_so >= 0 && regmatch->rm_so < regmatch->rm_eo) {
-			rc = write_matched_line(&wstrlen, line, view->ncols, 0,
+			rc = write_matched_line(&fmtlen, line, view->ncols, 0,
 			    view->window, regmatch);
 			if (rc)
 				goto end;
 		} else {
-			rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0);
+			rc = formatln(&strfmt, &fmtlen, line, view->ncols, 0);
 			if (rc)
 				goto end;
-			waddwstr(view->window, wcstr);
+			waddstr(view->window, strfmt);
 		}
 		if (c) {
 			wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
 			c = NULL;
 		}
-		if (wstrlen <= view->ncols - 1)
+		if (fmtlen <= view->ncols - 1)
 			waddch(view->window, '\n');
 		++nprintln;
 	}
@@ -3135,7 +3157,7 @@ write_diff(struct fnc_view *view, const char *headln)
 		wstandend(view->window);
 	}
 end:
-	free(wcstr);
+	free(strfmt);
 	free(line);
 	return rc;
 }
@@ -3179,9 +3201,9 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
     int start_column, WINDOW *window, regmatch_t *regmatch)
 {
 	fsl_cx		*f = fcli_cx();
-	wchar_t		*wcstr;
+	char		*strfmt;
 	char		*s;
-	int		 wstrlen;
+	int		 fmtlen;
 	int		 rc = 0;
 
 	*col_pos = 0;
@@ -3191,16 +3213,16 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 	if (s == NULL)
 		return fsl_cx_err_set(f, FSL_RC_OOM, "fsl_strndup");
 
-	rc = formatln(&wcstr, &wstrlen, s, ncols_avail, start_column);
+	rc = formatln(&strfmt, &fmtlen, s, ncols_avail, start_column);
 	if (rc) {
 		free(s);
 		return rc;
 	}
-	waddwstr(window, wcstr);
-	free(wcstr);
+	waddstr(window, strfmt);
+	free(strfmt);
 	free(s);
-	ncols_avail -= wstrlen;
-	*col_pos += wstrlen;
+	ncols_avail -= fmtlen;
+	*col_pos += fmtlen;
 
 	/* If not EOL, copy matching string & write to screen with highlight. */
 	if (ncols_avail > 0) {
@@ -3211,29 +3233,29 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 			free(s);
 			return rc;
 		}
-		rc = formatln(&wcstr, &wstrlen, s, ncols_avail, start_column);
+		rc = formatln(&strfmt, &fmtlen, s, ncols_avail, start_column);
 		if (rc) {
 			free(s);
 			return rc;
 		}
 		wattr_on(window, A_STANDOUT, NULL);
-		waddwstr(window, wcstr);
+		waddstr(window, strfmt);
 		wattr_off(window, A_STANDOUT, NULL);
-		free(wcstr);
+		free(strfmt);
 		free(s);
-		ncols_avail -= wstrlen;
-		*col_pos += wstrlen;
+		ncols_avail -= fmtlen;
+		*col_pos += fmtlen;
 	}
 
 	/* Write the rest of the line if not yet at EOL. */
 	if (ncols_avail > 0 && fsl_strlen(line) > (fsl_size_t)regmatch->rm_eo) {
-		rc = formatln(&wcstr, &wstrlen,
-		line + regmatch->rm_eo, ncols_avail, start_column);
+		rc = formatln(&strfmt, &fmtlen, line + regmatch->rm_eo,
+		    ncols_avail, start_column);
 		if (rc)
 			return rc;
-		waddwstr(window, wcstr);
-		free(wcstr);
-		*col_pos += wstrlen;
+		waddstr(window, strfmt);
+		free(strfmt);
+		*col_pos += fmtlen;
 	}
 
 	return rc;
