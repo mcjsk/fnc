@@ -722,7 +722,7 @@ open_timeline_view(struct fnc_view *view)
 	if (fnc_init.filter_types->nitems) {
 		fsl_buffer_appendf(&sql, " AND (");
 		for (idx = 0; idx < fnc_init.filter_types->nitems; ++idx) {
-			fsl_buffer_appendf(&sql, " eventtype='%s'%s",
+			fsl_buffer_appendf(&sql, " eventtype=%Q%s",
 			    fnc_init.filter_types->values[idx], (idx + 1) <
 			    fnc_init.filter_types->nitems ? " OR " : ")");
 			/* This produces a double-free? */
