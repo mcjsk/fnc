@@ -16,6 +16,25 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+/* This _POSIX_C_SOURCE bit really belongs in a config.h, but in the
+   same of expedience...
+*/
+#if defined __linux__
+#  if !defined(_XOPEN_SOURCE)
+#    define _XOPEN_SOURCE 700
+/* 
+ _POSIX_C_SOURCE >= 199309L needed for sigaction(), sigemptyset() on Linux,
+ but glibc docs claim that _XOPEN_SOURCE>=700 has the same effect, PLUS
+ we need _XOPEN_SOURCE>=500 for ncurses wide-char APIs on linux.
+*/
+#  endif
+#  if !defined(_DEFAULT_SOURCE)
+#    define _DEFAULT_SOURCE
+/* Needed for strsep() on glibc >= 2.19. */
+#  endif
+#endif
+
+
 #include <sys/queue.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
@@ -59,7 +78,9 @@
 /* Utility macros. */
 #define MIN(a, b)	(((a) < (b)) ? (a) : (b))
 #define MAX(a, b)	(((a) > (b)) ? (a) : (b))
-#define CTRL(key)	((key) & 037)	/* CTRL+<key> input. */
+#if !defined(CTRL)
+#  define CTRL(key)	((key) & 037)	/* CTRL+<key> input. */
+#endif
 #define nitems(a)	(sizeof((a)) / sizeof((a)[0]))
 #define STRINGIFYOUT(s)	#s
 #define STRINGIFY(s)	STRINGIFYOUT(s)
@@ -73,6 +94,18 @@
 /* Portability macros. */
 #ifdef __OpenBSD__
 #define strtol(s, p, b)	strtonum(s, INT_MIN, INT_MAX, (const char **)p)
+#endif
+
+#if !defined(__dead)
+#define __dead
+#endif
+
+#ifndef TAILQ_FOREACH_SAFE
+/* Rewrite of OpenBSD 6.9 sys/queue.h for Linux builds. */
+#define TAILQ_FOREACH_SAFE(var, head, field, tmp)			\
+	for ((var) = ((head)->tqh_first);				\
+		(var) != (NULL) && ((tmp) = TAILQ_NEXT(var, field), 1);	\
+		(var) = (tmp))
 #endif
 
 __dead void		 usage(void);
@@ -950,7 +983,7 @@ show_timeline_view(struct fnc_view *view)
 	struct fnc_tl_view_state	*s = &view->state.timeline;
 	int				 rc = 0;
 
-	if (s->thread_id == NULL) {
+	if (!s->thread_id) {
 		rc = pthread_create(&s->thread_id, NULL, tl_producer_thread,
 		    &s->thread_cx);
 		if (rc)
@@ -2155,7 +2188,7 @@ join_tl_thread(struct fnc_tl_view_state *s)
 		if ((rc = pthread_mutex_lock(&fnc_mutex)))
 			return fsl_cx_err_set(f, rc, "mutex lock fail");
 
-		s->thread_id = NULL;
+		s->thread_id = 0;
 	}
 
 	if ((rc = pthread_cond_destroy(&s->thread_cx.commit_consumer)))
@@ -2442,10 +2475,10 @@ create_changeset(struct fnc_commit_artifact *commit)
 	while ((rc = fsl_stmt_step(st)) == FSL_RC_STEP_ROW) {
 		struct fsl_file_artifact *fdiff = NULL;
 		const char *path, *oldpath, *olduuid, *uuid;
-		int perm;
+		//int perm;
 
 		path = fsl_stmt_g_text(st, 0, NULL);	/* Current filename. */
-		perm = fsl_stmt_g_int32(st, 1);		/* File permissions. */
+		//perm = fsl_stmt_g_int32(st, 1);		/* File permissions. */
 		olduuid = fsl_stmt_g_text(st, 2, NULL);	/* UUID before change */
 		uuid = fsl_stmt_g_text(st, 3, NULL);	/* UUID after change. */
 		oldpath = fsl_stmt_g_text(st, 4, NULL);	/* Old name, if chngd */
