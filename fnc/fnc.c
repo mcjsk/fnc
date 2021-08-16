@@ -649,12 +649,12 @@ init_curses(void)
 
 	initscr();
 	cbreak();
-	halfdelay(1);
 	noecho();
 	nonl();
 	intrflush(stdscr, FALSE);
 	keypad(stdscr, TRUE);
 	curs_set(0);
+	typeahead(-1);	/* Don't disrupt screen update operations. */
 
 	if (fnc_init.colour && has_colors()) {
 		start_color();
@@ -857,7 +857,6 @@ view_loop(struct fnc_view *view)
 	struct view_tailhead	 views;
 	struct fnc_view		*new_view;
 	fsl_cx			*f = fcli_cx();
-	int			 fast_refresh = 10;
 	int			 done = 0, rc = 0;
 
 	if ((rc = pthread_mutex_lock(&fnc_mutex)))
@@ -870,13 +869,8 @@ view_loop(struct fnc_view *view)
 	rc = view->show(view);
 	if (rc)
 		return rc;
-	update_panels();
-	doupdate();
-	while (!TAILQ_EMPTY(&views) && !done && !rec_sigpipe) {
-		/* Refresh fast during initialisation, then become slower. */
-		if (fast_refresh && fast_refresh-- == 0)
-			halfdelay(10);	/* Switch to once per second. */
 
+	while (!TAILQ_EMPTY(&views) && !done && !rec_sigpipe) {
 		rc = view_input(&new_view, &done, view, &views);
 		if (rc)
 			break;
@@ -1231,8 +1225,6 @@ signal_tl_thread(struct fnc_view *view, int wait)
 	fsl_cx			*f = fcli_cx();
 	int			 rc = 0;
 
-	halfdelay(1);
-
 	while (ta->ncommits_needed > 0) {
 		if (ta->timeline_end)
 			break;
@@ -1288,9 +1280,6 @@ draw_commits(struct fnc_view *view)
 		branch = fsl_strdup(s->selected_commit->commit->branch);
 		type = fsl_strdup(s->selected_commit->commit->type);
 	}
-
-	if (!s->thread_cx.ncommits_needed)
-		halfdelay(10);
 
 	if (s->thread_cx.ncommits_needed > 0) {
 		if ((idxstr = fsl_mprintf(" [%d/%d] %s",
@@ -1388,8 +1377,7 @@ draw_commits(struct fnc_view *view)
 		s->last_commit_onscreen = entry;
 		entry = TAILQ_NEXT(entry, entries);
 	}
-	update_panels();
-	doupdate();
+	draw_vborder(view);
 
 end:
 	free(branch);
@@ -1632,7 +1620,6 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 	ch = wgetch(view->window);
 	if ((rc = pthread_mutex_lock(&fnc_mutex)))
 		return fsl_cx_err_set(f, rc, "mutex lock");
-	nodelay(stdscr, TRUE);
 
 	if (rec_sigwinch || rec_sigcont) {
 		fnc_resizeterm();
@@ -2021,6 +2008,9 @@ tl_search_next(struct fnc_view *view)
 	fsl_cx				*f = fcli_cx();
 	int				 rc = 0;
 
+	if (!s->thread_cx.ncommits_needed && view->started_search)
+		halfdelay(1);
+
 	/* Show status update in timeline view. */
 	show_timeline_view(view);
 	update_panels();
@@ -2062,6 +2052,7 @@ tl_search_next(struct fnc_view *view)
 				view->search_status = (s->matched_commit ==
 				    NULL ?  SEARCH_NO_MATCH : SEARCH_COMPLETE);
 				s->search_commit = NULL;
+				cbreak();
 				return rc;
 			}
 			/*
@@ -2100,6 +2091,7 @@ tl_search_next(struct fnc_view *view)
 	}
 
 	s->search_commit = NULL;
+	cbreak();
 
 	return rc;
 }
