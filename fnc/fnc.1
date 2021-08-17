@@ -71,8 +71,8 @@ Display historical attribution of each line in the specified file.
 .Pp
 .Nm
 provides both global and command-specific options and in-app key
-bindings.  Global options are specified absent a command name; these
-options are as follows:
+bindings.  Global options are specified absent a command name, and
+are as follows:
 .Bl -tag -width 6v
 .It Fl h , -help
 Display program help and usage information then exit.
@@ -90,14 +90,14 @@ Switch focus between open views.
 .It Cm f
 Toggle the active view between fullscreen and splitscreen mode.  Note
 that
+.Nm
+will open nested views in splitscreen mode if the terminal window is
+equal to or greater than 120 columns wide.
 .It Cm Q
 Immediatey quit
 .Nm .
 .It Cm q
 Quit the active view.
-.Nm
-will automatically open a view in splitscreen if the terminal width is
-equal to or greater than 120 columns wide.
 .El
 .Pp
 Commands available to
@@ -109,12 +109,13 @@ Oo Fl c | -commit Ar hash Oc Oo Fl h | -help Oc Oo Fl n | -limit Ar n Oc \
 Oo Fl t | -type Ar type Oc Oo Fl u | -username Ar user Oc Oo Fl z | -utc Oc
 .Pp
 Display commit history of a repository.  This command must be executed
-from within or below the repository root; that is, it assumes a local
+from within or below the repository root; that is,
+.Nm
+assumes a local
 checkout is open in or above the current working directory.
 .Pp
-If no command is explicitly specified,
-.Nm
-will execute this command by default.
+If no command is explicitly specified, this command will be executed by
+default.
 .Pp
 Options for
 .Cm fnc timeline
@@ -125,10 +126,10 @@ Only display commits with T cards containing
 .Ar tag .
 By default,
 .Nm
-will indiscriminately display all commits irrespective of T card
-.Ar tag .
+will indiscriminately display all commits irrespective of which T cards
+are attached to the commit manifest.
 .It Fl b , branch Ar branch
-Display commits that reside on the specified
+Display commits that are members of the specified
 .Ar branch .
 The expected argument is the symbolic name of a branch. By default,
 .Nm
@@ -144,13 +145,15 @@ not supplied,
 .Nm
 will open the timeline to the latest leaf on the trunk of the repository
 tree.  Note that this option also accepts
-.Lk https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki "Fossil's Special Tags"
+.Lk https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki \
+"Fossil's Special Tags".
 .It Fl h , -help
 Display timeline command help and usage information then exit.
 .It Fl n , -limit Ar n
-Limit the timeline to
+Limit timeline to the
+latest
 .Ar n
-latest commits.
+commits.
 By default,
 .Nm
 will load the entire history of the repository's local checkout.
@@ -182,7 +185,7 @@ Use Coordinated Universal Time (UTC) rather than local time when
 displaying commit dates and timestamps.
 .El
 .Pp
-The key bindings for
+Key bindings for
 .Cm fnc timeline
 are as follows:
 .Bl -tag -width Ds
@@ -221,9 +224,9 @@ Display the differences between two repository artifacts.  Both
 .Ar artifact1
 and
 .Ar artifact2
-must be of the same type, which is expected to be: either (a unique
-abbreviated prefix of) a file or commit artifact UUID SHA1 or SHA3 hash;
-symbolic branch name; or ISO 8601 formatted date.
+must be of the same type, which is expected to be either (a unique
+abbreviated prefix of) a file or commit artifact UUID SHA1 or SHA3 hash,
+a symbolic branch name, or an ISO 8601 formatted date.
 .Pp
 Options for
 .Cm fnc diff
@@ -231,23 +234,23 @@ are as follows:
 .Bl -tag -width Ds
 .It Fl c , -no-colour
 Disable coloured diff output, which is enabled by default on supported
-terminals. Colour can also be toggled on and off by pressing the
+terminals. If this option is not used, colour can be toggled with the
 .Sy c
-key in diff view when this option is not supplied.
-.It Fl h | -help
+diff view key binding as documented below.
+.It Fl h , -help
 Display diff command help and usage information then exit.
-.It Fl i | -invert
+.It Fl i , -invert
 Invert the difference between artifacts when displaying the diff.
-.It Fl w | -whitespace
+.It Fl w , -whitespace
 Ignore whitespace-only changes when displaying the diff.
-.It Fl x | -context Ar n
+.It Fl x , -context Ar n
 Set
 .Ar n
 context lines to be shown in the diff.  By default, 5 context lines are
 shown.
 .El
 .Pp
-The key bindings for
+Key bindings for
 .Cm fnc diff
 are as follows:
 .Bl -tag -width Ds
@@ -289,15 +292,15 @@ lines matching the pattern provided.  The search term is an extended
 regular expression, which is documented in
 .Xr re_format 7 .
 .It Cm n
-Find the next line which matches the current search term.
+Find the next line that matches the current search term.
 .It Cm N
-Find the previous line which matches the current search term.
+Find the previous line that matches the current search term.
 .El
 .It Cm blame Oo Fl c | -commit Ar hash Oc Ar file
 Show commit attribution history for each line of the specified
 .Ar file .
 .Pp
-The key bindings for
+Key bindings for
 .Cm fnc blame
 are as follows:
 .Bl -tag -width Ds
@@ -305,7 +308,7 @@ are as follows:
 Not yet implemented.
 .El
 .Pp
-The options for
+Options for
 .Cm fnc blame
 are as follows:
 .Bl -tag -width Ds
