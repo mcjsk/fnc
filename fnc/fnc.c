@@ -2481,7 +2481,7 @@ create_changeset(struct fnc_commit_artifact *commit)
 		if (!uuid) {
 			fdiff->fc->uuid = fsl_strdup(olduuid);
 			fdiff->change = FILE_DELETED;
-		} else if (!olduuid || *olduuid == -1) {
+		} else if (!olduuid) {
 			fdiff->fc->uuid = fsl_strdup(uuid);
 			fdiff->change = FILE_ADDED;
 		} else if (oldpath) {
