@@ -654,7 +654,9 @@ init_curses(void)
 	intrflush(stdscr, FALSE);
 	keypad(stdscr, TRUE);
 	curs_set(0);
+#ifndef __linux__
 	typeahead(-1);	/* Don't disrupt screen update operations. */
+#endif
 
 	if (fnc_init.colour && has_colors()) {
 		start_color();
@@ -950,10 +952,17 @@ view_loop(struct fnc_view *view)
 				goto end;
 			if (view->child) {
 				rc = view->child->show(view->child);
+#ifdef __linux__
+				wnoutrefresh(view->child->window);
+#endif
 				if (rc)
 					goto end;
 			}
+#ifdef __linux__
+			wnoutrefresh(view->window);
+#else
 			update_panels();
+#endif
 			doupdate();
 		}
 	}
@@ -2359,7 +2368,11 @@ static void
 show_diff_status(struct fnc_view *view)
 {
 	mvwaddstr(view->window, 0, 0, "generating diff...");
+#ifdef __linux__
+	wnoutrefresh(view->window);
+#else
 	update_panels();
+#endif
 	doupdate();
 }
 
@@ -3294,6 +3307,9 @@ draw_vborder(struct fnc_view *view)
 	view_above = panel_userptr(panel);
 	mvwvline(view->window, view->start_ln, view_above->start_col - 1,
 	(strcmp(codeset, "UTF-8") == 0) ? ACS_VLINE : '|', view->nlines);
+#ifdef __linux__
+	wnoutrefresh(view->window);
+#endif
 }
 
 static int
