@@ -37,9 +37,7 @@
 
 
 #include <sys/queue.h>
-#include <sys/stat.h>
 #include <sys/ioctl.h>
-#include <sys/socket.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -54,13 +52,11 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
-#include <getopt.h>
 #include <string.h>
 #include <err.h>
 #include <unistd.h>
 #include <limits.h>
 #include <errno.h>
-#include <unistd.h>
 #include <pthread.h>
 #include <libgen.h>
 #include <regex.h>
@@ -3641,29 +3637,16 @@ sigwinch_handler(int sig)
 static void
 sigpipe_handler(int sig)
 {
-	rec_sigpipe = 1;
-#if !defined(__OpenBSD__) || !defined (__APPLE__)
 	struct sigaction	sact;
 	int			e;
 
+	rec_sigpipe = 1;
 	memset(&sact, 0, sizeof(sact));
 	sact.sa_handler = SIG_IGN;
 	sact.sa_flags = SA_RESTART;
 	e = sigaction(SIGPIPE, &sact, NULL);
 	if (e)
 		err(1, "SIGPIPE");
-#else
-#if defined(__OpenBSD__) || defined(__APPLE__)
-	int	sock = socket(AF_UNIX, SOCK_STREAM, 0);
-	int	on = 1;
-# ifdef __OpenBSD__
-	setsockopt(sock, SOL_SOCKET, MSG_NOSIGNAL, (void *)&on, sizeof(int));
-# endif /* OpenBSD */
-# ifdef __APPLE__
-	setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, (void *)&on, sizeof(int));
-# endif /* Apple */
-#endif /* OpenBSD or Apple */
-#endif /* not OpenBSD or Apple */
 }
 
 static void
