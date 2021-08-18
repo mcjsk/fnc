@@ -16,17 +16,18 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-/* This _POSIX_C_SOURCE bit really belongs in a config.h, but in the
-   same of expedience...
-*/
+/*
+ * This _POSIX_C_SOURCE bit really belongs in a config.h, but in the
+ * name of expedience...
+ */
 #if defined __linux__
 #  if !defined(_XOPEN_SOURCE)
 #    define _XOPEN_SOURCE 700
-/* 
- _POSIX_C_SOURCE >= 199309L needed for sigaction(), sigemptyset() on Linux,
- but glibc docs claim that _XOPEN_SOURCE>=700 has the same effect, PLUS
- we need _XOPEN_SOURCE>=500 for ncurses wide-char APIs on linux.
-*/
+/*
+ * _POSIX_C_SOURCE >= 199309L needed for sigaction(), sigemptyset() on Linux,
+ * but glibc docs claim that _XOPEN_SOURCE>=700 has the same effect, PLUS
+ * we need _XOPEN_SOURCE>=500 for ncurses wide-char APIs on linux.
+ */
 #  endif
 #  if !defined(_DEFAULT_SOURCE)
 #    define _DEFAULT_SOURCE
@@ -41,10 +42,10 @@
 #include <sys/socket.h>
 
 #ifdef _WIN32
- #include <windows.h>
- #define ssleep(x) Sleep(x)
+#include <windows.h>
+#define ssleep(x) Sleep(x)
 #else
- #define ssleep(x) usleep((x) * 1000)
+#define ssleep(x) usleep((x) * 1000)
 #endif
 #include <ctype.h>
 #include <curses.h>
@@ -79,7 +80,7 @@
 #define MIN(a, b)	(((a) < (b)) ? (a) : (b))
 #define MAX(a, b)	(((a) > (b)) ? (a) : (b))
 #if !defined(CTRL)
-#  define CTRL(key)	((key) & 037)	/* CTRL+<key> input. */
+#define CTRL(key)	((key) & 037)	/* CTRL+<key> input. */
 #endif
 #define nitems(a)	(sizeof((a)) / sizeof((a)[0]))
 #define STRINGIFYOUT(s)	#s
@@ -903,10 +904,9 @@ view_loop(struct fnc_view *view)
 				/* No view is active; try to pick one. */
 				if (prev)
 					view = prev;
-				else if (!TAILQ_EMPTY(&views)) {
+				else if (!TAILQ_EMPTY(&views))
 					view = TAILQ_LAST(&views,
-					view_tailhead);
-				}
+					    view_tailhead);
 				if (view) {
 					if (view->focus_child) {
 						view->child->active = true;
@@ -3306,7 +3306,7 @@ draw_vborder(struct fnc_view *view)
 
 	view_above = panel_userptr(panel);
 	mvwvline(view->window, view->start_ln, view_above->start_col - 1,
-	(strcmp(codeset, "UTF-8") == 0) ? ACS_VLINE : '|', view->nlines);
+	    (strcmp(codeset, "UTF-8") == 0) ? ACS_VLINE : '|', view->nlines);
 #ifdef __linux__
 	wnoutrefresh(view->window);
 #endif
@@ -3656,12 +3656,12 @@ sigpipe_handler(int sig)
 #if defined(__OpenBSD__) || defined(__APPLE__)
 	int	sock = socket(AF_UNIX, SOCK_STREAM, 0);
 	int	on = 1;
-#ifdef __OpenBSD__
+# ifdef __OpenBSD__
 	setsockopt(sock, SOL_SOCKET, MSG_NOSIGNAL, (void *)&on, sizeof(int));
-#endif /* OpenBSD */
-#ifdef __APPLE__
+# endif /* OpenBSD */
+# ifdef __APPLE__
 	setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, (void *)&on, sizeof(int));
-#endif /* Apple */
+# endif /* Apple */
 #endif /* OpenBSD or Apple */
 #endif /* not OpenBSD or Apple */
 }
