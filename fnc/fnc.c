@@ -143,11 +143,13 @@ static struct fnc_setup {
 	bool		 utc;		/* Display UTC sans user local time. */
 
 	/* Diff options. */
-	const char	*artifact0;	/* First diff (required) argument. */
-	const char	*artifact1;	/* Second diff (required) argument. */
-	short		 context;	/* Number of context lines. */
+	const char	*artifact1;	/* First diff (required) argument. */
+	const char	*artifact2;	/* Second diff (required) argument. */
+	const char	*context;	/* Number of context lines. */
 	bool		 ws;		/* Ignore whitespace-only changes. */
 	bool		 colour;	/* Toggle colour in diff output. */
+	bool		 quiet;		/* Disable verbose diff output. */
+	bool		 invert;	/* Toggle inverted diff output. */
 
 	/* Blame options. */
 	const char	*path;		/* Show blame of REQUIRED <path> arg. */
@@ -158,7 +160,7 @@ static struct fnc_setup {
 	fcli_command	   cmd_args[4];			/* App commands. */
 	const char	*(*fnc_usage_cb[3])(void);	/* Command usage. */
 	fcli_cliflag	   cliflags_timeline[10];	/* Timeline options. */
-	fcli_cliflag	   cliflags_diff[6];		/* Diff options. */
+	fcli_cliflag	   cliflags_diff[7];		/* Diff options. */
 	fcli_cliflag	   cliflags_blame[2];		/* Blame options. */
 } fnc_init = {
 	false,		/* err fnc error state. */
@@ -172,11 +174,13 @@ static struct fnc_setup {
 	NULL,		/* filter_user defaults to indiscriminate. */
 	NULL,		/* filter_type temporary placeholder. */
 	false,		/* utc defaults to off (i.e., show user local time). */
-	NULL,		/* artifact0 diff command first required argument. */
-	NULL,		/* artifact1 diff command second required argument. */
-	5,		/* context defaults to five context lines. */
+	NULL,		/* artifact1 diff command first required argument. */
+	NULL,		/* artifact2 diff command second required argument. */
+	NULL,		/* context defaults to five context lines. */
 	false,		/* ws defaults to acknowledge whitespace. */
 	true,		/* colour defaults to on. */
+	false,		/* quiet defaults to off (i.e., verbose diff is on). */
+	false,		/* invert diff defaults to off. */
 	NULL,		/* path blame command required argument. */
 
 	{ /* fnc_help global app help details. */
@@ -243,8 +247,11 @@ static struct fnc_setup {
             "\n    in diff view when this option is not used."),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
             "Display diff command help and usage."),
-	    FCLI_FLAG_BOOL("i", "invert", NULL,
+	    FCLI_FLAG_BOOL("i", "invert", &fnc_init.invert,
             "Invert difference between artifacts."),
+	    FCLI_FLAG_BOOL("q", "quiet", &fnc_init.quiet,
+            "Disable verbose diff output (i.e., do not output content of newly "
+            "added or deleted files.)"),
 	    FCLI_FLAG_BOOL("w", "whitespace", &fnc_init.ws,
             "Ignore whitespace-only changes when displaying diff."),
 	    FCLI_FLAG("x", "context", "<n>", &fnc_init.context,
@@ -391,8 +398,6 @@ struct fnc_diff_view_state {
 	size_t				 nlines;
 	off_t				*line_offsets;
 	bool				 eof;
-	bool				 ignore_ws;
-	bool				 invert;
 	bool				 verbose;
 	bool				 colour;
 };
@@ -2270,8 +2275,8 @@ init_diff_commit(struct fnc_view **new_view, int start_col,
 	if (diff_view == NULL)
 		return fsl_cx_err_set(f, FSL_RC_OOM, "new_view");
 
-	rc = open_diff_view(diff_view, commit, 5, false, false, true,
-	    timeline_view);
+	rc = open_diff_view(diff_view, commit, 5, fnc_init.ws,
+	    fnc_init.invert, !fnc_init.quiet, timeline_view);
 	if (!rc)
 		*new_view = diff_view;
 
@@ -2279,14 +2284,14 @@ init_diff_commit(struct fnc_view **new_view, int start_col,
 }
 
 static int
-open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *cmt2,
+open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
     int context, bool ignore_ws, bool invert, bool verbosity,
     struct fnc_view *timeline_view)
 {
 	struct fnc_diff_view_state	*s = &view->state.diff;
 	int				 rc = 0;
 
-	s->selected_commit = cmt2;
+	s->selected_commit = commit;
 	s->first_line_onscreen = 1;
 	s->last_line_onscreen = view->nlines;
 	s->current_line = 1;
@@ -2294,8 +2299,8 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *cmt2,
 	s->context = context;
 	s->sbs = 0;
 	s->verbose = verbosity;
-	s->ignore_ws = ignore_ws;
-	s->invert = invert;
+	ignore_ws ? s->diff_flags |= FSL_DIFF_IGNORE_ALLWS : 0;
+	invert ? s->diff_flags |= FSL_DIFF_INVERT : 0;
 	s->timeline_view = timeline_view;
 	s->colours = fsl_list_empty;
 	s->colour = fnc_init.colour;
@@ -2412,7 +2417,12 @@ create_diff(struct fnc_diff_view_state *s)
 		diff_non_checkin(&s->buf, s->selected_commit, s->diff_flags,
 		    s->context, s->sbs);
 
-	write_commit_meta(s);
+	rc = add_line_offset(&s->line_offsets, &s->nlines, 0);
+	if (rc)
+		goto end;
+
+	if (s->timeline_view)
+		write_commit_meta(s);
 
 	/*
 	 * We'll diff artifacts of type "ci" (i.e., "checkin") separately, as
@@ -2521,11 +2531,7 @@ write_commit_meta(struct fnc_diff_view_state *s)
 	char		*line = NULL, *st = NULL;
 	fsl_size_t	 linelen, ncols_avail, idx = 0;
 	off_t		 lnoff = 0;
-	int		 start_col, lineno, n, rc = 0;
-
-	rc = add_line_offset(&s->line_offsets, &s->nlines, 0);
-	if (rc)
-		goto end;
+	int		 lineno, n, rc = 0, start_col = 0;
 
 	if ((n = fsl_fprintf(s->f,"%s %s\n", s->selected_commit->type,
 	    s->selected_commit->uuid)) < 0)
@@ -2560,7 +2566,8 @@ write_commit_meta(struct fnc_diff_view_state *s)
 		goto end;
 
 	st = fsl_strdup(s->selected_commit->comment);
-	getyx(s->timeline_view->window, lineno, start_col);
+	if (s->timeline_view)
+		getyx(s->timeline_view->window, lineno, start_col);
 	while ((line = strsep(&st, "\n")) != NULL) {
 		linelen = fsl_strlen(line);
 		ncols_avail = COLS - start_col - 1;
@@ -3779,11 +3786,74 @@ usage_blame(void)
 static int
 cmd_diff(fcli_command const *argv)
 {
-	/* Not yet implemened. */
-	f_out("%s diff can not yet be called from the command line;\naccess "
-	"the diff view by selecting a commit from within the timeline.\n",
-	fcli_progname());
-	return FSL_RC_NYI;
+	fsl_cx				*f = fcli_cx();
+	struct fnc_view			*view;
+	struct fnc_commit_artifact	*commit = NULL;
+	const char			*s;
+	char				*ptr;
+	fsl_id_t			 prid = -1, rid = -1;
+	int				 context, rc = 0;
+
+	rc = fcli_process_flags(argv->flags);
+	if (fcli.argc == 2) {
+		fnc_init.artifact1 = fcli.argv[0];
+		fnc_init.artifact2 = fcli.argv[1];
+	} else
+		return fcli_err_set(FSL_RC_MISSING_INFO, "\n%s", usage_diff());
+
+	if (rc || (rc = fcli_has_unused_flags(false)))
+		return rc;
+
+	rc = fsl_sym_to_rid(f, fnc_init.artifact1, FSL_SATYPE_ANY, &prid);
+	if (rc || prid < 0)
+		return fcli_err_set(rc, "invalid artifact [%s]",
+		    fnc_init.artifact1);
+	rc = fsl_sym_to_rid(f, fnc_init.artifact2, FSL_SATYPE_ANY, &rid);
+	if (rc || rid < 0)
+		return fcli_err_set(rc, "invalid artifact [%s]",
+		    fnc_init.artifact2);
+
+	commit = calloc(1, sizeof(*commit));
+	commit->uuid = fsl_strdup(fsl_rid_to_uuid(f, rid));
+	commit->puuid = fsl_strdup(fsl_rid_to_uuid(f, prid));
+	commit->rid = rid;
+	if (fsl_rid_is_a_checkin(f, rid) && fsl_rid_is_a_checkin(f, prid))
+		commit->type = "checkin";
+	else
+		return fcli_err_set(FSL_RC_TYPE,
+		    "artifact [%s] not resolvable to a commit",
+		    fsl_rid_is_a_checkin(f, rid) ? fnc_init.artifact1 :
+		    fnc_init.artifact2);
+
+	init_curses();
+
+	if (fnc_init.context) {
+		s = fnc_init.context;
+		context = strtol(s, &ptr, 10);
+		if (errno == ERANGE)
+			return fsl_cx_err_set(f, FSL_RC_RANGE,
+			    "out of range: -x|--context=%s [%s]", s, ptr);
+		else if (errno != 0 || errno == EINVAL)
+			return fsl_cx_err_set(f, FSL_RC_MISUSE,
+			    "not a number: -x|--context=%s [%s]", s, ptr);
+		else if (ptr && *ptr != '\0')
+			return fsl_cx_err_set(f, FSL_RC_MISUSE,
+			    "invalid char: -x|--context=%s [%s]", s, ptr);
+		context = MIN(DIFF_MAX_CTXT, context);
+	} else
+		context = 5;
+
+	view = view_open(0, 0, 0, 0, FNC_VIEW_DIFF);
+	if (view == NULL)
+		return fcli_err_set(FSL_RC_OOM, "view_open fail");
+
+	rc = open_diff_view(view, commit, context, fnc_init.ws,
+	    fnc_init.invert, !fnc_init.quiet, NULL);
+	if (rc)
+		return fcli_err_set(rc, "open_diff_view fail");
+	rc = view_loop(view);
+
+	return rc;
 }
 
 static int
