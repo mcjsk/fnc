@@ -478,7 +478,7 @@ static void		 show_diff_status(struct fnc_view *);
 static int		 create_diff(struct fnc_diff_view_state *);
 static int		 create_changeset(struct fnc_commit_artifact *);
 static int		 write_commit_meta(struct fnc_diff_view_state *);
-static int		 wrap_comment(char *, fsl_size_t ncols_avail,
+static int		 wrapline(char *, fsl_size_t ncols_avail,
 			    struct fnc_diff_view_state *, off_t *);
 static int		 add_line_offset(off_t **, size_t *, off_t);
 static int		 diff_commit(fsl_buffer *, struct fnc_commit_artifact *,
@@ -2565,7 +2565,7 @@ write_commit_meta(struct fnc_diff_view_state *s)
 		linelen = fsl_strlen(line);
 		ncols_avail = COLS - start_col - 1;
 		if (linelen >= ncols_avail) {
-			rc = wrap_comment(line, ncols_avail, s, &lnoff);
+			rc = wrapline(line, ncols_avail, s, &lnoff);
 			if (rc)
 				goto end;
 		}
@@ -2626,7 +2626,7 @@ end:
 }
 
 /*
- * Wrap long comments at the terminal's available column width. The caller
+ * Wrap long lines at the terminal's available column width. The caller
  * must ensure the ncols_avail parameter has taken into account whether the
  * screen is currently split, and not mistakenly pass in the curses COLS macro
  * without deducting the parent panel's width. This function doesn't break
@@ -2634,12 +2634,12 @@ end:
  * the ncols_avail limit.
  */
 static int
-wrap_comment(char *line, fsl_size_t ncols_avail, struct fnc_diff_view_state *s,
+wrapline(char *line, fsl_size_t ncols_avail, struct fnc_diff_view_state *s,
     off_t *lnoff)
 {
 	char		*word;
 	fsl_size_t	 wordlen, cursor = 0;
-	int		 rc = 0;
+	int		 n = 0, rc = 0;
 
 	while ((word = strsep(&line, " ")) != NULL) {
 		wordlen = fsl_strlen(word);
@@ -2652,12 +2652,10 @@ wrap_comment(char *line, fsl_size_t ncols_avail, struct fnc_diff_view_state *s,
 				return rc;
 			cursor = 0;
 		}
-		fputs(word, s->f);
-		*lnoff += wordlen;
-		cursor += wordlen;
-		fputc(' ', s->f);
-		++(*lnoff);
-		++cursor;
+		if ((n  = fsl_fprintf(s->f, "%s ", word)) < 0)
+			return rc;
+		*lnoff += n;
+		cursor += n;
 	}
 	fputc('\n', s->f);
 	++(*lnoff);
