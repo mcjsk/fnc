@@ -143,11 +143,9 @@ static struct fnc_setup {
 	bool		 utc;		/* Display UTC sans user local time. */
 
 	/* Diff options. */
-	const char	*artifact1;	/* First diff (required) argument. */
-	const char	*artifact2;	/* Second diff (required) argument. */
 	const char	*context;	/* Number of context lines. */
 	bool		 ws;		/* Ignore whitespace-only changes. */
-	bool		 colour;	/* Toggle colour in diff output. */
+	bool		 nocolour;	/* Disable colour in diff output. */
 	bool		 quiet;		/* Disable verbose diff output. */
 	bool		 invert;	/* Toggle inverted diff output. */
 
@@ -174,11 +172,9 @@ static struct fnc_setup {
 	NULL,		/* filter_user defaults to indiscriminate. */
 	NULL,		/* filter_type temporary placeholder. */
 	false,		/* utc defaults to off (i.e., show user local time). */
-	NULL,		/* artifact1 diff command first required argument. */
-	NULL,		/* artifact2 diff command second required argument. */
 	NULL,		/* context defaults to five context lines. */
 	false,		/* ws defaults to acknowledge whitespace. */
-	true,		/* colour defaults to on. */
+	false,		/* nocolour defaults to off (i.e., use diff colours). */
 	false,		/* quiet defaults to off (i.e., verbose diff is on). */
 	false,		/* invert diff defaults to off. */
 	NULL,		/* path blame command required argument. */
@@ -241,21 +237,25 @@ static struct fnc_setup {
 	}, /* End cliflags_timeline. */
 
 	{ /* cliflags_diff diff command related options. */
-	    FCLI_FLAG_BOOL("c", "no-colour", &fnc_init.colour,
+	    FCLI_FLAG_BOOL("c", "no-colour", &fnc_init.nocolour,
             "Disable coloured diff output, which is enabled by default on\n    "
-            "supported terminals. Colour can also be toggled pressing 'c' "
-            "\n    in diff view when this option is not used."),
+            "supported terminals. Colour can also be toggled with the 'c' "
+            "\n    key binding in diff view when this option is not used."),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
             "Display diff command help and usage."),
 	    FCLI_FLAG_BOOL("i", "invert", &fnc_init.invert,
-            "Invert difference between artifacts."),
+            "Invert difference between artifacts. Inversion can also be "
+            "toggled\n    with the 'i' key binding in diff view."),
 	    FCLI_FLAG_BOOL("q", "quiet", &fnc_init.quiet,
-            "Disable verbose diff output (i.e., do not output content of newly "
-            "added or deleted files.)"),
+            "Disable verbose diff output; that is, do not output complete"
+            " content\n    of newly added or deleted files. Verbosity can also"
+            " be toggled with\n    the 'v' key binding in diff view."),
 	    FCLI_FLAG_BOOL("w", "whitespace", &fnc_init.ws,
-            "Ignore whitespace-only changes when displaying diff."),
+            "Ignore whitespace-only changes when displaying diff. This option "
+            "can\n    also be toggled with the 'w' key binding in diff view."),
 	    FCLI_FLAG("x", "context", "<n>", &fnc_init.context,
-            "Show <n> context lines when displaying diff."),
+            "Show <n> context lines when displaying diff; <n> is capped at 64."
+            "\n    Negative values are a no-op."),
 	    fcli_cliflag_empty_m
 	}, /* End cliflags_diff. */
 
@@ -398,7 +398,6 @@ struct fnc_diff_view_state {
 	size_t				 nlines;
 	off_t				*line_offsets;
 	bool				 eof;
-	bool				 verbose;
 	bool				 colour;
 };
 
@@ -487,13 +486,12 @@ static int		 wrapline(char *, fsl_size_t ncols_avail,
 			    struct fnc_diff_view_state *, off_t *);
 static int		 add_line_offset(off_t **, size_t *, off_t);
 static int		 diff_commit(fsl_buffer *, struct fnc_commit_artifact *,
-			    int, bool, int, int);
+			    int, int, int);
 static int		 diff_non_checkin(fsl_buffer *, struct
 			    fnc_commit_artifact *, int, int, int);
-static int		 verbose_diff(void *, void *);
 static int		 diff_file_artifact(fsl_buffer *, fsl_id_t,
 			    fsl_card_F const *, fsl_id_t, fsl_card_F const *,
-			    int, bool, int, int);
+			    int, int, int);
 static int		 fsl_ckout_file_content(fsl_cx *, char const *,
 			    fsl_buffer *);
 static int		 fsl_ckout_mtime(fsl_cx *, fsl_id_t, fsl_card_F const *,
@@ -537,6 +535,8 @@ main(int argc, char * const * argv)
 	    (struct artifact_types *)fsl_malloc(sizeof(struct artifact_types));
 	fnc_init.filter_types->values = fsl_malloc(sizeof(char *));
 	fnc_init.filter_types->nitems = 0;
+	fcli_fax(fnc_init.filter_types->values);
+	fcli_fax(fnc_init.filter_types);
 
 	if (!setlocale(LC_CTYPE, ""))
 		fsl_fprintf(stderr, "[!] Warning: Can't set locale.\n");
@@ -662,7 +662,7 @@ init_curses(void)
 	typeahead(-1);	/* Don't disrupt screen update operations. */
 #endif
 
-	if (fnc_init.colour && has_colors()) {
+	if (!fnc_init.nocolour && has_colors()) {
 		start_color();
 		use_default_colors();
 	}
@@ -2298,14 +2298,14 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	s->f = NULL;
 	s->context = context;
 	s->sbs = 0;
-	s->verbose = verbosity;
+	verbosity ? s->diff_flags |= FSL_DIFF_VERBOSE : 0;
 	ignore_ws ? s->diff_flags |= FSL_DIFF_IGNORE_ALLWS : 0;
 	invert ? s->diff_flags |= FSL_DIFF_INVERT : 0;
 	s->timeline_view = timeline_view;
 	s->colours = fsl_list_empty;
-	s->colour = fnc_init.colour;
+	s->colour = !fnc_init.nocolour;
 
-	if (fnc_init.colour && has_colors())
+	if (s->colour && has_colors())
 		set_diff_colours(&s->colours);
 	if (timeline_view && screen_is_split(view))
 		show_timeline_view(timeline_view); /* draw vborder */
@@ -2421,6 +2421,10 @@ create_diff(struct fnc_diff_view_state *s)
 	if (rc)
 		goto end;
 
+	/*
+	 * If we don't have a timeline view, we arrived here via cmd_diff()
+	 * (i.e., 'fnc diff' on the CLI), so don't display commit metadata.
+	 */
 	if (s->timeline_view)
 		write_commit_meta(s);
 
@@ -2432,7 +2436,7 @@ create_diff(struct fnc_diff_view_state *s)
 	    fsl_strlen(s->selected_commit->type)) &&
 	    s->selected_commit->puuid != NULL) {
 		diff_commit(&s->buf, s->selected_commit, s->diff_flags,
-		    s->verbose, s->context, s->sbs);
+		    s->context, s->sbs);
 	}
 
 	/*
@@ -2531,7 +2535,7 @@ write_commit_meta(struct fnc_diff_view_state *s)
 	char		*line = NULL, *st = NULL;
 	fsl_size_t	 linelen, ncols_avail, idx = 0;
 	off_t		 lnoff = 0;
-	int		 lineno, n, rc = 0, start_col = 0;
+	int		 start_col, lineno, n, rc = 0;
 
 	if ((n = fsl_fprintf(s->f,"%s %s\n", s->selected_commit->type,
 	    s->selected_commit->uuid)) < 0)
@@ -2566,8 +2570,7 @@ write_commit_meta(struct fnc_diff_view_state *s)
 		goto end;
 
 	st = fsl_strdup(s->selected_commit->comment);
-	if (s->timeline_view)
-		getyx(s->timeline_view->window, lineno, start_col);
+	getyx(s->timeline_view->window, lineno, start_col);
 	while ((line = strsep(&st, "\n")) != NULL) {
 		linelen = fsl_strlen(line);
 		ncols_avail = COLS - start_col - 1;
@@ -2688,23 +2691,33 @@ add_line_offset(off_t **line_offsets, size_t *nlines, off_t off)
 	return 0;
 }
 
+/*
+ * Fill the buffer with the differences between commit->uuid and commit->puuid.
+ * commit->rid (to load into deck d2) is the *this* version, and commit->puuid
+ * (to be loaded into deck d1) is the version we diff against. Step through the
+ * deck of F(ile) cards from both versions to determine: (1) if we have new
+ * files added (i.e., no F card counterpart in d1); (2) files deleted (i.e., no
+ * F card counterpart in d2); (3) or otherwise the same file (i.e., F card
+ * exists in both d1 and d2). In cases (1) and (2), we call diff_file_artifact()
+ * to dump the complete content of the added/deleted file. In case (3), if the
+ * hash (UUID) of each F card is the same AND we're NOT diffing the checkout on
+ * disk, there are no changes; however, if we're diffing changes in the local
+ * checkout (i.e., commit->rid == 0) against another version, we also need to
+ * call diff_file_artifact().
+ */
 static int
 diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
-    bool verbose, int context, int sbs)
+    int context, int sbs)
 {
 	fsl_cx			*f = fcli_cx();
 	const fsl_card_F	*fc1 = NULL;
 	const fsl_card_F	*fc2 = NULL;
 	fsl_deck		 d1 = fsl_deck_empty;
 	fsl_deck		 d2 = fsl_deck_empty;
-	fsl_id_t		 id1, id2;
-	fsl_size_t		 i;
+	fsl_id_t		 id1;
 	int			 different = 0, rc = 0;
 
-	rc = fsl_sym_to_rid(f, commit->uuid, FSL_SATYPE_CHECKIN, &id2);
-	if (rc)
-		goto end;
-	rc = fsl_deck_load_rid(f, &d2, id2, FSL_SATYPE_CHECKIN);
+	rc = fsl_deck_load_rid(f, &d2, commit->rid, FSL_SATYPE_CHECKIN);
 	if (rc)
 		goto end;
 	rc = fsl_deck_F_rewind(&d2);
@@ -2730,83 +2743,51 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 		goto end;
 
 	fsl_deck_F_next(&d1, &fc1);
-	for (fsl_deck_F_next(&d2, &fc2); fc2; fsl_deck_F_next(&d2, &fc2)) {
-		char const *curr = fc2->priorName ? fc2->priorName : fc2->name;
+	fsl_deck_F_next(&d2, &fc2);
+	while (fc1 || fc2) {
+		const fsl_card_F	*a = NULL, *b = NULL;
+		const char		*curr;
 
-		/*
-		 * Skip lexically smaller filenames present in the parent
-		 * commit that are not in this commit as they can't be diffed.
-		 */
-		different = 0;
-		while(fc1 && (0>(different = fsl_strcmp(fc1->name, curr))))
-			fsl_deck_F_next(&d1, &fc1);
+		curr = fc2->priorName ? fc2->priorName : fc2->name;
+		if (!fc1)	/* File added. */
+			different = 1;
+		else if (!fc2)	/* File deleted. */
+			different = -1;
+		else		/* Same filename in both versions. */
+			different = fsl_strcmp(fc1->name, curr);
 
-		if (fc1 && !different) {
-			/*
-			 * The verbose flag is ignored by fsl_diff_text(), so
-			 * we've rolled our own naive verbose diff routine that
-			 * dumps the content of newly added or deleted files in
-			 * this->commit->changeset to the buffer. This hackery
-			 * is used to output these diffs in the correct order:
-			 * newly added or deleted files with lexically smaller
-			 * names than the modified files are caught here, but we
-			 * leave those with lexically larger names to be handled
-			 * after the loop finishes processing modified files.
-			 */
-			if (verbose) {
-				diff_flags |= FSL_DIFF_VERBOSE;
-				for (i = 0; i < commit->changeset.used;) {
-					struct fsl_file_artifact **adf =
-					    (struct fsl_file_artifact **)
-					    &commit->changeset.list[i++];
-					if (*adf && fsl_strcmp((*adf)->fc->name,
-					    fc1->name) < 0) {
-						verbose_diff(*adf, buf);
-						*adf = NULL;
-					}
-				}
-			}
-			/* Same filename in both commits: modified files. */
-			rc = diff_file_artifact(buf, id1, fc1, id2, fc2,
-			    diff_flags, verbose, context, sbs);
-			/* Binary file can't be diffed. */
-			if (rc == FSL_RC_RANGE) {
-				fsl_buffer_append(buf,
-				    "\nBinary files cannot be diffed\n", -1);
-				rc = 0;
-				fsl_cx_err_reset(f);
-				continue;
-			} else if (rc)
-				goto end;
-			else
+		if (different) {
+			if (different > 0) {
+				b = fc2;
+				fsl_deck_F_next(&d2, &fc2);
+			} else if (different < 0) {
+				a = fc1;
 				fsl_deck_F_next(&d1, &fc1);
-		}
-		/*
-		 * TODO: This fails on libfossil commit 88a070017ad0cf72 when a
-		 * null fc1->name compared with the fc2->name 'fsl_appendf.c'
-		 * returns -4, which must still be set after leaving the above
-		 * while loop. I think this is because we've consumed the last
-		 * fc1 F card, so we break out of the loop, fail the following
-		 * if condition, and end up here with different < 0. Maybe
-		 * different should be reset to 0 in the above while loop?
-		 */
-		/* assert(different >= 0 && */
-		/*     "The < 0 case was handled by the while loop above!"); */
-	}
-	/*
-	 * Skip lexically larger filenames present in the parent commit that
-	 * are not in this commit as they can't be diffed.
-	 */
-	if (different > 0)
-		while (fc1)
+			}
+			rc = diff_file_artifact(buf, id1, a, commit->rid, b,
+			    diff_flags, context, sbs);
+		} else if (!fsl_uuidcmp(fc1->uuid, fc2->uuid)) {
+			if (!id1 || !commit->rid) {  /* Diff checkout. */
+				rc = diff_file_artifact(buf, id1, fc1,
+				    commit->rid, fc2, diff_flags, context, sbs);
+			}
 			fsl_deck_F_next(&d1, &fc1);
-	/*
-	 * Output any remaining newly added or deleted files from the changeset
-	 * that were missed above due to having lexically larger names.
-	 */
-	if (verbose)
-		fsl_list_visit(&commit->changeset, 0, verbose_diff, buf);
-
+			fsl_deck_F_next(&d2, &fc2);
+		} else {  /* File changed. */
+			rc = diff_file_artifact(buf, id1, fc1, commit->rid, fc2,
+			    diff_flags, context, sbs);
+			fsl_deck_F_next(&d1, &fc1);
+			fsl_deck_F_next(&d2, &fc2);
+		}
+		if (rc == FSL_RC_RANGE) { /* Binaries can't be diffed */
+			fsl_buffer_append(buf,
+			    "\nBinary files cannot be diffed\n", -1);
+			rc = 0;
+			fsl_cx_err_reset(f);
+			continue;
+		} else if (rc)
+			goto end;
+	}
 end:
 	fsl_deck_finalize(&d1);
 	fsl_deck_finalize(&d2);
@@ -2918,44 +2899,9 @@ end:
 	return rc;
 }
 
-/*
- * As a workaround for the inoperative FSL_DIFF_VERBOSE flag, parse the
- * changeset for added or deleted files and dump the contents to the buffer
- * with the plus '+' or minus '-' prefix, respectively.
- */
-static int
-verbose_diff(void *ffa, void *state)
-{
-	struct fsl_file_artifact	*fa = ffa;
-	fsl_buffer			*b = state;
-	fsl_buffer			 c = fsl_buffer_empty;
-	fsl_cx				*f = fcli_cx();
-	char				*line, *st = NULL;
-
-	if (fa->change == FILE_CHANGED || fa->change == FILE_RENAMED)
-		return 0;
-
-	fsl_buffer_appendf(b, "\nIndex: %s\n%.71c\n", fa->fc->name, '=');
-	fsl_buffer_appendf(b, "hash - %s\nhash + %s\n", fa->change ==
-	    FILE_ADDED  ? "/dev/null" : fa->fc->uuid, fa->change ==
-	    FILE_DELETED ? "/dev/null" : fa->fc->uuid);
-	fsl_buffer_appendf(b, "--- %s\n+++ %s\n\n", fa->change == FILE_ADDED ?
-	    "/dev/null" : fa->fc->name, fa->change == FILE_DELETED ?
-	    "/dev/null" : fa->fc->name);
-
-	fsl_card_F_content(f, fa->fc, &c);
-	st = fsl_strdup(fsl_buffer_str(&c));
-	while ((line = strsep(&st, "\n")) != NULL)
-		fsl_buffer_appendf(b, "%c%s\n", fa->change == FILE_ADDED ?
-		    '+' : '-', line);
-
-	return 0;
-}
-
 static int
 diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, fsl_card_F const *fc1,
-    fsl_id_t vid2, fsl_card_F const *fc2, int diff_flags, bool verbose,
-    int context, int sbs)
+    fsl_id_t vid2, fsl_card_F const *fc2, int diff_flags, int context, int sbs)
 {
 	const fsl_card_F	*hashchk = NULL;
 	fsl_cx			*f = fcli_cx();
@@ -2965,28 +2911,37 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, fsl_card_F const *fc1,
 	fsl_time_t		 rmtime = 0;
 	fsl_time_t		 fmtime = 0;
 	int			 rc = 0;
-
-	if (vid1 > 0 && vid2 > 0 && !fsl_uuidcmp(fc1->uuid, fc2->uuid))
-		return 0;
+	bool			 verbose;
 
 	assert(vid1 != vid2);
 
 	fhash.used = fbuf2.used = fbuf1.used = 0;
 
-	if (vid1 == 0) {
+	/* If diffing against local checkout, hash file on disk to compare. */
+	if (vid1 == 0 && fc1) {
 		assert(vid2 != 0);
 		rc = fsl_ckout_file_content(f, fc1->name, &fbuf1);
 		if (!rc) {
-			rc = fsl_sha1sum_buffer(&fbuf1, &fhash);
+			switch (fsl_strlen(fc1->uuid)) {
+			case FSL_STRLEN_K256:
+				rc = fsl_sha3sum_buffer(&fbuf1, &fhash);
+				break;
+			case FSL_STRLEN_SHA1:
+				rc = fsl_sha1sum_buffer(&fbuf1, &fhash);
+				break;
+			default:
+				return fcli_err_set(FSL_RC_SIZE_MISMATCH,
+				    "invalid artifact uuid [%s], fc1->uuid");
+			}
 			if (!rc) {
-			hashchk = fc2;
-			rc = fsl_ckout_mtime(f, vid1, fc1, NULL,
-			    &fmtime);
+				hashchk = fc2;
+				rc = fsl_ckout_mtime(f, vid1, fc1, NULL,
+				    &fmtime);
 			}
 		}
-	} else {
+	} else if (fc1) {
 		rc = fsl_card_F_content(f, fc1, &fbuf1);
-		if (!rc && (0 == vid2))
+		if (!rc && (vid2 == 0))
 			/* Collect repo-side mtime if the other version == 0. */
 			rc = fsl_ckout_mtime(f, vid1, fc1, &rmtime, NULL);
 	}
@@ -2994,19 +2949,29 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, fsl_card_F const *fc1,
 	if (rc)
 		goto end;
 
-	/* Repeat for vid2. */
-	if (vid2 == 0) {
+	/* If diffing the local checkout, hash the file on disk to compare. */
+	if (vid2 == 0 && fc2) {
 		assert(vid1 != 0);
 		rc = fsl_ckout_file_content(f, fc2->name, &fbuf2);
 		if (!rc) {
-			rc = fsl_sha1sum_buffer(&fbuf2, &fhash);
+			switch (fsl_strlen(fc2->uuid)) {
+			case FSL_STRLEN_K256:
+				rc = fsl_sha3sum_buffer(&fbuf2, &fhash);
+				break;
+			case FSL_STRLEN_SHA1:
+				rc = fsl_sha1sum_buffer(&fbuf2, &fhash);
+				break;
+			default:
+				return fcli_err_set(FSL_RC_SIZE_MISMATCH,
+				    "invalid artifact uuid [%s], fc2->uuid");
+			}
 			if (!rc) {
-			hashchk = fc1;
-			rc = fsl_ckout_mtime(f, vid2, fc2, NULL,
-			    &fmtime);
+				hashchk = fc1;
+				rc = fsl_ckout_mtime(f, vid2, fc2, NULL,
+				    &fmtime);
 			}
 		}
-	} else {
+	} else if (fc2) {
 		rc = fsl_card_F_content(f, fc2, &fbuf2);
 		if(!rc && (vid1 == 0)){
 			/* Collect repo-side mtime if the other version == 0. */
@@ -3031,23 +2996,22 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, fsl_card_F const *fc1,
 		 */
 		goto end;
 	} else {
-	fsl_buffer_appendf(buf, "\nIndex: %s\n%.71c\n",
-	    fc2->name, '=');
+		verbose = (diff_flags & FSL_DIFF_VERBOSE) != 0 ? true : false;
+		fsl_buffer_appendf(buf, "\nIndex: %s\n%.71c\n",
+		    fc2 ? fc2->name : fc1->name, '=');
 		fsl_buffer_appendf(buf, "hash - %s\nhash + %s\n",
-		    fc1->uuid, fc2->uuid);
-		fsl_buffer_appendf(buf, "--- %s\n+++ %s\n", fc1->name,
-		    fc2->name);
-		/* rc = fsl_diff_text(fbuf1, fbuf2, fsl_output_f_buffer, */
-		/*     (void *)buf, s->context, VDiffApp.sbsWidth, */
-		/*     s->diff_flags); */
-		rc = fsl_diff_text_to_buffer(&fbuf1, &fbuf2, buf,
-		    context, sbs, diff_flags);
+		    fc1 ? fc1->uuid : "/dev/null",
+		    fc2 ? fc2->uuid : "/dev/null");
+		fsl_buffer_appendf(buf, "--- %s\n+++ %s\n",
+		    fc1 ? fc1->name : "/dev/null",
+		    fc2 ? fc2->name : "/dev/null");
+		if (verbose || (fc1 && fc2))
+			rc = fsl_diff_text_to_buffer(&fbuf1, &fbuf2, buf,
+			    context, sbs, diff_flags);
 		if (rc)
-		fcli_err_set(rc, "Error %s: generating diff %s %s",
-		    fsl_rc_cstr(rc), fc1->name ? fc1->name :
-		    "/dev/null", fc2->name ? fc2->name : "/dev/null");
-		else
-		f_out("\n");
+			fcli_err_set(rc, "Error %s: generating diff %s %s",
+			    fsl_rc_cstr(rc), fc1->name ? fc1->name :
+			    "/dev/null", fc2->name ? fc2->name : "/dev/null");
 	}
 end:
 	fsl_buffer_clear(&fbuf1);
@@ -3076,7 +3040,8 @@ fsl_ckout_file_content(fsl_cx *f, char const *path, fsl_buffer *dest)
 			    "Filename may not have a trailing slash.");
 		} else {
 			dest->used = 0;
-			rc = fsl_buffer_fill_from_filename(dest, fsl_buffer_cstr(&fname));
+			rc = fsl_buffer_fill_from_filename(dest,
+			    fsl_buffer_cstr(&fname));
 		}
 	}
 	fsl_buffer_clear(&fname);
@@ -3429,7 +3394,7 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		if (ch == 'i')
 			s->diff_flags ^= FSL_DIFF_INVERT;
 		if (ch == 'v')
-			s->verbose = s->verbose == false;
+			s->diff_flags ^= FSL_DIFF_VERBOSE;
 		if (ch == 'w')
 			s->diff_flags ^= FSL_DIFF_IGNORE_ALLWS;
 		wclear(view->window);
@@ -3769,9 +3734,9 @@ usage_timeline(void)
 const char *
 usage_diff(void)
 {
-	return fsl_mprintf(" %s diff [-h|--help] [-c|--no-colour] [-i|--invert]"
-	    " [-w|--whitespace] [-x|--context lines] artifact1 artifact2\n"
-	    "  e.g.: %s diff --context 3 d34db33f c0ff33",
+	return fsl_mprintf(" %s diff [-c|--no-colour] [-h|--help] [-i|--invert]"
+	    " [-q|--quiet] [-w|--whitespace] [-x|--context n] "
+	    "[hash ...]\n  e.g.: %s diff --context 3 d34db33f c0ff33",
 	    fcli_progname(), fcli_progname());
 }
 
@@ -3789,41 +3754,70 @@ cmd_diff(fcli_command const *argv)
 	fsl_cx				*f = fcli_cx();
 	struct fnc_view			*view;
 	struct fnc_commit_artifact	*commit = NULL;
-	const char			*s;
+	const char			*artifact1, *artifact2, *s;
 	char				*ptr;
 	fsl_id_t			 prid = -1, rid = -1;
 	int				 context, rc = 0;
 
 	rc = fcli_process_flags(argv->flags);
-	if (fcli.argc == 2) {
-		fnc_init.artifact1 = fcli.argv[0];
-		fnc_init.artifact2 = fcli.argv[1];
-	} else
-		return fcli_err_set(FSL_RC_MISSING_INFO, "\n%s", usage_diff());
-
 	if (rc || (rc = fcli_has_unused_flags(false)))
 		return rc;
 
-	rc = fsl_sym_to_rid(f, fnc_init.artifact1, FSL_SATYPE_ANY, &prid);
+	/*
+	 * If only one artifact is supplied, use the local changes in the
+	 * current checkout to diff against it. If no artifacts are supplied,
+	 * diff any local changes on disk against the current checkout.
+	 */
+	if (fcli.argc == 2) {
+		artifact1 = fcli_next_arg(true);
+		artifact2 = fcli_next_arg(true);
+	} else if (fcli.argc < 2) {
+		artifact1 = "current";
+		rid = 0;
+		if (fcli_next_arg(false))
+			artifact1 = fcli_next_arg(true);
+		if (!fsl_strcmp(artifact1, "current")) {
+			fsl_ckout_changes_scan(f);
+			if (!fsl_ckout_has_changes(f)) {
+				fsl_fprintf(stdout, "No local changes.\n");
+				return rc;
+			}
+		}
+	} else
+		return fcli_err_set(FSL_RC_MISSING_INFO, "\n%s", usage_diff());
+
+	/* Find the corresponding rids for the versions we have; checkout = 0 */
+	rc = fsl_sym_to_rid(f, artifact1, FSL_SATYPE_ANY, &prid);
 	if (rc || prid < 0)
-		return fcli_err_set(rc, "invalid artifact [%s]",
-		    fnc_init.artifact1);
-	rc = fsl_sym_to_rid(f, fnc_init.artifact2, FSL_SATYPE_ANY, &rid);
+		return fcli_err_set(rc, "invalid artifact [%s]", artifact1);
+	if (rid != 0)
+		rc = fsl_sym_to_rid(f, artifact2, FSL_SATYPE_ANY, &rid);
 	if (rc || rid < 0)
-		return fcli_err_set(rc, "invalid artifact [%s]",
-		    fnc_init.artifact2);
+		return fcli_err_set(rc, "invalid artifact [%s]", artifact2);
 
 	commit = calloc(1, sizeof(*commit));
-	commit->uuid = fsl_strdup(fsl_rid_to_uuid(f, rid));
-	commit->puuid = fsl_strdup(fsl_rid_to_uuid(f, prid));
+	if (rid == 0)
+		fsl_ckout_version_info(f, NULL, (const char **)commit->uuid);
+	else
+		commit->uuid = fsl_rid_to_uuid(f, rid);
+	commit->puuid = fsl_rid_to_uuid(f, prid);
 	commit->rid = rid;
-	if (fsl_rid_is_a_checkin(f, rid) && fsl_rid_is_a_checkin(f, prid))
+
+	/*
+	 * If either of the supplied versions are not checkin artifacts,
+	 * let the user know which operands aren't valid.
+	 */
+	if ((fsl_rid_is_a_checkin(f, rid) || rid == 0) &&
+	    fsl_rid_is_a_checkin(f, prid))
 		commit->type = "checkin";
 	else
 		return fcli_err_set(FSL_RC_TYPE,
-		    "artifact [%s] not resolvable to a commit",
-		    fsl_rid_is_a_checkin(f, rid) ? fnc_init.artifact1 :
-		    fnc_init.artifact2);
+		    "artifact(s) [%s] not resolvable to a commit",
+		    (!fsl_rid_is_a_checkin(f, rid) && rid != 0) &&
+		    !fsl_rid_is_a_checkin(f, prid) ?
+		    fsl_mprintf("%s / %s", artifact1, artifact2) :
+		    (!fsl_rid_is_a_checkin(f, rid) && rid != 0) ?
+		    artifact2 : artifact1);
 
 	init_curses();
 
