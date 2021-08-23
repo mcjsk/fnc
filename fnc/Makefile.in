@@ -11,9 +11,14 @@ CPPFLAGS += -I$(LIBF_DIR)
 ########################################################################
 # To build fnc, we need the curses and pthread libraries.
 # -lz is for libfossil
+# -liconv is for libfossil on macOS
 # -lutil is... ???
 # -lm is for sqlite3
+PLATFORM := $(shell sh -c 'uname 2>/dev/null || echo Unknown')
 FNC_LDFLAGS := $(LIBF_DIR)/libfossil.o $(LIBF_DIR)/sqlite3.o
+ifneq ($(filter $(PLATFORM),Darwin),)
+  FNC_LDFLAGS += -liconv
+endif
 FNC_LDFLAGS += -lm
 FNC_LDFLAGS += -lpanel $(LIB_CURSES) -lutil -lz -lpthread
 CPPFLAGS += -D_XOPEN_SOURCE_EXTENDED
