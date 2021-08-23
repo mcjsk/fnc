@@ -49,7 +49,7 @@
 #  define HAVE_STAT 1
 #endif
 #if !defined(HAVE_STDINT_H)
-#  define HAVE_STDINT_H 0
+#  define HAVE_STDINT_H 1
 #endif
 #if !defined(_DEFAULT_SOURCE)
 #  define _DEFAULT_SOURCE 1
@@ -77,15 +77,15 @@
 #  define HAVE_STAT 0
 #endif
 #if !defined(HAVE_STDINT_H)
-#  define HAVE_STDINT_H 0
+#  define HAVE_STDINT_H 1
 #endif
 #endif
 /* _WIN32 */
 
 
-#define FSL_LIB_VERSION_HASH "d9c08847711d398ae048addf0d44b7a320f8bfe1"
-#define FSL_LIB_VERSION_TIMESTAMP "2021-08-23 09:52:29.255 UTC"
-#define FSL_LIB_CONFIG_TIME "2021-08-23 13:15 GMT"
+#define FSL_LIB_VERSION_HASH "5d405b727bd79bf2abb5349407432178394a962a"
+#define FSL_LIB_VERSION_TIMESTAMP "2021-08-23 15:36:42.964 UTC"
+#define FSL_LIB_CONFIG_TIME "2021-08-23 15:38 GMT"
 #if defined(_MSC_VER)
 #define FSL_PLATFORM_OS "windows"
 #define FSL_PLATFORM_IS_WINDOWS 1
