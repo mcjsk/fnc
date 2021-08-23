@@ -2747,7 +2747,10 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 		const fsl_card_F	*a = NULL, *b = NULL;
 		const char		*curr;
 
-		curr = fc2->priorName ? fc2->priorName : fc2->name;
+		if (fc2)
+			curr = fc2->priorName ? fc2->priorName : fc2->name;
+		else if (fc1)
+			curr = fc1->priorName ? fc1->priorName : fc1->name;
 		if (!fc1)	/* File added. */
 			different = 1;
 		else if (!fc2)	/* File deleted. */
@@ -2778,12 +2781,11 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 			fsl_deck_F_next(&d1, &fc1);
 			fsl_deck_F_next(&d2, &fc2);
 		}
-		if (rc == FSL_RC_RANGE) { /* Binaries can't be diffed */
+		if (rc == FSL_RC_RANGE || rc == FSL_RC_TYPE) {
 			fsl_buffer_append(buf,
 			    "\nBinary files cannot be diffed\n", -1);
 			rc = 0;
 			fsl_cx_err_reset(f);
-			continue;
 		} else if (rc)
 			goto end;
 	}
@@ -3009,8 +3011,8 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, fsl_card_F const *fc1,
 			    context, sbs, diff_flags);
 		if (rc)
 			fcli_err_set(rc, "Error %s: generating diff %s %s",
-			    fsl_rc_cstr(rc), fc1->name ? fc1->name :
-			    "/dev/null", fc2->name ? fc2->name : "/dev/null");
+			    fsl_rc_cstr(rc), fc1 ? fc1->name : "/dev/null",
+			    fc2 ? fc2->name : "/dev/null");
 	}
 end:
 	fsl_buffer_clear(&fbuf1);
