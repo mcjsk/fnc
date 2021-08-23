@@ -1,7 +1,0 @@
-/**
-   require() plugin which simply resolves to the shared Fossil.Context
-   instance set up by the f-s2sh bootstrap code. This instance should
-   be used by all other modules so that everybody is using the same
-   database handles.
-*/
-return requireS2.fsl ||| (requireS2.fsl = new Fossil.Context());

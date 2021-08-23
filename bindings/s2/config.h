@@ -1,5 +1,0 @@
-#define S2_OS_UNIX 1
-#define S2_HAVE_REALPATH 1
-#define S2_HAVE_STAT 1
-#define S2_HAVE_CHDIR 1
-#define CWAL_OBASE_ISA_HASH 1

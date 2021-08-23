@@ -1,9 +1,0 @@
-assert 'ab' === 'a'+"b";
-assert 'a123' === 'a' + 123;
-assert 123 === 123 + 'a';
-assert '123' === '1' + 2 + 3;
-assert 123 === +'1' + 122;
-assert 'def' === 'd'+<<<X e X+"f";
-assert 1 === 'a'.#;
-assert '☺☺'.# === 2;
-assert catch {'a'.# = 1 /*cannot assign*/};
