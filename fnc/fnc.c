@@ -105,21 +105,22 @@
 		(var) = (tmp))
 #endif
 
-__dead void		 usage(void);
-static const char	*usage_timeline(void);
-static const char	*usage_diff(void);
-static const char	*usage_blame(void);
-static int		 fcli_flag_type_arg_cb(fcli_cliflag const *);
-static int		 cmd_timeline(fcli_command const *);
-static int		 cmd_diff(fcli_command const *);
-static int		 cmd_blame(fcli_command const *);
+__dead static void	usage(void);
+static void		usage_timeline(void);
+static void		usage_diff(void);
+static void		usage_blame(void);
+static int		fcli_flag_type_arg_cb(fcli_cliflag const *);
+static int		cmd_timeline(fcli_command const *);
+static int		cmd_diff(fcli_command const *);
+static int		cmd_blame(fcli_command const *);
 
 /*
  * Singleton initialising global configuration and state for app startup.
  */
 static struct fnc_setup {
 	/* Global options. */
-	bool		 err;		/* Indicate fnc error state. */
+	const char	*cmdarg;	/* Retain argv[1] for use/err report. */
+	int		 err;		/* Indicate fnc error state. */
 	bool		 hflag;		/* Flag if --help is requested. */
 	bool		 vflag;		/* Flag if --version is requested. */
 
@@ -153,15 +154,16 @@ static struct fnc_setup {
 	const char	*path;		/* Show blame of REQUIRED <path> arg. */
 
 	/* Command line flags and help. */
-	fcli_help_info	   fnc_help;			/* Global help. */
-	fcli_cliflag	   cliflags_global[3];		/* Global options. */
-	fcli_command	   cmd_args[4];			/* App commands. */
-	const char	*(*fnc_usage_cb[3])(void);	/* Command usage. */
-	fcli_cliflag	   cliflags_timeline[10];	/* Timeline options. */
-	fcli_cliflag	   cliflags_diff[7];		/* Diff options. */
-	fcli_cliflag	   cliflags_blame[2];		/* Blame options. */
+	fcli_help_info	  fnc_help;			/* Global help. */
+	fcli_cliflag	  cliflags_global[3];		/* Global options. */
+	fcli_command	  cmd_args[4];			/* App commands. */
+	void		(*fnc_usage_cb[3])(void);	/* Command usage. */
+	fcli_cliflag	  cliflags_timeline[10];	/* Timeline options. */
+	fcli_cliflag	  cliflags_diff[7];		/* Diff options. */
+	fcli_cliflag	  cliflags_blame[2];		/* Blame options. */
 } fnc_init = {
-	false,		/* err fnc error state. */
+	NULL,		/* cmdarg copy of argv[1] to aid usage/error report. */
+	0,		/* err fnc error state. */
 	false,		/* hflag if --help is requested. */
 	false,		/* vflag if --version is requested. */
 	NULL,		/* filter_types defaults to indiscriminate. */
@@ -524,7 +526,7 @@ static void		 sigpipe_handler(int);
 static void		 sigcont_handler(int);
 
 int
-main(int argc, char * const * argv)
+main(int argc, const char **argv)
 {
 	fcli_command	*cmd = NULL;
 	fsl_cx		*f = NULL;
@@ -541,27 +543,26 @@ main(int argc, char * const * argv)
 	if (!setlocale(LC_CTYPE, ""))
 		fsl_fprintf(stderr, "[!] Warning: Can't set locale.\n");
 
+	fnc_init.cmdarg = argv[1];	/* Which cmd to show usage if needed. */
+	fcli.clientFlags.verbose = 2;	/* Verbose error reporting. */
 	fcli.cliFlags = fnc_init.cliflags_global;
 	fcli.appHelp = &fnc_init.fnc_help;
-	rc = fcli_setup(argc, (char const * const *)argv);
+	rc = fcli_setup(argc, argv);
 	if (rc)
 		goto end;
 
 	if (fnc_init.vflag) {
 		fnc_show_version();
 		goto end;
-	} else if (fnc_init.hflag) {
+	} else if (fnc_init.hflag)
 		usage();
-		goto end;
-	}
 
 	if (argc == 1)
 		cmd = &fnc_init.cmd_args[FNC_VIEW_TIMELINE];
-	else if (((rc = fcli_dispatch_commands(fnc_init.cmd_args, true)
+	else if (((rc = fcli_dispatch_commands(fnc_init.cmd_args, false)
 	    == FSL_RC_NOT_FOUND)) || (rc = fcli_has_unused_args(false))) {
-		fnc_init.err = true;
+		fnc_init.err = rc;
 		usage();
-		goto end;
 	} else if (rc)
 		goto end;
 
@@ -629,7 +630,9 @@ cmd_timeline(fcli_command const *argv)
 		if (rid > 0)
 			fnc_init.start_commit.rid = rid;
 		else
-			return rc;
+			return fcli_err_set(FSL_RC_TYPE,
+			    "artifact [%s] not resolvable to a commit",
+			    fnc_init.start_commit.uuid);
 	}
 
 	rc = init_curses();
@@ -3681,7 +3684,7 @@ sigcont_handler(int sig)
 	rec_sigcont = 1;
 }
 
-__dead void
+__dead static void
 usage(void)
 {
 	/*
@@ -3694,57 +3697,63 @@ usage(void)
 	/* fsl_cx *f = fcli_cx(); */
 	/* f->output = fsl_outputer_FILE; */
 	/* f->output.state.state = (fnc_init.err == true) ? stderr : stdout; */
-        FILE *f = (fnc_init.err == true) ? stderr : stdout;
+        FILE *f = fnc_init.err ? stderr : stdout;
 	size_t idx = 0;
 
 	endwin();
 
-	if (fcli.argc)
+	/* If a command was passed on the CLI, output its corresponding help. */
+	if (fnc_init.cmdarg)
 		for (idx = 0; idx < nitems(fnc_init.cmd_args); ++idx) {
-			if (!fsl_strcmp(fcli.argv[0],
+			if (!fsl_strcmp(fnc_init.cmdarg,
 			    fnc_init.cmd_args[idx].name)) {
-				fsl_fprintf(f, "[%s] command:\n\n usage:%s\n\n",
-				    fnc_init.cmd_args[idx].name,
-				    fnc_init.fnc_usage_cb[idx]());
+				fsl_fprintf(f, "[%s] command:\n\n usage:",
+				    fnc_init.cmd_args[idx].name);
+				    fnc_init.fnc_usage_cb[idx]();
 				fcli_cliflag_help(fnc_init.cmd_args[idx].flags);
-				exit(fnc_init.err);
+				exit(fcli_end_of_main(fnc_init.err));
 			}
 		}
 
-	if (fnc_init.err)
-		fcli_err_report(true);
-
+	/* Otherwise, output help/usage for all commands. */
 	fcli_command_help(fnc_init.cmd_args, false);
-	fsl_fprintf(f, "[usage]\n\n%s\n\n%s\n\n%s\n\n  note: %s "
+	fsl_fprintf(f, "[usage]\n\n");
+	usage_timeline();
+	usage_diff();
+	usage_blame();
+	fsl_fprintf(f, "  note: %s "
 	    "with no args defaults to the timeline command.\n\n",
-	    usage_timeline(), usage_diff(), usage_blame(), fcli_progname());
+	    fcli_progname());
 
-	exit(fnc_init.err);
+	exit(fcli_end_of_main(fnc_init.err));
 }
 
-const char *
+static void
 usage_timeline(void)
 {
-	return fsl_mprintf(" %s timeline [-T tag] [-b branch] [-c hash]"
+	fsl_fprintf(fnc_init.err ? stderr : stdout,
+	    " %s timeline [-T tag] [-b branch] [-c hash]"
 	    " [-h|--help] [-n n] [-t type] [-u user] [-z|--utc]\n"
-	    "  e.g.: %s timeline --type ci -u jimmy ",
+	    "  e.g.: %s timeline --type ci -u jimmy\n\n",
 	    fcli_progname(), fcli_progname());
 }
 
-const char *
+static void
 usage_diff(void)
 {
-	return fsl_mprintf(" %s diff [-c|--no-colour] [-h|--help] [-i|--invert]"
+	fsl_fprintf(fnc_init.err ? stderr : stdout,
+	    " %s diff [-c|--no-colour] [-h|--help] [-i|--invert]"
 	    " [-q|--quiet] [-w|--whitespace] [-x|--context n] "
-	    "[hash ...]\n  e.g.: %s diff --context 3 d34db33f c0ff33",
+	    "[hash ...]\n  e.g.: %s diff --context 3 d34db33f c0ff33\n\n",
 	    fcli_progname(), fcli_progname());
 }
 
-const char *
+static void
 usage_blame(void)
 {
-	return fsl_mprintf(" %s blame [-h|--help] [-c hash] artifact\n"
-	    "  e.g.: %s blame -c d34db33f src/foo.c" ,
+	fsl_fprintf(fnc_init.err ? stderr : stdout,
+	    " %s blame [-h|--help] [-c hash] artifact\n"
+	    "  e.g.: %s blame -c d34db33f src/foo.c\n\n" ,
 	    fcli_progname(), fcli_progname());
 }
 
@@ -3777,14 +3786,18 @@ cmd_diff(fcli_command const *argv)
 		if (fcli_next_arg(false))
 			artifact1 = fcli_next_arg(true);
 		if (!fsl_strcmp(artifact1, "current")) {
-			fsl_ckout_changes_scan(f);
+			if ((rc = fsl_ckout_changes_scan(f)))
+				return fcli_err_set(rc,
+				    "fsl_ckout_changes_scan");
 			if (!fsl_ckout_has_changes(f)) {
 				fsl_fprintf(stdout, "No local changes.\n");
 				return rc;
 			}
 		}
-	} else
-		return fcli_err_set(FSL_RC_MISSING_INFO, "\n%s", usage_diff());
+	} else { /* fcli_* APIs should prevent getting here but just in case. */
+		usage_diff();
+		return fcli_err_set(FSL_RC_MISUSE, "\ninvalid args");
+	}
 
 	/* Find the corresponding rids for the versions we have; checkout = 0 */
 	rc = fsl_sym_to_rid(f, artifact1, FSL_SATYPE_ANY, &prid);
@@ -3812,7 +3825,7 @@ cmd_diff(fcli_command const *argv)
 		commit->type = "checkin";
 	else
 		return fcli_err_set(FSL_RC_TYPE,
-		    "artifact(s) [%s] not resolvable to a commit",
+		    "artifact(s) [%s] not resolvable to a checkin",
 		    (!fsl_rid_is_a_checkin(f, rid) && rid != 0) &&
 		    !fsl_rid_is_a_checkin(f, prid) ?
 		    fsl_mprintf("%s / %s", artifact1, artifact2) :
