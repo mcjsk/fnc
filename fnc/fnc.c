@@ -566,7 +566,6 @@ main(int argc, const char **argv)
 	} else if (rc)
 		goto end;
 
-
 	rc = fcli_fingerprint_check(true);
 	if (rc)
 		goto end;
@@ -1531,8 +1530,8 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 {
 	fsl_cx		*f = fcli_cx();
 	wchar_t		*usr_wcstr = NULL, *wcomment = NULL;
-	char		*comment = NULL, *date = NULL, *pad = NULL;
-	char		*eol = NULL, *user = NULL;
+	char		*comment0 = NULL, *comment = NULL, *date = NULL;
+	char		*eol = NULL, *pad = NULL, *user = NULL;
 	size_t		 i = 0;
 	int		 col_pos, ncols_avail, usrlen, commentlen, rc = 0;
 
@@ -1575,7 +1574,8 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 		goto end;
 
 	/* Only show comment up to the first newline character. */
-	comment = strdup(commit->comment);
+	comment0 = strdup(commit->comment);
+	comment = comment0;
 	if (comment == NULL)
 		return fsl_cx_err_set(f, FSL_RC_OOM, "strdup");
 	while (*comment == '\n')
@@ -1598,7 +1598,7 @@ end:
 	fsl_free(user);
 	fsl_free(usr_wcstr);
 	fsl_free(pad);
-	fsl_free(comment);
+	fsl_free(comment0);
 	fsl_free(wcomment);
 	return rc;
 }
