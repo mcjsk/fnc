@@ -1962,6 +1962,12 @@ FSL_EXPORT void fsl_deck_clean_cards(fsl_deck * d, char const * letters);
    opposed to most recent mtime, for whatever reason). If rcvid>0 then
    it searches for an exact match.
 
+   If oldVersion is set, use the original Fossil fingerprint algorithm
+   (i.e., quote(mtime) sans datetime(mtime) in the SQL query), this may
+   be required on older Fossil repositories. It is suggested to call
+   this routine first without oldVersion set, and if the subsequent
+   fingerprint comparison fails, try again with oldVersion set.
+
    Returns 0 on non-error, where finding no matching rcvid causes
    FSL_RC_NOT_FOUND to be returned. If 0 is returned then *zOut will
    be non-NULL and ownership of that value is transferred to the
@@ -1978,7 +1984,8 @@ FSL_EXPORT void fsl_deck_clean_cards(fsl_deck * d, char const * letters);
 
    @see fsl_ckout_fingerprint_check()
 */
-FSL_EXPORT int fsl_repo_fingerprint_search(fsl_cx *f, fsl_id_t rcvid, char ** zOut);
+FSL_EXPORT int fsl_repo_fingerprint_search(fsl_cx *f, fsl_id_t rcvid,
+		char ** zOut, bool oldVersion);
 
 #if defined(__cplusplus)
 } /*extern "C"*/

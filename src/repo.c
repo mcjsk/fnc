@@ -1659,16 +1659,31 @@ int fsl_repo_blob_lookup( fsl_cx * f, fsl_buffer const * src, fsl_id_t * ridOut,
   return rc;
 }
 
-int fsl_repo_fingerprint_search(fsl_cx *f, fsl_id_t rcvid, char ** zOut){
+int fsl_repo_fingerprint_search( fsl_cx *f, fsl_id_t rcvid, char ** zOut,
+                                 bool oldVersion ){
   int rc = 0;
   fsl_db * const db = fsl_needs_repo(f);
   if(!db) return FSL_RC_NOT_A_REPO; 
   fsl_buffer * const sql = fsl_cx_scratchpad(f);
   fsl_stmt q = fsl_stmt_empty;
-  rc = fsl_buffer_append(sql,
-                         "SELECT rcvid, quote(uid), datetime(mtime), "
-                         "quote(nonce), quote(ipaddr) "
-                         "FROM rcvfrom ", -1);
+  /*
+   * If oldVersion is set, use original fingerprint query; from Fossil db.c:
+   * The original fingerprint algorithm used "quote(mtime)".  But this could
+   * give slightly different answers depending on how the floating-point
+   * hardware is configured.  For example, it gave different answers on
+   * native Linux versus running under valgrind.
+   */
+  if(oldVersion){
+    rc = fsl_buffer_append(sql,
+                          "SELECT rcvid, quote(uid), quote(mtime), "
+                          "quote(nonce), quote(ipaddr) "
+                          "FROM rcvfrom ", -1);
+  }else{
+    rc = fsl_buffer_append(sql,
+                          "SELECT rcvid, quote(uid), datetime(mtime), "
+                          "quote(nonce), quote(ipaddr) "
+                          "FROM rcvfrom ", -1);
+  }
   if(rc) goto end;
   rc = (rcvid>0)
     ? fsl_buffer_appendf(sql, "WHERE rcvid=%" FSL_ID_T_PFMT, rcvid)

@@ -1269,7 +1269,7 @@ int fsl_ckout_version_write( fsl_cx *f, fsl_id_t vid,
   }
   if(!rc){
     char * zFingerprint = 0;
-    rc = fsl_repo_fingerprint_search(f, 0, &zFingerprint);
+    rc = fsl_repo_fingerprint_search(f, 0, &zFingerprint, false);
     if(!rc){
       rc = fsl_config_set_text(f, FSL_CONFDB_CKOUT,
                                "fingerprint", zFingerprint);
@@ -2106,12 +2106,17 @@ int fsl_ckout_fingerprint_check(fsl_cx * f){
   buf->mem[6] = 'x';
 #endif
   rcvCkout = (fsl_id_t)atoi(zCkout);
-  rc = fsl_repo_fingerprint_search(f, rcvCkout, &zRepo);
+  rc = fsl_repo_fingerprint_search(f, rcvCkout, &zRepo, false);
   switch(rc){
     case FSL_RC_NOT_FOUND: goto mismatch;
     case 0:
       assert(zRepo);
-      if(fsl_strcmp(zRepo,zCkout)) goto mismatch;
+      if(fsl_strcmp(zRepo,zCkout)){
+        rc = fsl_repo_fingerprint_search(f, rcvCkout, &zRepo, true);
+      }
+      if(rc || fsl_strcmp(zRepo,zCkout)){
+        goto mismatch;
+      }
       break;
     default:
       break;
