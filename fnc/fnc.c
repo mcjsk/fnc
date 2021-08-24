@@ -2570,6 +2570,7 @@ write_commit_meta(struct fnc_diff_view_state *s)
 
 	st = fsl_strdup(s->selected_commit->comment);
 	getyx(s->timeline_view->window, lineno, start_col);
+	if(lineno){/* avoiding "set but not used" error */}
 	while ((line = strsep(&st, "\n")) != NULL) {
 		linelen = fsl_strlen(line);
 		ncols_avail = COLS - start_col - 1;
