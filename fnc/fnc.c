@@ -2534,7 +2534,7 @@ write_commit_meta(struct fnc_diff_view_state *s)
 	char		*line = NULL, *st = NULL;
 	fsl_size_t	 linelen, ncols_avail, idx = 0;
 	off_t		 lnoff = 0;
-	int		 start_col, lineno, n, rc = 0;
+	int		 start_col, n, rc = 0;
 
 	if ((n = fsl_fprintf(s->f,"%s %s\n", s->selected_commit->type,
 	    s->selected_commit->uuid)) < 0)
@@ -2569,8 +2569,7 @@ write_commit_meta(struct fnc_diff_view_state *s)
 		goto end;
 
 	st = fsl_strdup(s->selected_commit->comment);
-	getyx(s->timeline_view->window, lineno, start_col);
-	if(lineno){/* avoiding "set but not used" error */}
+	start_col = getcury(s->timeline_view->window);
 	while ((line = strsep(&st, "\n")) != NULL) {
 		linelen = fsl_strlen(line);
 		ncols_avail = COLS - start_col - 1;
