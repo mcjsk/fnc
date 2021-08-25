@@ -13821,7 +13821,7 @@ int fsl_ckout_fingerprint_check(fsl_cx * f){
     case FSL_RC_NOT_FOUND: goto mismatch;
     case 0:
       assert(zRepo);
-      if(rc || fsl_strcmp(zRepo,zCkout)){
+      if(fsl_strcmp(zRepo,zCkout)){
         goto mismatch;
       }
       break;
