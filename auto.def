@@ -106,7 +106,9 @@ available packages.}
 set LIB_CURSES ""
 set CFLAGS_CURSES ""
 puts "Looking for \[n]curses..."
-if {"" ne $pcBin} {
+if {"" ne $pcBin && $::tcl_platform(os)!="Darwin"} {
+# Some macOS pkg-config configurations alter library search paths, which make
+# the compiler unable to find lib iconv, so don't use pkg-config on macOS.
     set np ""
     foreach p {ncursesw ncurses} {
         if {[catch {exec $pcBin --exists $p}]} {
