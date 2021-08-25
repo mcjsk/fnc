@@ -17134,9 +17134,11 @@ FSL_EXPORT void fsl_deck_clean_cards(fsl_deck * d, char const * letters);
    on allocation error, or any number of potential db-related codes if
    something goes wrong at the db level.
 
-   This API does not support the "version 0" fossil fingerprint. That
-   one was very short-lived and is not expected to be in any/many
-   repositories which are accessed via this library.
+   This API internally first checks for "version 1" fossil
+   fingerprints and falls back to "version 0" fingerprint if a v1
+   fingerprint is not found. Version 0 was very short-lived and is not
+   expected to be in many repositories which are accessed via this
+   library. Practice has, however, revealed some.
 
    @see fsl_ckout_fingerprint_check()
 */

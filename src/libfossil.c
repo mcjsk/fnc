@@ -13821,7 +13821,9 @@ int fsl_ckout_fingerprint_check(fsl_cx * f){
     case FSL_RC_NOT_FOUND: goto mismatch;
     case 0:
       assert(zRepo);
-      if(fsl_strcmp(zRepo,zCkout)) goto mismatch;
+      if(rc || fsl_strcmp(zRepo,zCkout)){
+        goto mismatch;
+      }
       break;
     default:
       break;
@@ -31315,16 +31317,35 @@ int fsl_repo_blob_lookup( fsl_cx * f, fsl_buffer const * src, fsl_id_t * ridOut,
   return rc;
 }
 
-int fsl_repo_fingerprint_search(fsl_cx *f, fsl_id_t rcvid, char ** zOut){
+int fsl_repo_fingerprint_search( fsl_cx *f, fsl_id_t rcvid, char ** zOut ){
   int rc = 0;
   fsl_db * const db = fsl_needs_repo(f);
   if(!db) return FSL_RC_NOT_A_REPO; 
   fsl_buffer * const sql = fsl_cx_scratchpad(f);
   fsl_stmt q = fsl_stmt_empty;
-  rc = fsl_buffer_append(sql,
-                         "SELECT rcvid, quote(uid), datetime(mtime), "
-                         "quote(nonce), quote(ipaddr) "
-                         "FROM rcvfrom ", -1);
+  int version = 1 /* Fingerprint version to check: 0 or 1 */;
+  try_again:
+  /*
+   * We check both v1 and v0 fingerprints, in that order. From Fossil
+   * db.c:
+   *
+   * The original fingerprint algorithm used "quote(mtime)".  But this could
+   * give slightly different answers depending on how the floating-point
+   * hardware is configured.  For example, it gave different answers on
+   * native Linux versus running under valgrind.
+   */
+  if(0==version){
+    rc = fsl_buffer_append(sql,
+                          "SELECT rcvid, quote(uid), quote(mtime), "
+                          "quote(nonce), quote(ipaddr) "
+                          "FROM rcvfrom ", -1);
+  }else{
+    assert(1==version);
+    rc = fsl_buffer_append(sql,
+                          "SELECT rcvid, quote(uid), datetime(mtime), "
+                          "quote(nonce), quote(ipaddr) "
+                          "FROM rcvfrom ", -1);
+  }
   if(rc) goto end;
   rc = (rcvid>0)
     ? fsl_buffer_appendf(sql, "WHERE rcvid=%" FSL_ID_T_PFMT, rcvid)
@@ -31351,6 +31372,11 @@ int fsl_repo_fingerprint_search(fsl_cx *f, fsl_id_t rcvid, char ** zOut){
       break;
     }
     case FSL_RC_STEP_DONE:
+      if(1==version){
+        version = 0;
+        fsl_buffer_reuse(sql);
+        goto try_again;
+      }
       rc = FSL_RC_NOT_FOUND;
       break;
     default:
