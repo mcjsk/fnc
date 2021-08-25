@@ -21,7 +21,10 @@ ifneq ($(filter $(PLATFORM),Darwin),)
 endif
 FNC_LDFLAGS += -lm
 FNC_LDFLAGS += $(LIB_CURSES) -lutil -lz -lpthread
-#CPPFLAGS += -D_XOPEN_SOURCE_EXTENDED
+
+# This is needed for Mac builds, else they don't see the
+# wide-char curses APIs:
+CPPFLAGS += -D_XOPEN_SOURCE_EXTENDED
 
 fnc.BIN.OBJECTS += fnc.o
 fnc.BIN.LDFLAGS := $(FNC_LDFLAGS)
