@@ -123,8 +123,20 @@ if {"" ne $pcBin} {
         break
     }
     if {"" ne $np} {
+        set ppanel panel
+        if {"ncursesw" eq $np} {
+            set ppanel panelw
+        }
         set CFLAGS_CURSES [exec $pcBin --cflags $np]
+        # append CFLAGS_CURSES " " [exec $pcBin --cflags $ppanel]
+        # ^^^^ appending the panel cflags will end up duplicating
+        # at least one -D flag from $np's cflags, leading to
+        # "already defined" errors at compile-time. Sigh. Note, however,
+        # that $ppanel's cflags have flags which $np's do not, so we
+        # may need to include those flags anyway and manually perform
+        # surgery on the list to remove dupes. Sigh.
         set LIB_CURSES [exec $pcBin --libs $np]
+        append LIB_CURSES " " [exec $pcBin --libs $ppanel]
     }
 }
 
@@ -136,13 +148,13 @@ if {"" eq $LIB_CURSES} {
         msg-result "Found curses.h"
         if {[my-check-function-in-lib waddnwstr ncursesw]} {
             msg-result "Found -lncursesw"
-            set LIB_CURSES -lncursesw
+            set LIB_CURSES "-lncursesw -lpanelw"
         } elseif {[my-check-function-in-lib initscr ncurses]} {
             msg-result "Found -lncurses"
-            set LIB_CURSES -lncurses
+            set LIB_CURSES "-lncurses -lpanel"
         } elseif {[my-check-function-in-lib initscr curses]} {
             msg-result "Found -lcurses"
-            set LIB_CURSES -lcurses
+            set LIB_CURSES "-lcurses -lpanel"
         }
     }
 }

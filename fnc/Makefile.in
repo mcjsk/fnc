@@ -20,7 +20,7 @@ ifneq ($(filter $(PLATFORM),Darwin),)
   FNC_LDFLAGS += -liconv
 endif
 FNC_LDFLAGS += -lm
-FNC_LDFLAGS += -lpanel $(LIB_CURSES) -lutil -lz -lpthread
+FNC_LDFLAGS += $(LIB_CURSES) -lutil -lz -lpthread
 #CPPFLAGS += -D_XOPEN_SOURCE_EXTENDED
 
 fnc.BIN.OBJECTS += fnc.o
