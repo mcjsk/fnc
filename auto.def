@@ -123,20 +123,32 @@ if {"" ne $pcBin} {
         break
     }
     if {"" ne $np} {
-        set ppanel panel
+        set ppanel ""
         if {"ncursesw" eq $np} {
-            set ppanel panelw
+            if {![catch {exec $pcBin --exists panelw}]} {
+                set ppanel panelw
+            }
+        }
+        if {"" eq $ppanel && ![catch {exec $pcBin --exists panel}]} {
+            set ppanel panel
         }
         set CFLAGS_CURSES [exec $pcBin --cflags $np]
-        # append CFLAGS_CURSES " " [exec $pcBin --cflags $ppanel]
-        # ^^^^ appending the panel cflags will end up duplicating
-        # at least one -D flag from $np's cflags, leading to
-        # "already defined" errors at compile-time. Sigh. Note, however,
-        # that $ppanel's cflags have flags which $np's do not, so we
-        # may need to include those flags anyway and manually perform
-        # surgery on the list to remove dupes. Sigh.
         set LIB_CURSES [exec $pcBin --libs $np]
-        append LIB_CURSES " " [exec $pcBin --libs $ppanel]
+        if {"" eq $ppanel} {
+            # Apparently Mac brew has pkg-config for ncursesw but not
+            # panel/panelw, but hard-coding -lpanel seems to work on
+            # that platform.
+            append LIB_CURSES " -lpanel"
+        } else {
+            append LIB_CURSES " " [exec $pcBin --libs $ppanel]
+            # append CFLAGS_CURSES " " [exec $pcBin --cflags $ppanel]
+            # ^^^^ appending the panel cflags will end up duplicating
+            # at least one -D flag from $np's cflags, leading to
+            # "already defined" errors at compile-time. Sigh. Note, however,
+            # that $ppanel's cflags have flags which $np's do not, so we
+            # may need to include those flags anyway and manually perform
+            # surgery on the list to remove dupes. Sigh.
+        }
     }
 }
 
