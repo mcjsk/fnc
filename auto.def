@@ -51,12 +51,6 @@ if {![cc-check-c99]} {
 
 define CC_FLAG_C99 $CC_FLAG_C99
 
-if {![get-define FSL_ENABLE_MODULE_LOADER]} {
-    msg-result {No usable module loading library found. No worries, because we won't have a module system yet. :-D}
-} else {
-    msg-result {Found a module loader. Now we just need something to do with it.}
-}
-
 ########################################################################
 # A proxy for cc-check-function-in-lib which "undoes" any changes that
 # routine makes to the LIBS define.
