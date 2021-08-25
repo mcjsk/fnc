@@ -4,9 +4,9 @@ LIB_CURSES := @LIB_CURSES@
 ifeq (,$(LIB_CURSES))
 $(error Expecting LIB_CURSES to be set by the configure process.)
 endif
-
+CFLAGS_CURSES := @CFLAGS_CURSES@
 LIBF_DIR := $(TOP_DIR)/src
-CPPFLAGS += -I$(LIBF_DIR)
+CPPFLAGS += -I$(LIBF_DIR) $(CFLAGS_CURSES)
 
 ########################################################################
 # To build fnc, we need the curses and pthread libraries.
@@ -14,14 +14,14 @@ CPPFLAGS += -I$(LIBF_DIR)
 # -liconv is for libfossil on macOS
 # -lutil is... ???
 # -lm is for sqlite3
-PLATFORM := $(shell sh -c 'uname 2>/dev/null || echo Unknown')
 FNC_LDFLAGS := $(LIBF_DIR)/libfossil.o $(LIBF_DIR)/sqlite3.o
+PLATFORM := $(shell sh -c 'uname 2>/dev/null || echo Unknown')
 ifneq ($(filter $(PLATFORM),Darwin),)
   FNC_LDFLAGS += -liconv
 endif
 FNC_LDFLAGS += -lm
 FNC_LDFLAGS += -lpanel $(LIB_CURSES) -lutil -lz -lpthread
-CPPFLAGS += -D_XOPEN_SOURCE_EXTENDED
+#CPPFLAGS += -D_XOPEN_SOURCE_EXTENDED
 
 fnc.BIN.OBJECTS += fnc.o
 fnc.BIN.LDFLAGS := $(FNC_LDFLAGS)

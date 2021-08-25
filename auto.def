@@ -67,22 +67,6 @@ proc my-check-function-in-lib {function libs {otherlibs {}}} {
     return $found
 }
 
-########################################################################
-# readline is only used (if at all) by s2sh. If it's not available, we
-# fall back to a tree-local copy of the BSD-licensed linenoise editing
-# library.
-if {[cc-check-includes readline/readline.h] &&
-    [my-check-function-in-lib readline readline]} {
-    define FSL_ENABLE_READLINE 1
-    define FSL_ENABLE_LINENOISE 0
-    msg-result "Enabling libreadline for f-s2sh line editing."
-} else {
-    msg-result "libreadline not found. f-s2sh will use the linenoise line editor."
-    define FSL_ENABLE_READLINE 0
-    define FSL_ENABLE_LINENOISE 1
-    define lib_readline ""
-}
-
 # cc-check-functions getcwd fopen
 cc-check-functions opendir stat pipe inet_ntop getaddrinfo
 #msg-result [cc-check-functions lstat]
@@ -117,30 +101,70 @@ if {[opt-bool no-debug]} {
     set cFlags "$cFlags -g -DDEBUG -O0"
 }
 
+
+set pcBin [find-an-executable pkg-config]
+if {"" eq $pcBin} {
+    puts {pkg-config not found, so making some guesses about
+available packages.}
+}
 ########################################################################
 # Curses!
 set LIB_CURSES ""
+set CFLAGS_CURSES ""
 puts "Looking for \[n]curses..."
-define HAVE_CURSES_H [cc-check-includes curses.h]
-if {[get-define HAVE_CURSES_H]} {
-    # Linux has -lncurses, BSD -lcurses. Both have <curses.h>
-    msg-result "Found curses.h"
-    if {[my-check-function-in-lib waddnwstr ncursesw]} {
-        msg-result "Found -lncursesw"
-        set LIB_CURSES -lncursesw
-    } elseif {[my-check-function-in-lib initscr ncurses]} {
-        msg-result "Found -lncurses"
-        set LIB_CURSES -lncurses
-    } elseif {[my-check-function-in-lib initscr curses]} {
-        msg-result "Found -lcurses"
-        set LIB_CURSES -lcurses
+if {"" ne $pcBin} {
+    set np ""
+    foreach p {ncursesw ncurses} {
+        if {[catch {exec $pcBin --exists $p}]} {
+            continue
+        }
+        set np $p
+        puts "Using pkg-config curses package \[$p]"
+        break
+    }
+    if {"" ne $np} {
+        set CFLAGS_CURSES [exec $pcBin --cflags $np]
+        set LIB_CURSES [exec $pcBin --libs $np]
+    }
+}
+
+if {"" eq $LIB_CURSES} {
+    puts "Guessing curses location (will fail for exotic locations)..."
+    define HAVE_CURSES_H [cc-check-includes curses.h]
+    if {[get-define HAVE_CURSES_H]} {
+        # Linux has -lncurses, BSD -lcurses. Both have <curses.h>
+        msg-result "Found curses.h"
+        if {[my-check-function-in-lib waddnwstr ncursesw]} {
+            msg-result "Found -lncursesw"
+            set LIB_CURSES -lncursesw
+        } elseif {[my-check-function-in-lib initscr ncurses]} {
+            msg-result "Found -lncurses"
+            set LIB_CURSES -lncurses
+        } elseif {[my-check-function-in-lib initscr curses]} {
+            msg-result "Found -lcurses"
+            set LIB_CURSES -lcurses
+        }
     }
 }
 if {"" eq $LIB_CURSES} {
     user-error "!Curses! Foiled again!"
+} else {
+    puts {
+        ************************************************************
+        If your build fails due to missing functions such as
+        waddwstr(), make sure you have the ncursesW development
+        package installed. Some platforms combine the "w" and non-w
+        curses builds and some don't.
+
+        The package may have a name such as libncursesw5-dev or
+        some such.
+        ************************************************************
+    }
 }
 define LIB_CURSES $LIB_CURSES
+define CFLAGS_CURSES $CFLAGS_CURSES
 unset LIB_CURSES
+unset CFLAGS_CURSES
 
 
 puts "Checking for compile_commands.json support..."
