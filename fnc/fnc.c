@@ -393,6 +393,7 @@ struct fnc_diff_view_state {
 	int				 sbs;
 	int				 matched_line;
 	int				 current_line;
+	size_t				 ncols;
 	size_t				 nlines;
 	off_t				*line_offsets;
 	bool				 eof;
@@ -527,7 +528,7 @@ main(int argc, const char **argv)
 	fcli_command	*cmd = NULL;
 	fsl_cx		*f = NULL;
 	fsl_error	 e = fsl_error_empty;	/* DEBUG */
-	int		 hp, rc = 0;
+	int		 rc = 0;
 
 	fnc_init.filter_types =
 	    (struct artifact_types *)fsl_malloc(sizeof(struct artifact_types));
@@ -562,15 +563,9 @@ main(int argc, const char **argv)
 	} else if (rc)
 		goto end;
 
-	/* Fingerprint check seems to fail on some SHA1 repositories. */
-	hp = fsl_config_get_int32(f, FSL_CONFDB_REPO, FSL_HPOLICY_AUTO,
-	    "hash-policy");
-        if (hp != FSL_HPOLICY_SHA1 && hp != FSL_HPOLICY_AUTO  /* &&
-            hp != FSL_HPOLICY_SHA3 */) {  /* May need to tighten this check. */
-		rc = fcli_fingerprint_check(true);
-		if (rc)
-			goto end;
-        }
+	rc = fcli_fingerprint_check(true);
+	if (rc)
+		goto end;
 
 	f = fcli_cx();
 	if (!fsl_cx_db_repo(f)) {
@@ -2318,6 +2313,7 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 
 	s->line_offsets = NULL;
 	s->nlines = 0;
+	s->ncols = view->ncols;
 	rc = create_diff(s);
 	if (rc)
 		return rc;
@@ -2538,9 +2534,9 @@ static int
 write_commit_meta(struct fnc_diff_view_state *s)
 {
 	char		*line = NULL, *st = NULL;
-	fsl_size_t	 linelen, ncols_avail, idx = 0;
+	fsl_size_t	 linelen, idx = 0;
 	off_t		 lnoff = 0;
-	int		 start_col, n, rc = 0;
+	int		 n, rc = 0;
 
 	if ((n = fsl_fprintf(s->f,"%s %s\n", s->selected_commit->type,
 	    s->selected_commit->uuid)) < 0)
@@ -2575,12 +2571,10 @@ write_commit_meta(struct fnc_diff_view_state *s)
 		goto end;
 
 	st = fsl_strdup(s->selected_commit->comment);
-	start_col = getcury(s->timeline_view->window);
 	while ((line = strsep(&st, "\n")) != NULL) {
 		linelen = fsl_strlen(line);
-		ncols_avail = COLS - start_col - 1;
-		if (linelen >= ncols_avail) {
-			rc = wrapline(line, ncols_avail, s, &lnoff);
+		if (linelen >= s->ncols) {
+			rc = wrapline(line, s->ncols, s, &lnoff);
 			if (rc)
 				goto end;
 		}
