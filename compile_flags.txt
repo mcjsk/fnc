@@ -1,6 +1,8 @@
 -std=c89
 -I
 include
+-I
+src
 -isystem
 /usr/local/include
 -isystem

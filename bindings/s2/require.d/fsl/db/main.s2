@@ -1,5 +1,0 @@
-/**
-   require.s2 module which returns the "main" db handle of
-   the shared Fossil.Context instance.
-*/
-return requireS2(['fsl/context']).0.db;

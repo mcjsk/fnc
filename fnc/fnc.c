@@ -64,11 +64,7 @@
 #include <wchar.h>
 #include <langinfo.h>
 
-#include "fossil-scm/fossil-cli.h"
-#include "fossil-scm/fossil-core.h"
-#include "fossil-scm/fossil-db.h"
-#include "fossil-scm/fossil-internal.h"
-#include "fossil-scm/fossil-util.h"
+#include "libfossil.h"
 
 #define FNC_VERSION	0.1a
 

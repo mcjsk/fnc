@@ -6,17 +6,14 @@ all:
 .NOTPARALLEL: # stop subdir makes and reconfigure from launching
               # multiple times concurrently.
 include config.make
-ShakeNMake.CISH_SOURCES := $(wildcard *.c) $(wildcard $(SRC.DIR)/*.c)
+ShakeNMake.CISH_SOURCES := $(wildcard *.c)
 # Subdir cleanup rules and deps list must come before shakenmake.make is included
 # or they must be set up manually afterwards...
-clean-.: clean-doc clean-fnc clean-bindings
-distclean-.: distclean-doc distclean-fnc distclean-bindings
+clean-.: clean-fnc clean-src
+distclean-.: distclean-fnc distclean-src
 include shakenmake.make
 MAIN_MAKEFILES := $(PACKAGE.MAKEFILE) $(ShakeNMake.MAKEFILE) @AUTODEPS@
 
-AUTOCONFIG_H := @srcdir@/include/fossil-scm/autoconfig.h
-#SRCDIR := @top_srcdir@/src
-SRCDIR := @srcdir@/src
 
 define CALL.SUBDIR
 endef
@@ -26,30 +23,6 @@ $(eval $(call ShakeNMake.CALL.SUBDIRS,$(SUBDIRS)))
 subdir-fnc: subdir-src
 all: subdir-src subdir-fnc
 
-
-ifeq (1,@LIBFOSSIL_STATIC@)
-  THELIB.LIB := libfossil$(ShakeNMake.EXTENSIONS.LIB)
-else
-  THELIB.LIB :=
-endif
-ifeq (1,@LIBFOSSIL_SHARED@)
-  THELIB.DLL := libfossil$(ShakeNMake.EXTENSIONS.DLL)
-else
-  THELIB.DLL :=
-endif
-
-ifneq (,$(THELIB.DLL)$(THELIB.LIB))
-src/$(THELIB.DLL):
-	$(MAKE) -C src
-src/$(THELIB.LIB):
-	$(MAKE) -C src
-$(THELIB.DLL): src/$(THELIB.DLL)
-	ln -sf src/$(THELIB.DLL) .
-$(THELIB.LIB): src/$(THELIB.LIB)
-	ln -sf src/$(THELIB.LIB) .
-all: $(THELIB.DLL) $(THELIB.LIB)
-CLEAN_FILES += $(wildcard libfossil.so libfossil.dll libfossil.a)
-endif
 DISTCLEAN_FILES += config.make
 
 ########################################################################
@@ -66,17 +39,8 @@ endif
 install: all
 	@echo 'No installation rules yet.'
 
-DISTCLEAN_FILES += $(AUTOCONFIG_H) Makefile config.log autosetup/jimsh0 \
+DISTCLEAN_FILES += Makefile config.log autosetup/jimsh0 \
 	$(wildcard compile_commands/*) compile_commands.json+
-
-# automake compatibility. do nothing for all these targets
-#EMPTY_AUTOMAKE_TARGETS := dvi pdf ps info html tags ctags mostlyclean maintainer-clean check installcheck installdirs \
-# install-pdf install-ps install-info install-html -install-dvi uninstall install-exec install-data distdir
-#.PHONY: $(EMPTY_AUTOMAKE_TARGETS)
-#$(EMPTY_AUTOMAKE_TARGETS):
-
-## @top_srcdir@/Makefile.in: # b/c AUTODEPS contains this name (it probably shouldn't)
-#$(FSL.OBJ): @AUTODEPS@ @top_srcdir@/Makefile @top_srcdir@/config.make
 
 # Reconfigure if needed
 ifeq ($(findstring clean,$(MAKECMDGOALS)),)
