@@ -297,7 +297,8 @@ enum fnc_search_state {
 	SEARCH_WAITING,
 	SEARCH_CONTINUE,
 	SEARCH_COMPLETE,
-	SEARCH_NO_MATCH
+	SEARCH_NO_MATCH,
+	SEARCH_FOR_END
 };
 
 enum diff_colours {
@@ -360,6 +361,7 @@ struct fnc_tl_thread_cx {
 	enum fnc_search_mvmnt	 *searching;
 	int			  spin_idx;
 	int			  ncommits_needed;
+	bool			  endjmp;
 	bool			  timeline_end;
 	sig_atomic_t		 *quit;
 	pthread_cond_t		  commit_consumer;
@@ -1213,7 +1215,7 @@ build_commits(struct fnc_tl_thread_cx *cx)
 		TAILQ_INSERT_TAIL(&cx->commits->head, entry, entries);
 		cx->commits->ncommits++;
 
-		if (*cx->searching == SEARCH_FORWARD &&
+		if (!cx->endjmp && *cx->searching == SEARCH_FORWARD &&
 		    *cx->search_status == SEARCH_WAITING) {
 			if (find_commit_match(commit, cx->regex))
 				*cx->search_status = SEARCH_CONTINUE;
@@ -1760,6 +1762,11 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		select_commit(s);
 		break;
 	}
+	case KEY_END:
+	case 'G':
+		view->search_status = SEARCH_FOR_END;
+		view_search_start(view);
+		break;
 	case 'k':
 	case KEY_UP:
 	case '<':
@@ -1780,6 +1787,23 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			s->selected_idx = 0;
 		else
 			timeline_scroll_up(s, view->nlines - 1);
+		select_commit(s);
+		break;
+	case 'g': {
+		bool home = true;
+		halfdelay(10);	/* Block for 1 second, then return ERR. */
+		if (wgetch(view->window) != 'g')
+			home = false;
+		cbreak();	/* Return to blocking mode on user input. */
+		if (!home)
+			break;
+		/* FALL THROUGH */
+	}
+	case KEY_HOME:
+		if (s->first_commit_onscreen == NULL)
+			break;
+		s->selected_idx = 0;
+		timeline_scroll_up(s, s->commits.ncommits);
 		select_commit(s);
 		break;
 	case KEY_RESIZE:
@@ -1977,6 +2001,17 @@ view_search_start(struct fnc_view *view)
 	if (view->nlines < 1)
 		return rc;
 
+	if (view->search_status == SEARCH_FOR_END) {
+		view->search_init(view);
+		view->started_search = true;
+		view->searching = SEARCH_FORWARD;
+		view->search_status = SEARCH_WAITING;
+		view->state.timeline.thread_cx.endjmp = true;
+		view->search_next(view);
+
+		return rc;
+	}
+
 	mvwaddstr(view->window, view->start_ln + view->nlines - 1, 0, "/");
 	wclrtoeol(view->window);
 
@@ -2059,6 +2094,13 @@ tl_search_next(struct fnc_view *view)
 
 	while (1) {
 		if (entry == NULL) {
+			if (s->thread_cx.timeline_end && s->thread_cx.endjmp) {
+				s->matched_commit = TAILQ_LAST(&s->commits.head,
+				    commit_tailhead);
+				view->search_status = SEARCH_COMPLETE;
+				s->thread_cx.endjmp = false;
+				break;
+			}
 			if (s->thread_cx.timeline_end || view->searching ==
 			    SEARCH_REVERSE) {
 				view->search_status = (s->matched_commit ==
@@ -2075,7 +2117,8 @@ tl_search_next(struct fnc_view *view)
 			return signal_tl_thread(view, 0);
 		}
 
-		if (find_commit_match(entry->commit, &view->regex)) {
+		if (!s->thread_cx.endjmp && find_commit_match(entry->commit,
+		    &view->regex)) {
 			view->search_status = SEARCH_CONTINUE;
 			s->matched_commit = entry;
 			break;
@@ -3373,6 +3416,13 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		}
 		free(line);
 		break;
+	case KEY_END:
+	case 'G':
+		if (s->eof)
+			break;
+		s->first_line_onscreen = (s->nlines - view->nlines) + 2;
+		s->eof = true;
+		break;
 	case KEY_UP:
 	case 'k':
 		if (s->first_line_onscreen > 1)
@@ -3385,6 +3435,19 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		i = 0;
 		while (i++ < view->nlines - 1 && s->first_line_onscreen > 1)
 			--s->first_line_onscreen;
+		break;
+	case 'g': {
+		bool home = true;
+		halfdelay(10);	/* Only block for 1 second, then return ERR. */
+		if (wgetch(view->window) != 'g')
+			home = false;
+		cbreak();	/* Return to blocking mode on user input. */
+		if (!home)
+			break;
+		/* FALL THROUGH */
+	}
+	case KEY_HOME:
+		s->first_line_onscreen = 1;
 		break;
 	case 'c':
 	case 'i':
