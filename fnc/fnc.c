@@ -83,6 +83,7 @@
 #define DIFF_MAX_CTXT	64		/* Max diff context lines. */
 #define SPIN_INTERVAL	200		/* Status line progress indicator. */
 #define SPINNER		"\\|/-\0"
+#define NULL_DEVICE	"/dev/null"
 
 /* Portability macros. */
 #ifdef __OpenBSD__
@@ -274,13 +275,6 @@ enum date_string {
 	ISO8601_TIMESTAMP = 20
 };
 
-enum fnc_file_chng_stat {
-	FILE_ADDED,
-	FILE_DELETED,
-	FILE_CHANGED,
-	FILE_RENAMED
-};
-
 enum fnc_view_id {
 	FNC_VIEW_TIMELINE,
 	FNC_VIEW_DIFF,
@@ -324,6 +318,7 @@ struct fnc_commit_artifact {
 	fsl_uuid_str	 uuid;
 	fsl_uuid_str	 puuid;
 	fsl_id_t	 rid;
+	fsl_id_t	 prid;
 	char		*user;
 	char		*timestamp;
 	char		*comment;
@@ -333,7 +328,7 @@ struct fnc_commit_artifact {
 
 struct fsl_file_artifact {
 	fsl_card_F		*fc;
-	enum fnc_file_chng_stat	 change;
+	enum fsl_ckout_change_e	 change;
 };
 
 TAILQ_HEAD(commit_tailhead, commit_entry);
@@ -488,15 +483,20 @@ static int		 wrapline(char *, fsl_size_t ncols_avail,
 static int		 add_line_offset(off_t **, size_t *, off_t);
 static int		 diff_commit(fsl_buffer *, struct fnc_commit_artifact *,
 			    int, int, int);
+static int		 diff_checkout(fsl_buffer *, fsl_id_t, int, int, int);
+static int		 write_diff_meta(fsl_buffer *, const char *,
+			    fsl_uuid_str, const char *, fsl_uuid_str, int,
+			    enum fsl_ckout_change_e);
+static int		 diff_file(fsl_buffer *, fsl_buffer *, const char *,
+			    fsl_uuid_str, const char *, enum fsl_ckout_change_e,
+			    int, int, bool);
 static int		 diff_non_checkin(fsl_buffer *, struct
 			    fnc_commit_artifact *, int, int, int);
 static int		 diff_file_artifact(fsl_buffer *, fsl_id_t,
-			    fsl_card_F const *, fsl_id_t, fsl_card_F const *,
-			    int, int, int);
+			    const fsl_card_F *, fsl_id_t, const fsl_card_F *,
+			    fsl_ckout_change_e, int, int, int);
 static int		 fsl_ckout_file_content(fsl_cx *, char const *,
 			    fsl_buffer *);
-static int		 fsl_ckout_mtime(fsl_cx *, fsl_id_t, fsl_card_F const *,
-			    fsl_time_t *, fsl_time_t *);
 static int		 show_diff(struct fnc_view *);
 static int		 write_diff(struct fnc_view *, const char *);
 static int		 match_line(const void *, const void *);
@@ -2451,6 +2451,10 @@ create_diff(struct fnc_diff_view_state *s)
 	}
 	s->f = fout;
 
+	/*
+	 * We'll diff artifacts of type "ci" (i.e., "checkin") separately, as
+	 * it's a different process to diff the others (wiki, technote, etc.).
+	 */
 	if (!fsl_strcmp(s->selected_commit->type, "checkin")) {
 		rc = create_changeset(s->selected_commit);
 		if (rc) {
@@ -2473,15 +2477,17 @@ create_diff(struct fnc_diff_view_state *s)
 		write_commit_meta(s);
 
 	/*
-	 * We'll diff artifacts of type "ci" (i.e., "checkin") separately, as
-	 * it's a different process to diff the others (wiki, technote, etc.).
+	 * Diff local changes on disk in the current checkout differently to
+	 * checked-in versions: the former compares on disk file content with
+	 * file artifacts; the latter compares file artifact blobs only.
 	 */
-	if (!fsl_strncmp(s->selected_commit->type, "checkin",
-	    fsl_strlen(s->selected_commit->type)) &&
-	    s->selected_commit->puuid != NULL) {
+	if (s->selected_commit->rid == 0)
+		diff_checkout(&s->buf, s->selected_commit->prid, s->diff_flags,
+		    s->context, s->sbs);
+	else if (!fsl_strcmp(s->selected_commit->type, "checkin") &&
+	    s->selected_commit->puuid != NULL)
 		diff_commit(&s->buf, s->selected_commit, s->diff_flags,
 		    s->context, s->sbs);
-	}
 
 	/*
 	 * Parse the diff buffer line-by-line to record byte offsets of each
@@ -2516,7 +2522,7 @@ create_changeset(struct fnc_commit_artifact *commit)
 {
 	fsl_cx		*f = fcli_cx();
 	fsl_stmt	*st = NULL;
-	fsl_db		*db = &f->dbMem;
+	fsl_db		*db = fsl_cx_db_repo(f);
 	fsl_list	 changeset = fsl_list_empty;
 	int		 rc = 0;
 
@@ -2536,10 +2542,11 @@ create_changeset(struct fnc_commit_artifact *commit)
 	while ((rc = fsl_stmt_step(st)) == FSL_RC_STEP_ROW) {
 		struct fsl_file_artifact *fdiff = NULL;
 		const char *path, *oldpath, *olduuid, *uuid;
-		//int perm;
+		/* TODO: Parse file mode to display in commit changeset. */
+		/* int perm; */
 
 		path = fsl_stmt_g_text(st, 0, NULL);	/* Current filename. */
-		//perm = fsl_stmt_g_int32(st, 1);		/* File permissions. */
+		//perm = fsl_stmt_g_int32(st, 1);	/* File permissions. */
 		olduuid = fsl_stmt_g_text(st, 2, NULL);	/* UUID before change */
 		uuid = fsl_stmt_g_text(st, 3, NULL);	/* UUID after change. */
 		oldpath = fsl_stmt_g_text(st, 4, NULL);	/* Old name, if chngd */
@@ -2549,17 +2556,17 @@ create_changeset(struct fnc_commit_artifact *commit)
 		fdiff->fc->name = fsl_strdup(path);
 		if (!uuid) {
 			fdiff->fc->uuid = fsl_strdup(olduuid);
-			fdiff->change = FILE_DELETED;
+			fdiff->change = FSL_CKOUT_CHANGE_REMOVED;
 		} else if (!olduuid) {
 			fdiff->fc->uuid = fsl_strdup(uuid);
-			fdiff->change = FILE_ADDED;
+			fdiff->change = FSL_CKOUT_CHANGE_ADDED;
 		} else if (oldpath) {
 			fdiff->fc->uuid = fsl_strdup(uuid);
 			fdiff->fc->priorName = fsl_strdup(oldpath);
-			fdiff->change = FILE_RENAMED;
+			fdiff->change = FSL_CKOUT_CHANGE_RENAMED;
 		} else {
 			fdiff->fc->uuid = fsl_strdup(uuid);
-			fdiff->change = FILE_CHANGED;
+			fdiff->change = FSL_CKOUT_CHANGE_MOD;
 		}
 		fsl_list_append(&changeset, fdiff);
 	}
@@ -2644,19 +2651,22 @@ write_commit_meta(struct fnc_diff_view_state *s)
 		file_change = s->selected_commit->changeset.list[idx];
 
 		switch (file_change->change) {
-			case FILE_CHANGED:
-				changeline = "[~] ";
-				break;
-			case FILE_ADDED:
-				changeline = "[+] ";
-				break;
-			case FILE_RENAMED:
-				changeline = fsl_mprintf("[>] %s -> ",
-				   file_change->fc->priorName);
-				break;
-			case FILE_DELETED:
-				changeline = "[-] ";
-				break;
+		case FSL_CKOUT_CHANGE_MOD:
+			changeline = "[~] ";
+			break;
+		case FSL_CKOUT_CHANGE_ADDED:
+			changeline = "[+] ";
+			break;
+		case FSL_CKOUT_CHANGE_RENAMED:
+			changeline = fsl_mprintf("[>] %s -> ",
+			   file_change->fc->priorName);
+			break;
+		case FSL_CKOUT_CHANGE_REMOVED:
+			changeline = "[-] ";
+			break;
+		default:
+			changeline = "[!] ";
+			break;
 		}
 		if ((n = fsl_fprintf(s->f, "%s%s\n", changeline,
 		    file_change->fc->name)) < 0)
@@ -2741,11 +2751,10 @@ add_line_offset(off_t **line_offsets, size_t *nlines, off_t off)
  * files added (i.e., no F card counterpart in d1); (2) files deleted (i.e., no
  * F card counterpart in d2); (3) or otherwise the same file (i.e., F card
  * exists in both d1 and d2). In cases (1) and (2), we call diff_file_artifact()
- * to dump the complete content of the added/deleted file. In case (3), if the
- * hash (UUID) of each F card is the same AND we're NOT diffing the checkout on
- * disk, there are no changes; however, if we're diffing changes in the local
- * checkout (i.e., commit->rid == 0) against another version, we also need to
- * call diff_file_artifact().
+ * to dump the complete content of the added/deleted file if FSL_DIFF_VERBOSE is
+ * set, otherwise only diff metatadata will be output. In case (3), if the
+ * hash (UUID) of each F card is the same, there are no changes; if different,
+ * both artifacts will be passed to diff_file_artifact() to be diffed.
  */
 static int
 diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
@@ -2789,6 +2798,7 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 	while (fc1 || fc2) {
 		const fsl_card_F	*a = NULL, *b = NULL;
 		const char		*curr;
+		fsl_ckout_change_e	 change = FSL_CKOUT_CHANGE_NONE;
 
 		if (fc2)
 			curr = fc2->priorName ? fc2->priorName : fc2->name;
@@ -2804,23 +2814,22 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 		if (different) {
 			if (different > 0) {
 				b = fc2;
+				change = FSL_CKOUT_CHANGE_ADDED;
 				fsl_deck_F_next(&d2, &fc2);
 			} else if (different < 0) {
 				a = fc1;
+				change = FSL_CKOUT_CHANGE_REMOVED;
 				fsl_deck_F_next(&d1, &fc1);
 			}
 			rc = diff_file_artifact(buf, id1, a, commit->rid, b,
-			    diff_flags, context, sbs);
-		} else if (!fsl_uuidcmp(fc1->uuid, fc2->uuid)) {
-			if (!id1 || !commit->rid) {  /* Diff checkout. */
-				rc = diff_file_artifact(buf, id1, fc1,
-				    commit->rid, fc2, diff_flags, context, sbs);
-			}
+			    change, diff_flags, context, sbs);
+		} else if (!fsl_uuidcmp(fc1->uuid, fc2->uuid)) { /* No change */
 			fsl_deck_F_next(&d1, &fc1);
 			fsl_deck_F_next(&d2, &fc2);
-		} else {  /* File changed. */
+		} else {
+			change = FSL_CKOUT_CHANGE_MOD;
 			rc = diff_file_artifact(buf, id1, fc1, commit->rid, fc2,
-			    diff_flags, context, sbs);
+			    change, diff_flags, context, sbs);
 			fsl_deck_F_next(&d1, &fc1);
 			fsl_deck_F_next(&d2, &fc2);
 		}
@@ -2835,6 +2844,350 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 end:
 	fsl_deck_finalize(&d1);
 	fsl_deck_finalize(&d2);
+	return rc;
+}
+
+/*
+ * Diff local changes on disk in the current checkout against either a previous
+ * commit or, if no version has been supplied, the current checkout.
+ *   buf  output buffer in which diff content is appended
+ *   vid  repository database record id of the version to diff against
+ * diff_flags, context, and sbs are the same parameters as diff_file_artifact()
+ * nb. This routine is only called with 'fnc diff [hash]'; that is, one or
+ * zero args—not two—supplied to fnc's diff command line interface.
+ */
+static int
+diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
+    int sbs)
+{
+	fsl_cx		*f = fcli_cx();
+	fsl_db		*db = fsl_cx_db_ckout(f);
+	fsl_stmt	*st = NULL;
+	fsl_buffer	 sql, abspath, bminus;
+	fsl_uuid_str	 xminus = NULL;
+	fsl_id_t	 cid;
+	int		 rc = 0;
+
+	abspath = bminus = sql = fsl_buffer_empty;
+	fsl_ckout_version_info(f, &cid, NULL);
+	/* cid = fsl_config_get_id(f, FSL_CONFDB_CKOUT, 0, "checkout"); */
+	/* XXX Already done in cmd_diff(): Load vfile table with local state. */
+	/* rc = fsl_vfile_changes_scan(f, cid, */
+	/*     FSL_VFILE_CKSIG_ENOTFILE & FSL_VFILE_CKSIG_KEEP_OTHERS); */
+	/* if (rc) */
+	/*	return fcli_err_set(rc, "fsl_vfile_changes_scan"); */
+
+	/*
+	 * If a previous version is supplied, load its vfile state to query
+	 * changes. Otherwise query the current checkout state for changes.
+	 */
+	if (vid != cid) {
+		/* Keep vfile ckout state; but unload vid when finished. */
+		rc = fsl_vfile_load(f, vid, false, NULL);
+		if (rc)
+			goto unload;
+		fsl_buffer_appendf(&sql, "SELECT v2.pathname, v2.deleted, "
+		    "v2.chnged, v2.rid == 0, v1.rid, v1.islink"
+		    " FROM vfile v1, vfile v2"
+		    " WHERE v1.pathname=v2.pathname AND v1.vid=%d AND v2.vid=%d"
+		    " AND (v2.deleted OR v2.chnged OR v1.mrid != v2.rid)"
+		    " UNION "
+		    "SELECT pathname, 1, 0, 0, 0, islink"
+		    " FROM vfile v1"
+		    " WHERE v1.vid = %d"
+		    " AND NOT EXISTS(SELECT 1 FROM vfile v2"
+		    " WHERE v2.vid = %d AND v2.pathname = v1.pathname)"
+		    " UNION "
+		    "SELECT pathname, 0, 0, 1, 0, islink"
+		    " FROM vfile v2"
+		    " WHERE v2.vid = %d"
+		    " AND NOT EXISTS(SELECT 1 FROM vfile v1"
+		    " WHERE v1.vid = %d AND v1.pathname = v2.pathname)"
+		    " ORDER BY 1", vid, cid, vid, cid, cid, vid);
+	} else {
+		fsl_buffer_appendf(&sql, "SELECT pathname, deleted, chnged, "
+		    "rid == 0, rid, islink"
+		    " FROM vfile"
+		    " WHERE vid = %d"
+		    " AND (deleted OR chnged OR rid == 0)"
+		    " ORDER BY pathname", cid);
+	}
+	if ((rc = fsl_db_prepare_cached(db, &st, "%b", &sql)))
+		goto yield;
+
+	while ((rc = fsl_stmt_step(st)) == FSL_RC_STEP_ROW) {
+		const char	*path;
+		int		 deleted, changed, added, fid, symlink;
+		enum		 fsl_ckout_change_e change;
+
+		path = fsl_stmt_g_text(st, 0, NULL);
+		deleted = fsl_stmt_g_int32(st, 1);
+		changed = fsl_stmt_g_int32(st, 2);
+		added = fsl_stmt_g_int32(st, 3);
+		fid = fsl_stmt_g_int32(st, 4);
+		symlink = fsl_stmt_g_int32(st, 5);
+		rc = fsl_file_canonical_name2(f->ckout.dir, path, &abspath,
+		    false);
+		if (rc)
+			goto yield;
+
+		if (deleted)
+			change = FSL_CKOUT_CHANGE_REMOVED;
+		else if (fsl_file_access(fsl_buffer_cstr(&abspath), F_OK))
+			change = FSL_CKOUT_CHANGE_MISSING;
+		else if (added) {
+			fid = 0;
+			change = FSL_CKOUT_CHANGE_ADDED;
+		} else if (changed == 3) {
+			fid = 0;
+			change = FSL_CKOUT_CHANGE_MERGE_ADD;
+		} else if (changed == 5) {
+			fid = 0;
+			change = FSL_CKOUT_CHANGE_INTEGRATE_ADD;
+		} else
+			change = FSL_CKOUT_CHANGE_MOD;
+
+		/*
+		 * For changed files of which this checkout is already aware,
+		 * grab their hash to make comparisons. For removed files, if
+		 * diffing against a version other than the current checkout,
+		 * load the version's manifest to parse for known versions of
+		 * said files. If we don't, we risk diffing stale or bogus
+		 * content. Known cases include MISSING, DELETED, and RENAMED
+		 * files, which fossil(1) misses in some instances.
+		 */
+		if (fid > 0)
+			xminus = fsl_rid_to_uuid(f, fid);
+		else if (vid != cid && !added) {
+			fsl_deck		 d = fsl_deck_empty;
+			const fsl_card_F	*cf = NULL;
+
+			rc = fsl_deck_load_rid(f, &d, vid, FSL_SATYPE_CHECKIN);
+			if (!rc)
+				rc = fsl_deck_F_rewind(&d);
+			if (rc)
+				goto yield;
+			do {
+				fsl_deck_F_next(&d, &cf);
+				if (cf && !fsl_strcmp(cf->name, path)) {
+					xminus = fsl_strdup(cf->uuid);
+					if (xminus == NULL) {
+						fcli_err_set(FSL_RC_OOM,
+						    "fsl_strdup");
+						goto yield;
+					}
+					fid = fsl_uuid_to_rid(f, xminus);
+					break;
+				}
+			} while (cf);
+		}
+		if (!xminus)
+			xminus = fsl_strdup(NULL_DEVICE);
+
+		if (!symlink != !fsl_is_symlink(fsl_buffer_cstr(&abspath))) {
+			rc = write_diff_meta(buf, path, xminus, path,
+			    NULL_DEVICE, diff_flags, change);
+			fsl_buffer_append(buf, "\nSymbolic links and regular "
+			    "files cannot be diffed\n", -1);
+			if (rc)
+				goto yield;
+			continue;
+		}
+		if (fid > 0 && change != FSL_CKOUT_CHANGE_ADDED)
+			rc = fsl_content_get(f, fid, &bminus);
+		else
+			fsl_buffer_clear(&bminus);
+		if (!rc)
+			rc = diff_file(buf, &bminus, path, xminus,
+			    fsl_buffer_cstr(&abspath), change, diff_flags,
+			    context, sbs);
+		fsl_buffer_reuse(&bminus);
+		fsl_buffer_reuse(&abspath);
+		fsl_free(xminus);
+		xminus = NULL;
+		if (rc == FSL_RC_RANGE || rc == FSL_RC_TYPE) {
+			fsl_buffer_append(buf,
+			    "\nBinary files cannot be diffed\n", -1);
+			rc = 0;
+			fsl_cx_err_reset(f);
+		} else if (rc)
+			goto yield;
+	}
+
+yield:
+	fsl_stmt_cached_yield(st);
+	fsl_free(xminus);
+unload:
+	fsl_vfile_unload_except(f, cid);
+	fsl_buffer_clear(&abspath);
+	fsl_buffer_clear(&bminus);
+	fsl_buffer_clear(&sql);
+	return rc;
+}
+
+/*
+ * Write diff index line and file metadata (i.e., file paths and hashes), which
+ * signify file addition, removal, or modification.
+ *   buf         output buffer in which diff output will be appended
+ *   zminus      file name of the file being diffed against
+ *   xminus      hex hash of file named zminus
+ *   zplus       file name of the file being diffed
+ *   xplus       hex hash of the file named zplus
+ *   diff_flags  bitwise flags to control the diff
+ *   change      enum denoting the versioning change of the file
+ */
+static int
+write_diff_meta(fsl_buffer *buf, const char *zminus, fsl_uuid_str xminus,
+    const char *zplus, fsl_uuid_str xplus, int diff_flags,
+    enum fsl_ckout_change_e change)
+{
+	int	rc = 0;
+	const char	*index, *plus, *minus;
+
+	index = zminus ? zminus : (zplus ? zplus : NULL_DEVICE);
+
+	switch (change) {
+	case FSL_CKOUT_CHANGE_MERGE_ADD:
+		/* FALL THROUGH */
+	case FSL_CKOUT_CHANGE_INTEGRATE_ADD:
+		/* FALL THROUGH */
+	case FSL_CKOUT_CHANGE_ADDED:
+		minus = NULL_DEVICE;
+		plus = xplus;
+		zminus = NULL_DEVICE;
+		break;
+	case FSL_CKOUT_CHANGE_MISSING:
+		/* FALL THROUGH */
+	case FSL_CKOUT_CHANGE_REMOVED:
+		minus = xminus;
+		plus = NULL_DEVICE;
+		zplus = NULL_DEVICE;
+		break;
+	case FSL_CKOUT_CHANGE_RENAMED:
+		/* FALL THROUGH */
+	case FSL_CKOUT_CHANGE_MOD:
+		/* FALL THROUGH */
+	default:
+		minus = xminus;
+		plus = xplus;
+		break;
+	}
+
+	if ((diff_flags & (FSL_DIFF_SIDEBYSIDE | FSL_DIFF_BRIEF)) == 0) {
+		rc = fsl_buffer_appendf(buf, "\nIndex: %s\n%.71c\n", index, '=');
+		if (!rc)
+			rc = fsl_buffer_appendf(buf, "hash - %s\nhash + %s\n",
+			    minus, plus);
+	}
+	if ((diff_flags & FSL_DIFF_BRIEF) == 0)
+		rc = fsl_buffer_appendf(buf, "--- %s\n+++ %s\n", zminus, zplus);
+
+	return rc;
+}
+
+/*
+ * The diff_file_artifact() counterpart that diffs actual files on disk rather
+ * than file artifacts in the Fossil repository's blob table.
+ *   buf      output buffer in which diff output will be appended
+ *   bminus   blob containing content of the versioned file being diffed against
+ *   zminus   filename of bminus
+ *   xminus   hex UUID containing the SHA{1,3} hash of the file named zminus
+ *   abspath  absolute path to the file on disk being diffed
+ *   change   enum denoting the versioning change of the file
+ * diff_flags, context, and sbs are the same parameters as diff_file_artifact()
+ */
+static int
+diff_file(fsl_buffer *buf, fsl_buffer *bminus, const char *zminus,
+    fsl_uuid_str xminus, const char *abspath, enum fsl_ckout_change_e change,
+    int diff_flags, int context, bool sbs)
+{
+	fsl_cx		*f = fcli_cx();
+	fsl_buffer	 bplus = fsl_buffer_empty;
+	fsl_buffer	 xplus = fsl_buffer_empty;
+	const char	*zplus;
+	int		 rc = 0;
+	bool		 verbose;
+
+	/*
+	 * If it exists, read content of abspath to diff EXCEPT for the content
+	 * of 'fossil rm FILE' files because they will either: (1) have the same
+	 * content as the versioned file's blob in bminus or (2) have changes.
+	 * As a result, the upcoming call to fsl_diff_text_to_buffer() _will_
+	 * (1) produce an empty diff or (2) show the differences; neither are
+	 * expected behaviour because the SCM has been instructed to remove the
+	 * file; therefore, the diff should display the versioned file content
+	 * as being entirely removed. With this check, fnc now contrasts the
+	 * behaviour of fossil(1), which produces the abovementioned unexpected
+	 * output described in (1) and (2).
+	 */
+	if (fsl_file_size(abspath) < 0)
+		zplus = NULL_DEVICE;
+	else if (change != FSL_CKOUT_CHANGE_REMOVED) {
+		rc = fsl_ckout_file_content(f, abspath, &bplus);
+		if (rc)
+			goto end;
+		/*
+		 * To replicate fossil(1)'s behaviour—where a fossil rm'd file
+		 * will either show as an unchanged or edited rather than a
+		 * removed file with 'fossil diff -v' output—remove the above
+		 * 'if (change != FSL_CKOUT_CHANGE_REMOVED)' from the else
+		 * condition and uncomment the following three lines of code.
+		 */
+		/* if (change == FSL_CKOUT_CHANGE_REMOVED && */
+		/*     !fsl_buffer_compare(bminus, &bplus)) */
+		/*	fsl_buffer_clear(&bplus); */
+		zplus = zminus;
+	}
+
+	switch (fsl_strlen(xminus)) {
+	case FSL_STRLEN_K256:
+		rc = fsl_sha3sum_buffer(&bplus, &xplus);
+		break;
+	case FSL_STRLEN_SHA1:
+		rc = fsl_sha1sum_buffer(&bplus, &xplus);
+		break;
+	case strlen(NULL_DEVICE):
+		switch (fsl_config_get_int32(f, FSL_CONFDB_REPO,
+		    FSL_HPOLICY_AUTO, "hash-policy")) {
+		case FSL_HPOLICY_SHA1:
+			rc = fsl_sha1sum_buffer(&bplus, &xplus);
+			break;
+		case FSL_HPOLICY_AUTO:
+			/* FALL THROUGH */
+		case FSL_HPOLICY_SHA3:
+			/* FALL THROUGH */
+		case FSL_HPOLICY_SHA3_ONLY:
+			rc = fsl_sha3sum_buffer(&bplus, &xplus);
+			break;
+		}
+		break;
+	default:
+		fcli_err_set(FSL_RC_SIZE_MISMATCH,
+		    "invalid artifact uuid [%s], xminus");
+		goto end;
+	}
+	if (rc)
+		goto end;
+
+	rc = write_diff_meta(buf, zminus, xminus, zplus, fsl_buffer_str(&xplus),
+	    diff_flags, change);
+	if (rc)
+		goto end;
+
+	verbose = (diff_flags & FSL_DIFF_VERBOSE) != 0 ? true : false;
+	if (diff_flags & FSL_DIFF_BRIEF) {
+		rc = fsl_buffer_compare(bminus, &bplus);
+		if (!rc)
+			rc = fsl_buffer_appendf(buf, "CHANGED -> %s\n", zminus);
+	} else if (verbose || (bminus->used && bplus.used)) {
+		rc = fsl_diff_text_to_buffer(bminus, &bplus, buf, context,
+		    sbs, diff_flags);
+	}
+
+end:
+	fsl_buffer_clear(&bplus);
+	fsl_buffer_clear(&xplus);
+
 	return rc;
 }
 
@@ -2943,120 +3296,64 @@ end:
 	return rc;
 }
 
+/*
+ * Compute the differences between two repository file artifacts to produce the
+ * set of changes necessary to convert one into the other.
+ *   buf         output buffer in which diff output will be appended
+ *   vid1        repo record id of the version from which artifact a belongs
+ *   a           file artifact being diffed against
+ *   vid2        repo record id of the version from which artifact b belongs
+ *   b           file artifact being diffed
+ *   change      enum denoting the versioning change of the file
+ *   diff_flags  bitwise flags to control the diff
+ *   context     the number of context lines to surround changes
+ *   sbs	 number of columns in which to display each side-by-side diff
+ */
 static int
-diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, fsl_card_F const *fc1,
-    fsl_id_t vid2, fsl_card_F const *fc2, int diff_flags, int context, int sbs)
+diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
+    fsl_id_t vid2, const fsl_card_F *b, enum fsl_ckout_change_e change,
+    int diff_flags, int context, int sbs)
 {
-	const fsl_card_F	*hashchk = NULL;
-	fsl_cx			*f = fcli_cx();
-	fsl_buffer		 fbuf1 = fsl_buffer_empty;
-	fsl_buffer		 fbuf2 = fsl_buffer_empty;
-	fsl_buffer		 fhash = fsl_buffer_empty;
-	fsl_time_t		 rmtime = 0;
-	fsl_time_t		 fmtime = 0;
-	int			 rc = 0;
-	bool			 verbose;
+	fsl_cx		*f = fcli_cx();
+	fsl_buffer	 fbuf1 = fsl_buffer_empty;
+	fsl_buffer	 fbuf2 = fsl_buffer_empty;
+	const char	*zplus = NULL, *zminus = NULL;
+	fsl_uuid_str	 xplus = NULL, xminus = NULL;
+	int		 rc = 0;
+	bool		 verbose;
 
 	assert(vid1 != vid2);
+	assert(vid1 > 0 && vid2 > 0 &&
+	    "local checkout should be diffed with diff_checkout()");
 
-	fhash.used = fbuf2.used = fbuf1.used = 0;
+	fbuf2.used = fbuf1.used = 0;
 
-	/* If diffing against local checkout, hash file on disk to compare. */
-	if (vid1 == 0 && fc1) {
-		assert(vid2 != 0);
-		rc = fsl_ckout_file_content(f, fc1->name, &fbuf1);
-		if (!rc) {
-			switch (fsl_strlen(fc1->uuid)) {
-			case FSL_STRLEN_K256:
-				rc = fsl_sha3sum_buffer(&fbuf1, &fhash);
-				break;
-			case FSL_STRLEN_SHA1:
-				rc = fsl_sha1sum_buffer(&fbuf1, &fhash);
-				break;
-			default:
-				return fcli_err_set(FSL_RC_SIZE_MISMATCH,
-				    "invalid artifact uuid [%s], fc1->uuid");
-			}
-			if (!rc) {
-				hashchk = fc2;
-				rc = fsl_ckout_mtime(f, vid1, fc1, NULL,
-				    &fmtime);
-			}
-		}
-	} else if (fc1) {
-		rc = fsl_card_F_content(f, fc1, &fbuf1);
-		if (!rc && (vid2 == 0))
-			/* Collect repo-side mtime if the other version == 0. */
-			rc = fsl_ckout_mtime(f, vid1, fc1, &rmtime, NULL);
-	}
-
-	if (rc)
-		goto end;
-
-	/* If diffing the local checkout, hash the file on disk to compare. */
-	if (vid2 == 0 && fc2) {
-		assert(vid1 != 0);
-		rc = fsl_ckout_file_content(f, fc2->name, &fbuf2);
-		if (!rc) {
-			switch (fsl_strlen(fc2->uuid)) {
-			case FSL_STRLEN_K256:
-				rc = fsl_sha3sum_buffer(&fbuf2, &fhash);
-				break;
-			case FSL_STRLEN_SHA1:
-				rc = fsl_sha1sum_buffer(&fbuf2, &fhash);
-				break;
-			default:
-				return fcli_err_set(FSL_RC_SIZE_MISMATCH,
-				    "invalid artifact uuid [%s], fc2->uuid");
-			}
-			if (!rc) {
-				hashchk = fc1;
-				rc = fsl_ckout_mtime(f, vid2, fc2, NULL,
-				    &fmtime);
-			}
-		}
-	} else if (fc2) {
-		rc = fsl_card_F_content(f, fc2, &fbuf2);
-		if(!rc && (vid1 == 0)){
-			/* Collect repo-side mtime if the other version == 0. */
-			rc = fsl_ckout_mtime(f, vid2, fc2, &rmtime, NULL);
-		}
-	}
-
-	if (rc)
-		goto end;
-
-	if (hashchk && (fsl_uuidcmp(fsl_buffer_cstr(&fhash),
-	    hashchk->uuid) == 0)) {
-		/* Repo-side content is unchanged from local copy. */
-		assert(rc == 0);
-		goto end;
-	} else if ((fmtime > 0) && (fmtime == rmtime)) {
-		/*
-		 * One of the above is a local file and rmtime holds the
-		 * repo-side mtime of the other. Assume naively that same time
-		 * indicates the same content, which'll be the case more often
-		 * than not.
-		 */
-		goto end;
-	} else {
-		verbose = (diff_flags & FSL_DIFF_VERBOSE) != 0 ? true : false;
-		fsl_buffer_appendf(buf, "\nIndex: %s\n%.71c\n",
-		    fc2 ? fc2->name : fc1->name, '=');
-		fsl_buffer_appendf(buf, "hash - %s\nhash + %s\n",
-		    fc1 ? fc1->uuid : "/dev/null",
-		    fc2 ? fc2->uuid : "/dev/null");
-		fsl_buffer_appendf(buf, "--- %s\n+++ %s\n",
-		    fc1 ? fc1->name : "/dev/null",
-		    fc2 ? fc2->name : "/dev/null");
-		if (verbose || (fc1 && fc2))
-			rc = fsl_diff_text_to_buffer(&fbuf1, &fbuf2, buf,
-			    context, sbs, diff_flags);
+	if (a) {
+		rc = fsl_card_F_content(f, a, &fbuf1);
 		if (rc)
-			fcli_err_set(rc, "Error %s: generating diff %s %s",
-			    fsl_rc_cstr(rc), fc1 ? fc1->name : "/dev/null",
-			    fc2 ? fc2->name : "/dev/null");
+			goto end;
+		zminus = a->name;
+		xminus = a->uuid;
 	}
+	if (b) {
+		rc = fsl_card_F_content(f, b, &fbuf2);
+		if (rc)
+			goto end;
+		zplus = b->name;
+		xplus = b->uuid;
+	}
+
+	rc = write_diff_meta(buf, zminus, xminus, zplus, xplus, diff_flags,
+	    change);
+	verbose = (diff_flags & FSL_DIFF_VERBOSE) != 0 ? true : false;
+	if (verbose || (a && b))
+		rc = fsl_diff_text_to_buffer(&fbuf1, &fbuf2, buf, context, sbs,
+		    diff_flags);
+	if (rc)
+		fcli_err_set(rc, "Error %s: fsl_diff_text_to_buffer\n"
+		    " -> %s [%s]\n -> %s [%s]", fsl_rc_cstr(rc),
+		    a ? a->name : NULL_DEVICE, a ? a->uuid : NULL_DEVICE,
+		    b ? b->name : NULL_DEVICE, b ? b->uuid : NULL_DEVICE);
 end:
 	fsl_buffer_clear(&fbuf1);
 	fsl_buffer_clear(&fbuf2);
@@ -3089,39 +3386,6 @@ fsl_ckout_file_content(fsl_cx *f, char const *path, fsl_buffer *dest)
 		}
 	}
 	fsl_buffer_clear(&fname);
-
-	return rc;
-}
-
-static int
-fsl_ckout_mtime(fsl_cx *f, fsl_id_t vid, fsl_card_F const *fc,
-    fsl_time_t *repotime, fsl_time_t *localtime)
-{
-	fsl_fstat	fst = fsl_fstat_empty;
-	fsl_id_t	fid = 0;
-	int		rc = 0;
-
-	if (vid == 0)
-		fsl_ckout_version_info(f, &vid, NULL);
-
-	fid = fsl_repo_filename_fnid(f, fc->name);
-	if (fid <= 0) {
-		rc = fsl_cx_err_get(f, NULL, NULL);
-		return rc ? rc : fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
-			"Could not resolve filename: %s", fc->name);
-	} else if (!fid)
-		return fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
-		    "Could not resolve filename: %s", fc->name);
-
-	if (localtime) {
-		rc = fsl_cx_stat(f, 0, fc->name, &fst);
-		if (rc)
-			return fsl_cx_err_set(f, rc, "Could not stat file: %s",
-			    fc->name);
-		*localtime = fst.mtime;
-	}
-	if (repotime)
-		rc = fsl_mtime_of_manifest_file(f, vid, fid, repotime);
 
 	return rc;
 }
@@ -3870,11 +4134,14 @@ cmd_diff(fcli_command const *argv)
 		return fcli_err_set(rc, "invalid artifact [%s]", artifact2);
 
 	commit = calloc(1, sizeof(*commit));
+	if (commit == NULL)
+		return fcli_err_set(FSL_RC_OOM, "calloc fail");
 	if (rid == 0)
-		fsl_ckout_version_info(f, NULL, (const char **)commit->uuid);
+		fsl_ckout_version_info(f, NULL, (fsl_uuid_cstr *)commit->uuid);
 	else
 		commit->uuid = fsl_rid_to_uuid(f, rid);
 	commit->puuid = fsl_rid_to_uuid(f, prid);
+	commit->prid = prid;
 	commit->rid = rid;
 
 	/*
@@ -3917,9 +4184,8 @@ cmd_diff(fcli_command const *argv)
 
 	rc = open_diff_view(view, commit, context, fnc_init.ws,
 	    fnc_init.invert, !fnc_init.quiet, NULL);
-	if (rc)
-		return fcli_err_set(rc, "open_diff_view fail");
-	rc = view_loop(view);
+	if (!rc)
+		rc = view_loop(view);
 
 	return rc;
 }
