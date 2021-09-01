@@ -524,6 +524,7 @@ static int		 fsl_list_object_free(void *, void *);
 static void		 sigwinch_handler(int);
 static void		 sigpipe_handler(int);
 static void		 sigcont_handler(int);
+static char		*fnc_strsep (char **, const char *);
 
 int
 main(int argc, const char **argv)
@@ -2496,7 +2497,7 @@ create_diff(struct fnc_diff_view_state *s)
 	 */
 	st = fsl_strdup(fsl_buffer_str(&s->buf));
 	lnoff = (s->line_offsets)[s->nlines - 1];
-	while ((line = strsep(&st, "\n")) != NULL) {
+	while ((line = fnc_strsep(&st, "\n")) != NULL) {
 		n = fsl_fprintf(s->f, "%s\n", line);
 		lnoff += n;
 		rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff);
@@ -2622,7 +2623,11 @@ write_commit_meta(struct fnc_diff_view_state *s)
 		goto end;
 
 	st = fsl_strdup(s->selected_commit->comment);
-	while ((line = strsep(&st, "\n")) != NULL) {
+	if (st == NULL) {
+		fcli_err_set(FSL_RC_OOM, "fsl_strdup");
+		goto end;
+	}
+	while ((line = fnc_strsep(&st, "\n")) != NULL) {
 		linelen = fsl_strlen(line);
 		if (linelen >= s->ncols) {
 			rc = wrapline(line, s->ncols, s, &lnoff);
@@ -2704,7 +2709,7 @@ wrapline(char *line, fsl_size_t ncols_avail, struct fnc_diff_view_state *s,
 	fsl_size_t	 wordlen, cursor = 0;
 	int		 n = 0, rc = 0;
 
-	while ((word = strsep(&line, " ")) != NULL) {
+	while ((word = fnc_strsep(&line, " ")) != NULL) {
 		wordlen = fsl_strlen(word);
 		if ((cursor + wordlen) >= ncols_avail) {
 			fputc('\n', s->f);
@@ -4203,5 +4208,22 @@ static void
 fnc_show_version(void)
 {
 	printf("%s %s\n", fcli_progname(), PRINT_VERSION);
+}
+
+static char *
+fnc_strsep(char **ptr, const char *sep)
+{
+	char	*s, *token;
+
+	if ((s = *ptr) == NULL)
+		return NULL;
+
+	if (*(token = s + strcspn(s, sep)) != '\0') {
+		*token++ = '\0';
+		*ptr = token;
+	} else
+		*ptr = NULL;
+
+	return s;
 }
 
