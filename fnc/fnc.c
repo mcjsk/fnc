@@ -4116,14 +4116,12 @@ cmd_diff(fcli_command const *argv)
 		rid = 0;
 		if (fcli_next_arg(false))
 			artifact1 = fcli_next_arg(true);
-		if (!fsl_strcmp(artifact1, "current")) {
-			if ((rc = fsl_ckout_changes_scan(f)))
-				return fcli_err_set(rc,
-				    "fsl_ckout_changes_scan");
-			if (!fsl_ckout_has_changes(f)) {
-				fsl_fprintf(stdout, "No local changes.\n");
-				return rc;
-			}
+		if ((rc = fsl_ckout_changes_scan(f)))
+			return fcli_err_set(rc, "fsl_ckout_changes_scan");
+		if (!fsl_strcmp(artifact1, "current") &&
+		    !fsl_ckout_has_changes(f)) {
+			fsl_fprintf(stdout, "No local changes.\n");
+			return rc;
 		}
 	} else { /* fcli_* APIs should prevent getting here but just in case. */
 		usage_diff();
