@@ -30,3 +30,5 @@ fnc.BIN.OBJECTS += fnc.o
 fnc.BIN.LDFLAGS := $(FNC_LDFLAGS)
 $(eval $(call ShakeNMake.CALL.RULES.BIN,fnc))
 all: fnc.BIN
+
+ShakeNMake.install.bins := fnc

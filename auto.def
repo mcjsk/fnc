@@ -53,16 +53,6 @@ if {![cc-check-c99]} {
 
 define CC_FLAG_C99 $CC_FLAG_C99
 
-########################################################################
-# A proxy for cc-check-function-in-lib which "undoes" any changes that
-# routine makes to the LIBS define.
-proc my-check-function-in-lib {function libs {otherlibs {}}} {
-    set _LIBS [get-define LIBS]
-    set found [cc-check-function-in-lib $function $libs $otherlibs]
-    define LIBS $_LIBS
-    return $found
-}
-
 # cc-check-functions getcwd fopen
 cc-check-functions opendir stat pipe inet_ntop getaddrinfo
 #msg-result [cc-check-functions lstat]
@@ -77,9 +67,9 @@ if {[cc-check-functions lstat]} {
     define _POSIX_C_SOURCE 200112L
 }
 
-
 # Find some tools
-cc-check-tools ar ranlib strip
+cc-check-tools ar strip
+wh-bin-install
 
 set extra_objs {}
 
@@ -89,6 +79,10 @@ if {[find-an-executable cygpath] ne "" || $::tcl_platform(os)=="Windows NT"} {
   set cFlags {-fPIC}
 }
 
+if {![wh-check-ncurses]} {
+    user-error "Could not find a compatible ncurses/libpanel configuration."
+}
+
 if {[opt-bool no-debug]} {
     msg-result "Non-debug build."
     set cFlags "$cFlags -O2"
@@ -96,8 +90,6 @@ if {[opt-bool no-debug]} {
     msg-result "Debug build enabled. Use --no-debug to build in non-debug mode."
     set cFlags "$cFlags -g -DDEBUG -O0"
 }
-
-wh-check-ncurses
 
 puts "Checking for compile_commands.json support..."
 if {[cctest -lang c -cflags {/dev/null -MJ} -source {}]} {

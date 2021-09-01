@@ -27,9 +27,9 @@ ENABLE_MODULES ?= @FSL_ENABLE_MODULE_LOADER@
 #endif
 
 # Install destination
-prefix = @prefix@
+prefix := @prefix@
 exec_prefix = @exec_prefix@
-DESTDIR = $(prefix)
+DESTDIR ?=
 
 CONFIG.MAKE := $(word $(words $(MAKEFILE_LIST)),$(MAKEFILE_LIST))
 #TOP_SRCDIR_ABS := $(dir $(realpath $(CONFIG.MAKE)))
@@ -86,4 +86,4 @@ endif
 CLEAN_FILES += *.o lib*.a *.so
 
 ShakeNMake.QUIET ?= @BUILD_QUIETLY@
-
+ShakeNMake.BIN.INSTALL := @BIN_INSTALL@

@@ -14,12 +14,8 @@ distclean-.: distclean-fnc distclean-src
 include shakenmake.make
 MAIN_MAKEFILES := $(PACKAGE.MAKEFILE) $(ShakeNMake.MAKEFILE) @AUTODEPS@
 
-
-define CALL.SUBDIR
-endef
 SUBDIRS := src fnc
 $(eval $(call ShakeNMake.CALL.SUBDIRS,$(SUBDIRS)))
-#$(eval $(call ShakeNMake.CALL.SUBDIR,src))
 subdir-fnc: subdir-src
 all: subdir-src subdir-fnc
 
@@ -35,9 +31,6 @@ compile_commands.json:
 	sed -e '1s/^/[\'$$'\n''/' -e '$$s/,$$/\'$$'\n'']/' $(compdb_dir)/*.o.json > $@+
 	@if test -s $@+; then mv $@+ $@; else $(RM) $@+; fi
 endif
-
-install: all
-	@echo 'No installation rules yet.'
 
 DISTCLEAN_FILES += Makefile config.log autosetup/jimsh0 \
 	$(wildcard compile_commands/*) compile_commands.json+
