@@ -26,17 +26,37 @@ proc wh-check-function-in-lib {function libs {otherlibs {}}} {
 }
 
 ########################################################################
+# Look for binary named $binName and `define`s $defName to that full
+# path, or an empty string if not found. Returns the value it defines.
+# This caches the result for a given $binName value, but if called multiple
+# times with a different defName, the 2nd and subsequent defName will not
+# get `define`d (patches to fix that are welcomed).
+proc wh-bin-define {binName defName} {
+    set check [get-define $defName 0]
+    msg-checking "Looking for $binName ... "
+    if {0 ne $check} {
+        msg-result "(cached) $check"
+        return $check
+    }
+    set check [find-executable-path $binName]
+    if {"" eq $check} {
+        msg-result "not found"
+    } else {
+        msg-result $check
+    }
+    define $defName $check
+    return $check
+}
+
+########################################################################
 # Looks for `bash` binary and dies if not found. On success, defines
 # BIN_BASH to the full path to bash and returns that value. We
 # _require_ bash because it's the SHELL value used in our makefiles.
 proc wh-require-bash {} {
-    msg-checking "bash shell ... "
-    set bash [find-executable-path bash]
+    set bash [wh-bin-define bash BIN_BASH]
     if {"" eq $bash} {
         user-error "Our Makefiles require the bash shell."
     }
-    msg-result "$bash"
-    define BIN_BASH $bash
     return $bash
 }
 
@@ -45,40 +65,15 @@ proc wh-require-bash {} {
 # found, else an empty string. Also defines BIN_PKGCONFIG to the
 # (cached) result value.
 proc wh-bin-pkgconfig {} {
-    set check [get-define BIN_PKGCONFIG]
-    msg-checking "Looking for pkg-config ... "
-    if {0 ne $check} {
-        msg-result "(cached)"
-        return $check
-    }
-    set check [find-executable-path pkg-config]
-    if {"" eq $check} {
-        msg-result "not found"
-    } else {
-        msg-result $check
-    }
-    define BIN_PKGCONFIG $check
-    return $check
+    return [wh-bin-define pkg-config BIN_PKGCONFIG]
 }
 
 ########################################################################
 # Looks for `install` binary and returns a full path to it if found,
-# else an empty string. Also defines BIN_INSTALL to that value.
+# else an empty string. Also defines BIN_INSTALL to the (cached)
+# result value.
 proc wh-bin-install {} {
-    set check [get-define BIN_INSTALL]
-    msg-checking "Looking for install ... "
-    if {0 ne $check} {
-        msg-result "(cached)"
-        return $check
-    }
-    set check [find-executable-path install]
-    if {"" eq $check} {
-        msg-result "not found"
-    } else {
-        msg-result $check
-    }
-    define BIN_INSTALL $check
-    return $check
+    return [wh-bin-define install BIN_INSTALL]
 }
 
 ########################################################################
@@ -171,7 +166,10 @@ proc wh-check-ncurses {} {
 If your build of fails due to missing ncurses functions
 such as waddwstr(), make sure you have the ncursesw (with a
 "w") development package installed. Some platforms combine
-the "w" and non-w curses builds and some don't.
+the "w" and non-w curses builds and some don't. Similarly,
+it's easy to get a mismatch between libncursesw and libpanel,
+so make sure you have libpanelw (if appropriate for your
+platform).
 
 The package may have a name such as libncursesw5-dev or
 some such.
@@ -183,3 +181,59 @@ some such.
 }
 # /wh-check-ncurses
 ########################################################################
+
+########################################################################
+# Check for module-loading APIs (libdl/libltdl)...
+#
+# Looks for libltdl or dlopen(), the latter either in -ldl or built in
+# to libc (as it is on some platforms. Returns 1 if found, else
+# 0. Either way, it `define`'s:
+#
+#  - HAVE_LIBLTDL to 1 or 0 if libltdl is found/not found
+#  - HAVE_LIBDL to 1 or 0 if dlopen() is found/not found
+#  - LDFLAGS_MODULE_LOADER one of ("-lltdl", "-ldl", or ""), noting that
+#    the string may legally be empty on some platforms if HAVE_LIBDL is true.
+proc wh-check-module-loader {} {
+    msg-checking "Looking for module-loader APIs... "
+    if {99 ne [get-define LDFLAGS_MODULE_LOADER]} {
+        if {1 eq [get-define HAVE_LIBLTDL 0]} {
+            msg-result "(cached) libltdl"
+            return 1
+        } elseif {1 eq [get-define HAVE_LIBDL 0]} {
+            msg-result "(cached) libdl"
+            return 1
+        }
+        # else: wha???
+    }
+    set HAVE_LIBLTDL 0
+    set HAVE_LIBDL 0
+    set LDFLAGS_MODULE_LOADER ""
+    set rc 0
+    puts "" ;# cosmetic kludge for cc-check-XXX
+    if {[cc-check-includes ltdl.h] && [cc-check-function-in-lib lt_dlopen ltdl]} {
+        set HAVE_LIBLTDL 1
+        set LDFLAGS_MODULE_LOADER "-lltdl"
+        puts " - Got libltdl."
+        set rc 1
+    } elseif {[cc-with {-includes dlfcn.h} {
+        cctest -link 1 -declare "extern char* dlerror(void);" -code "dlerror();"}]} {
+        puts " - This system can use dlopen() w/o -ldl."
+        set HAVE_LIBDL 1
+        set LDFLAGS_MODULE_LOADER ""
+        set rc 1
+    } elseif {[cc-check-includes dlfcn.h]} {
+        set HAVE_LIBDL 1
+        set rc 1
+        if {[cc-check-function-in-lib dlopen dl]} {
+            puts " - dlopen() needs libdl."
+            set LDFLAGS_MODULE_LOADER "-ldl"
+        } else {
+            puts " - dlopen() not found in libdl. Assuming dlopen() is built-in."
+            set LDFLAGS_MODULE_LOADER ""
+        }
+    }
+    define HAVE_LIBLTDL $HAVE_LIBLTDL
+    define HAVE_LIBDL $HAVE_LIBDL
+    define LDFLAGS_MODULE_LOADER $LDFLAGS_MODULE_LOADER
+    return $rc
+}
