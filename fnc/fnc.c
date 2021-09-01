@@ -132,7 +132,7 @@ static struct fnc_setup {
 		int limit;
 	} nrecords;			/* Number of commits to load. */
 	union {
-		const char	 *uuid;
+		const char	 *sym;
 		fsl_id_t	  rid;
 	} start_commit;			/* Open timeline from this commit. */
 	const char	*filter_tag;	/* Only load commits with <tag>. */
@@ -210,10 +210,17 @@ static struct fnc_setup {
             "Only display commits with T cards containing <tag>."),
 	    FCLI_FLAG("b", "branch", "<branch>", &fnc_init.filter_branch,
             "Only display commits that reside on the given <branch>."),
-	    FCLI_FLAG("c", "commit", "<hash>", &fnc_init.start_commit.uuid,
-            "Open the timeline from commit <hash>, which is expected to be\n  "
-            "  (a unique prefix of) a valid SHA1 or SHA3 hash, or one of\n    "
-            "Fossil's special tags.\n    "
+	    FCLI_FLAG("c", "commit", "<sym>", &fnc_init.start_commit.sym,
+            "Open the timeline from commit <sym>. Common valid symbols are:\n"
+            "\tSHA{1,3} hash\n"
+            "\tSHA{1,3} unique prefix\n"
+            "\tbranch\n"
+            "\ttag:TAG\n"
+            "\troot:BRANCH\n"
+            "\tISO8601 date\n"
+            "\tISO8601 timestamp\n"
+            "\t{tip,current,prev,next}\n    "
+            "For a complete list of symbols see Fossil's Check-in Names:\n    "
             "https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki"),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
             "Display timeline command help and usage."),
@@ -600,7 +607,7 @@ cmd_timeline(fcli_command const *argv)
 {
 	struct fnc_view	*v;
 	fsl_cx		*f = fcli_cx();
-	fsl_id_t	 rid = 0;
+	fsl_id_t	 rid = -1;
 	int		 rc = 0;
 
 	rc = fcli_process_flags(argv->flags);
@@ -625,14 +632,15 @@ cmd_timeline(fcli_command const *argv)
 			    "invalid char in <n>: -n|--limit=%s [%s]", s, ptr);
 	}
 
-	if (fnc_init.start_commit.uuid != NULL) {
-		rid = fsl_uuid_to_rid(f, fnc_init.start_commit.uuid);
-		if (rid > 0)
-			fnc_init.start_commit.rid = rid;
-		else
+	if (fnc_init.start_commit.sym != NULL) {
+		rc = fsl_sym_to_rid(f, fnc_init.start_commit.sym,
+		    FSL_SATYPE_CHECKIN, &rid);
+		if (rc || rid < 0)
 			return fcli_err_set(FSL_RC_TYPE,
 			    "artifact [%s] not resolvable to a commit",
-			    fnc_init.start_commit.uuid);
+			    fnc_init.start_commit.sym);
+		else
+			fnc_init.start_commit.rid = rid;
 	}
 
 	rc = init_curses();
@@ -4063,7 +4071,7 @@ static void
 usage_timeline(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " %s timeline [-T tag] [-b branch] [-c hash]"
+	    " %s timeline [-T tag] [-b branch] [-c sym]"
 	    " [-h|--help] [-n n] [-t type] [-u user] [-z|--utc]\n"
 	    "  e.g.: %s timeline --type ci -u jimmy\n\n",
 	    fcli_progname(), fcli_progname());
@@ -4075,7 +4083,7 @@ usage_diff(void)
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
 	    " %s diff [-c|--no-colour] [-h|--help] [-i|--invert]"
 	    " [-q|--quiet] [-w|--whitespace] [-x|--context n] "
-	    "[hash ...]\n  e.g.: %s diff --context 3 d34db33f c0ff33\n\n",
+	    "[sym ...]\n  e.g.: %s diff --context 3 d34db33f c0ff33\n\n",
 	    fcli_progname(), fcli_progname());
 }
 
