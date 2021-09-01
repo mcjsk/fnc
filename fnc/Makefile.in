@@ -29,6 +29,6 @@ CPPFLAGS += -D_XOPEN_SOURCE_EXTENDED
 fnc.BIN.OBJECTS += fnc.o
 fnc.BIN.LDFLAGS := $(FNC_LDFLAGS)
 $(eval $(call ShakeNMake.CALL.RULES.BIN,fnc))
-all: fnc.BIN
+all: $(fnc.BIN)
 
-ShakeNMake.install.bins := fnc
+ShakeNMake.install.bins := $(fnc.BIN)
