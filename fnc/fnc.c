@@ -84,6 +84,7 @@
 #define SPIN_INTERVAL	200		/* Status line progress indicator. */
 #define SPINNER		"\\|/-\0"
 #define NULL_DEVICE	"/dev/null"
+#define NULL_DEVICELEN (sizeof(NULL_DEVICE)-1)
 
 /* Portability macros. */
 #ifdef __OpenBSD__
@@ -3146,7 +3147,7 @@ diff_file(fsl_buffer *buf, fsl_buffer *bminus, const char *zminus,
 	case FSL_STRLEN_SHA1:
 		rc = fsl_sha1sum_buffer(&bplus, &xplus);
 		break;
-	case strlen(NULL_DEVICE):
+	case NULL_DEVICELEN:
 		switch (fsl_config_get_int32(f, FSL_CONFDB_REPO,
 		    FSL_HPOLICY_AUTO, "hash-policy")) {
 		case FSL_HPOLICY_SHA1:
