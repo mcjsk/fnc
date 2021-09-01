@@ -13,6 +13,8 @@ options {
 
 #cc-check-c11
 
+use wh-common
+wh-require-bash
 cc-check-sizeof "void *"
 
 if {![cc-check-includes zlib.h] ||
@@ -95,97 +97,7 @@ if {[opt-bool no-debug]} {
     set cFlags "$cFlags -g -DDEBUG -O0"
 }
 
-
-set pcBin [find-an-executable pkg-config]
-if {"" eq $pcBin} {
-    puts {pkg-config not found, so making some guesses about
-available packages.}
-}
-########################################################################
-# Curses!
-set LIB_CURSES ""
-set CFLAGS_CURSES ""
-puts "Looking for \[n]curses..."
-if {"" ne $pcBin && $::tcl_platform(os)!="Darwin"} {
-# Some macOS pkg-config configurations alter library search paths, which make
-# the compiler unable to find lib iconv, so don't use pkg-config on macOS.
-    set np ""
-    foreach p {ncursesw ncurses} {
-        if {[catch {exec $pcBin --exists $p}]} {
-            continue
-        }
-        set np $p
-        puts "Using pkg-config curses package \[$p]"
-        break
-    }
-    if {"" ne $np} {
-        set ppanel ""
-        if {"ncursesw" eq $np} {
-            if {![catch {exec $pcBin --exists panelw}]} {
-                set ppanel panelw
-            }
-        }
-        if {"" eq $ppanel && ![catch {exec $pcBin --exists panel}]} {
-            set ppanel panel
-        }
-        set CFLAGS_CURSES [exec $pcBin --cflags $np]
-        set LIB_CURSES [exec $pcBin --libs $np]
-        if {"" eq $ppanel} {
-            # Apparently Mac brew has pkg-config for ncursesw but not
-            # panel/panelw, but hard-coding -lpanel seems to work on
-            # that platform.
-            append LIB_CURSES " -lpanel"
-        } else {
-            append LIB_CURSES " " [exec $pcBin --libs $ppanel]
-            # append CFLAGS_CURSES " " [exec $pcBin --cflags $ppanel]
-            # ^^^^ appending the panel cflags will end up duplicating
-            # at least one -D flag from $np's cflags, leading to
-            # "already defined" errors at compile-time. Sigh. Note, however,
-            # that $ppanel's cflags have flags which $np's do not, so we
-            # may need to include those flags anyway and manually perform
-            # surgery on the list to remove dupes. Sigh.
-        }
-    }
-}
-
-if {"" eq $LIB_CURSES} {
-    puts "Guessing curses location (will fail for exotic locations)..."
-    define HAVE_CURSES_H [cc-check-includes curses.h]
-    if {[get-define HAVE_CURSES_H]} {
-        # Linux has -lncurses, BSD -lcurses. Both have <curses.h>
-        msg-result "Found curses.h"
-        if {[my-check-function-in-lib waddnwstr ncursesw]} {
-            msg-result "Found -lncursesw"
-            set LIB_CURSES "-lncursesw -lpanelw"
-        } elseif {[my-check-function-in-lib initscr ncurses]} {
-            msg-result "Found -lncurses"
-            set LIB_CURSES "-lncurses -lpanel"
-        } elseif {[my-check-function-in-lib initscr curses]} {
-            msg-result "Found -lcurses"
-            set LIB_CURSES "-lcurses -lpanel"
-        }
-    }
-}
-if {"" eq $LIB_CURSES} {
-    user-error "!Curses! Foiled again!"
-} else {
-    puts {
-        ************************************************************
-        If your build fails due to missing functions such as
-        waddwstr(), make sure you have the ncursesW development
-        package installed. Some platforms combine the "w" and non-w
-        curses builds and some don't.
-
-        The package may have a name such as libncursesw5-dev or
-        some such.
-        ************************************************************
-    }
-}
-define LIB_CURSES $LIB_CURSES
-define CFLAGS_CURSES $CFLAGS_CURSES
-unset LIB_CURSES
-unset CFLAGS_CURSES
-
+wh-check-ncurses
 
 puts "Checking for compile_commands.json support..."
 if {[cctest -lang c -cflags {/dev/null -MJ} -source {}]} {
