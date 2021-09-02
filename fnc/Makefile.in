@@ -32,3 +32,4 @@ $(eval $(call ShakeNMake.CALL.RULES.BIN,fnc))
 all: $(fnc.BIN)
 
 ShakeNMake.install.bins := $(fnc.BIN)
+ShakeNMake.install.man1 := fnc.1
