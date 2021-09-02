@@ -1497,7 +1497,7 @@ end:
 static int
 multibyte_to_wchar(const char *src, wchar_t **dst, size_t *dstlen)
 {
-	fsl_cx	*f = fcli_cx();
+	int	rc = 0;
 
 	/*
 	 * mbstowcs POSIX extension specifies that the number of wchar that
@@ -1505,19 +1505,33 @@ multibyte_to_wchar(const char *src, wchar_t **dst, size_t *dstlen)
 	 * https://en.cppreference.com/w/cpp/string/multibyte/mbstowcs
 	 */
 	*dstlen = mbstowcs(NULL, src, 0);
-	if (*dstlen < 0)
-		return fsl_cx_err_set(f, FSL_RC_MISUSE,
-		    "invalid multibyte character");
+	if (*dstlen < 0) {
+		if (errno == EILSEQ)
+			return fcli_err_set(FSL_RC_RANGE,
+			    "invalid multibyte character");
+		else
+			return fcli_err_set(FSL_RC_MISUSE, "mbstowcs");
+	}
+
 
 	*dst = NULL;
 	*dst = fsl_malloc(sizeof(wchar_t) * (*dstlen + 1));
-	if (*dst == NULL)
-		return fsl_cx_err_set(f, FSL_RC_OOM, "malloc");
+	if (*dst == NULL) {
+		rc = fcli_err_set(FSL_RC_OOM, "malloc");
+		goto end;
+	}
 
 	if (mbstowcs(*dst, src, *dstlen) != *dstlen)
-		return fsl_cx_err_set(f, FSL_RC_RANGE, "mbstowcs mismatch");
+		rc = fcli_err_set(FSL_RC_SIZE_MISMATCH, "mbstowcs mismatch");
 
-	return 0;
+end:
+	if (rc) {
+		fsl_free(*dst);
+		*dst = NULL;
+		*dstlen = 0;
+	}
+
+	return rc;
 }
 
 /*
