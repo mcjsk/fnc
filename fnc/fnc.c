@@ -506,7 +506,7 @@ static int		 diff_file_artifact(fsl_buffer *, fsl_id_t,
 static int		 fsl_ckout_file_content(fsl_cx *, char const *,
 			    fsl_buffer *);
 static int		 show_diff(struct fnc_view *);
-static int		 write_diff(struct fnc_view *, const char *);
+static int		 write_diff(struct fnc_view *, char *);
 static int		 match_line(const void *, const void *);
 static int		 write_matched_line(int *, const char *, int, int,
 			    WINDOW *, regmatch_t *);
@@ -2276,11 +2276,16 @@ fnc_commit_artifact_close(struct fnc_commit_artifact *commit)
 {
 	struct fsl_list_state	st = { FNC_ARTIFACT_OBJ };
 
-	fsl_free(commit->branch);
-	fsl_free(commit->comment);
-	fsl_free(commit->timestamp);
-	fsl_free(commit->type);
-	fsl_free(commit->user);
+	if (commit->branch)
+		fsl_free(commit->branch);
+	if (commit->comment)
+		fsl_free(commit->comment);
+	if (commit->timestamp)
+		fsl_free(commit->timestamp);
+	if (commit->type)
+		fsl_free(commit->type);
+	if (commit->user)
+		fsl_free(commit->user);
 	fsl_free(commit->uuid);
 	fsl_free(commit->puuid);
 	fsl_list_clear(&commit->changeset, fsl_list_object_free, &st);
@@ -2438,7 +2443,7 @@ create_diff(struct fnc_diff_view_state *s)
 {
 	fsl_cx	*f = fcli_cx();
 	FILE	*fout = NULL;
-	char	*line, *st = NULL;
+	char	*line, *st0 = NULL, *st = NULL;
 	off_t	 lnoff = 0;
 	int	 n, rc = 0;
 
@@ -2503,7 +2508,8 @@ create_diff(struct fnc_diff_view_state *s)
 	 * Parse the diff buffer line-by-line to record byte offsets of each
 	 * line for scrolling and searching in diff view.
 	 */
-	st = fsl_strdup(fsl_buffer_str(&s->buf));
+	st0 = fsl_strdup(fsl_buffer_str(&s->buf));
+	st = st0;
 	lnoff = (s->line_offsets)[s->nlines - 1];
 	while ((line = fnc_strsep(&st, "\n")) != NULL) {
 		n = fsl_fprintf(s->f, "%s\n", line);
@@ -2520,7 +2526,7 @@ create_diff(struct fnc_diff_view_state *s)
 		goto end;
 
 end:
-	free(st);
+	free(st0);
 	fsl_buffer_clear(&s->buf);
 	if (s->f && fflush(s->f) != 0 && rc == 0)
 		rc = fsl_cx_err_set(f, FSL_RC_IO, "fflush");
@@ -3420,7 +3426,7 @@ show_diff(struct fnc_view *view)
 }
 
 static int
-write_diff(struct fnc_view *view, const char *headln)
+write_diff(struct fnc_view *view, char *headln)
 {
 	struct fnc_diff_view_state	*s = &view->state.diff;
 	fsl_cx				*f = fcli_cx();
@@ -3442,14 +3448,7 @@ write_diff(struct fnc_view *view, const char *headln)
 		return fsl_cx_err_set(f, fsl_errno_to_rc(errno, FSL_RC_ERROR),
 		    "fseeko");
 
-	/*
-	 * werase() fails to properly clear the parent screen when viewing
-	 * a diff and scrolling through commits with {J|,}. The headln of
-	 * <commit-type> <uuid> is redrawn on consecutive lines.
-	 */
-	/* werase(view->window); */
-	/* wclrtoeol(view->window); */	/* Overkill with wclear(). */
-	wclear(view->window);
+	werase(view->window);
 
 	if (headln) {
 		if ((line = fsl_mprintf("[%d/%d] %s", (s->first_line_onscreen -
@@ -3457,19 +3456,23 @@ write_diff(struct fnc_view *view, const char *headln)
 			return fsl_cx_err_set(f, fsl_errno_to_rc(errno,
 			    FSL_RC_ERROR), "mprintf");
 		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0);
+		fsl_free(line);
+		fsl_free(headln);
 		if (rc)
-			goto end;
+			return rc;
 
 		if (screen_is_shared(view))
 			wstandout(view->window);
 		waddwstr(view->window, wcstr);
+		fsl_free(wcstr);
+		wcstr = NULL;
 		if (screen_is_shared(view))
 			wstandend(view->window);
 		if (wstrlen <= view->ncols - 1)
 			waddch(view->window, '\n');
 
 		if (max_lines <= 1)
-			goto end;
+			return rc;
 		--max_lines;
 	}
 
@@ -3482,9 +3485,10 @@ write_diff(struct fnc_view *view, const char *headln)
 				s->eof = true;
 				break;
 			}
+			fsl_free(line);
 			fsl_cx_err_set(f, fsl_errno_to_rc(ferror(s->f),
 			    FSL_RC_IO), "getline");
-			goto end;
+			return rc;
 		}
 
 		if (s->colour && (match = fsl_list_index_of(&s->colours, line,
@@ -3496,13 +3500,19 @@ write_diff(struct fnc_view *view, const char *headln)
 		    regmatch->rm_so >= 0 && regmatch->rm_so < regmatch->rm_eo) {
 			rc = write_matched_line(&wstrlen, line, view->ncols, 0,
 			    view->window, regmatch);
-			if (rc)
-				goto end;
+			if (rc) {
+				fsl_free(line);
+				return rc;
+			}
 		} else {
 			rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0);
-			if (rc)
-				goto end;
+			if (rc) {
+				fsl_free(line);
+				return rc;
+			}
 			waddwstr(view->window, wcstr);
+			fsl_free(wcstr);
+			wcstr = NULL;
 		}
 		if (c) {
 			wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
@@ -3512,6 +3522,7 @@ write_diff(struct fnc_view *view, const char *headln)
 			waddch(view->window, '\n');
 		++nprintln;
 	}
+	fsl_free(line);
 	if (nprintln >= 1)
 		s->last_line_onscreen = s->first_line_onscreen + (nprintln - 1);
 	else
@@ -3529,9 +3540,7 @@ write_diff(struct fnc_view *view, const char *headln)
 		waddstr(view->window, "(END)");
 		wstandend(view->window);
 	}
-end:
-	free(wcstr);
-	free(line);
+
 	return rc;
 }
 
@@ -4162,7 +4171,7 @@ cmd_diff(fcli_command const *argv)
 	 */
 	if ((fsl_rid_is_a_checkin(f, rid) || rid == 0) &&
 	    fsl_rid_is_a_checkin(f, prid))
-		commit->type = "checkin";
+		commit->type = fsl_strdup("checkin");
 	else
 		return fcli_err_set(FSL_RC_TYPE,
 		    "artifact(s) [%s] not resolvable to a checkin",
@@ -4199,6 +4208,7 @@ cmd_diff(fcli_command const *argv)
 	if (!rc)
 		rc = view_loop(view);
 
+	fnc_commit_artifact_close(commit);
 	return rc;
 }
 
