@@ -3099,7 +3099,7 @@ write_diff_meta(fsl_buffer *buf, const char *zminus, fsl_uuid_str xminus,
 			rc = fsl_buffer_appendf(buf, "hash - %s\nhash + %s\n",
 			    minus, plus);
 	}
-	if ((diff_flags & FSL_DIFF_BRIEF) == 0)
+	if (!rc && (diff_flags & FSL_DIFF_BRIEF) == 0)
 		rc = fsl_buffer_appendf(buf, "--- %s\n+++ %s\n", zminus, zplus);
 
 	return rc;
@@ -3631,8 +3631,8 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 
 	/* Write the rest of the line if not yet at EOL. */
 	if (ncols_avail > 0 && fsl_strlen(line) > (fsl_size_t)regmatch->rm_eo) {
-		rc = formatln(&wcstr, &wstrlen,
-		line + regmatch->rm_eo, ncols_avail, start_column);
+		rc = formatln(&wcstr, &wstrlen, line + regmatch->rm_eo,
+		    ncols_avail, start_column);
 		if (rc)
 			return rc;
 		waddwstr(window, wcstr);
