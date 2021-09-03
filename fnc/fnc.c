@@ -545,8 +545,6 @@ main(int argc, const char **argv)
 	    (struct artifact_types *)fsl_malloc(sizeof(struct artifact_types));
 	fnc_init.filter_types->values = fsl_malloc(sizeof(char *));
 	fnc_init.filter_types->nitems = 0;
-	fcli_fax(fnc_init.filter_types->values);
-	fcli_fax(fnc_init.filter_types);
 
 	if (!setlocale(LC_CTYPE, ""))
 		fsl_fprintf(stderr, "[!] Warning: Can't set locale.\n");
@@ -565,6 +563,10 @@ main(int argc, const char **argv)
 	} else if (fnc_init.hflag)
 		usage();
 
+	rc = fcli_fingerprint_check(true);
+	if (rc)
+		goto end;
+
 	if (argc == 1)
 		cmd = &fnc_init.cmd_args[FNC_VIEW_TIMELINE];
 	else if (((rc = fcli_dispatch_commands(fnc_init.cmd_args, false)
@@ -572,10 +574,6 @@ main(int argc, const char **argv)
 		fnc_init.err = rc;
 		usage();
 	} else if (rc)
-		goto end;
-
-	rc = fcli_fingerprint_check(true);
-	if (rc)
 		goto end;
 
 	f = fcli_cx();
@@ -2613,7 +2611,7 @@ create_changeset(struct fnc_commit_artifact *commit)
 static int
 write_commit_meta(struct fnc_diff_view_state *s)
 {
-	char		*line = NULL, *st = NULL;
+	char		*line = NULL, *st0 = NULL, *st = NULL;
 	fsl_size_t	 linelen, idx = 0;
 	off_t		 lnoff = 0;
 	int		 n, rc = 0;
@@ -2650,7 +2648,8 @@ write_commit_meta(struct fnc_diff_view_state *s)
 	if ((rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff)))
 		goto end;
 
-	st = fsl_strdup(s->selected_commit->comment);
+	st0 = fsl_strdup(s->selected_commit->comment);
+	st = st0;
 	if (st == NULL) {
 		fcli_err_set(FSL_RC_OOM, "fsl_strdup");
 		goto end;
@@ -2711,7 +2710,7 @@ write_commit_meta(struct fnc_diff_view_state *s)
 	}
 
 end:
-	free(st);
+	free(st0);
 	free(line);
 	if (rc) {
 		free(*&s->line_offsets);
