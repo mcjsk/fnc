@@ -2830,19 +2830,14 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 	fsl_deck_F_next(&d2, &fc2);
 	while (fc1 || fc2) {
 		const fsl_card_F	*a = NULL, *b = NULL;
-		const char		*curr;
 		fsl_ckout_change_e	 change = FSL_CKOUT_CHANGE_NONE;
 
-		if (fc2)
-			curr = fc2->priorName ? fc2->priorName : fc2->name;
-		else if (fc1)
-			curr = fc1->priorName ? fc1->priorName : fc1->name;
 		if (!fc1)	/* File added. */
 			different = 1;
 		else if (!fc2)	/* File deleted. */
 			different = -1;
 		else		/* Same filename in both versions. */
-			different = fsl_strcmp(fc1->name, curr);
+			different = fsl_strcmp(fc1->name, fc2->name);
 
 		if (different) {
 			if (different > 0) {
@@ -3077,7 +3072,7 @@ write_diff_meta(fsl_buffer *buf, const char *zminus, fsl_uuid_str xminus,
 	int	rc = 0;
 	const char	*index, *plus, *minus;
 
-	index = zminus ? zminus : (zplus ? zplus : NULL_DEVICE);
+	index = zplus ? zplus : (zminus ? zminus : NULL_DEVICE);
 
 	switch (change) {
 	case FSL_CKOUT_CHANGE_MERGE_ADD:
