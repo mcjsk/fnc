@@ -66,7 +66,7 @@
 
 #include "libfossil.h"
 
-#define FNC_VERSION	0.2a
+#define FNC_VERSION	0.3a
 
 /* Utility macros. */
 #define MIN(a, b)	(((a) < (b)) ? (a) : (b))
