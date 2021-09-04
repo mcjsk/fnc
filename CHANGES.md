@@ -33,6 +33,7 @@
 - enhance diff view to display more informative control artifact commits
 - add Linux support so we now build and run on OpenBSD, macOS, and Linux
 - wrap commit comments to the current view width
+- implement cmd_diff() to provide the 'fnc diff' interface
 - tailor help/usage output to the specified command
 - fix invalid memory read in diff routine
 - add support for repository fingerprint version 1
