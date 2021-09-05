@@ -77,6 +77,14 @@ proc wh-bin-install {} {
 }
 
 ########################################################################
+# Looks for `etags` binary and returns a full path to it if
+# found, else an empty string. Also defines BIN_ETAGS to the
+# (cached) result value.
+proc wh-bin-etags {} {
+    return [wh-bin-define etags BIN_ETAGS]
+}
+
+########################################################################
 # Curses!
 #
 # Jumps through numerous hoops to try to find ncurses libraries and

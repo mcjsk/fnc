@@ -355,6 +355,7 @@ endif # Tromey's Way
 
 ########################################################################
 # create emacs tags...
+ifneq (1,$(ShakeNMake.ETAGS.DISABLE))
 bin_etags := $(call ShakeNMake.CALL.FIND_FILE,etags)
 ifeq (.,$(TOP_SRCDIR_REL))
 ifneq (,$(bin_etags))
@@ -377,6 +378,8 @@ endif
 # ^^^ bin_etags
 endif
 # ^^^ TOP_SRCDIR_REL==.
+endif
+# ^^^ $(ShakeNMake.TAGS.DISABLE)
 
 #%.o:
 #	@$$(call ShakeNMake.CALL.SETX,"CC [$@] ..."); \
