@@ -1,10 +1,12 @@
 # vim:se syn=tcl:
 #
-use cc cc-shared cc-lib
+use cc cc-shared cc-lib wh-common
 
 options {
     no-debug=0 => "Disable debug build options."
     loud=0 => "Enables 'loud' build mode."
+    no-compile-commands=0 =>
+      "Disable compile_commands.json support even if detected (possibly incorrectly)."
 }
 
 
@@ -13,7 +15,6 @@ options {
 
 #cc-check-c11
 
-use wh-common
 wh-require-bash
 cc-check-sizeof "void *"
 
@@ -91,14 +92,7 @@ if {[opt-bool no-debug]} {
     set cFlags "$cFlags -g -DDEBUG -O0"
 }
 
-puts "Checking for compile_commands.json support..."
-if {[cctest -lang c -cflags {/dev/null -MJ} -source {}]} {
-    msg-result "Compiler supports compile_commands.json."
-    define MAKE_COMPILATION_DB yes
-} else {
-    msg-result "Compiler does not support compile_commands.json."
-    define MAKE_COMPILATION_DB no
-}
+wh-check-compile-commands no-compile-commands
 
 define CFLAGS $cFlags
 

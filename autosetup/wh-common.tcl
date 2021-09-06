@@ -14,6 +14,8 @@
 # Last(?) update: 2021-09-01
 ########################################################################
 
+array set whcache {} ; # used for caching various results.
+
 ########################################################################
 # A proxy for cc-check-function-in-lib which "undoes" any changes that
 # routine makes to the LIBS define. Returns the result of
@@ -28,23 +30,39 @@ proc wh-check-function-in-lib {function libs {otherlibs {}}} {
 ########################################################################
 # Look for binary named $binName and `define`s $defName to that full
 # path, or an empty string if not found. Returns the value it defines.
-# This caches the result for a given $binName value, but if called multiple
-# times with a different defName, the 2nd and subsequent defName will not
-# get `define`d (patches to fix that are welcomed).
-proc wh-bin-define {binName defName} {
-    set check [get-define $defName 0]
+# This caches the result for a given $binName/$defName combination, so
+# calls after the first for a given combination will always return the
+# same result.
+#
+# As a special case, if defName is empty then no define is performed.
+proc wh-bin-define {binName {defName {}}} {
+    global whcache
+    set cacheName "$binName:$defName"
+    set check {}
+    if {[info exists whcache($cacheName)]} {
+        set check $whcache($cacheName)
+    }
     msg-checking "Looking for $binName ... "
-    if {0 ne $check} {
-        msg-result "(cached) $check"
+    if {"" ne $check} {
+        set lbl $check
+        if {" _ 0 _ " eq $check} {
+            set lbl "not found"
+            set check ""
+        }
+        msg-result "(cached) $lbl"
         return $check
     }
     set check [find-executable-path $binName]
     if {"" eq $check} {
         msg-result "not found"
+        set whcache($cacheName) " _ 0 _ "
     } else {
         msg-result $check
+        set whcache($cacheName) $check
     }
-    define $defName $check
+    if {"" ne $defName} {
+        define $defName $check
+    }
     return $check
 }
 
@@ -244,4 +262,54 @@ proc wh-check-module-loader {} {
     define HAVE_LIBDL $HAVE_LIBDL
     define LDFLAGS_MODULE_LOADER $LDFLAGS_MODULE_LOADER
     return $rc
+}
+
+
+########################################################################
+# Opens the given file, reads all of its content, and returns it.
+proc wh-file-content {fname} {
+    set fp [open $fname r]
+    set rc [read $fp]
+    close $fp
+    return $rc
+}
+
+########################################################################
+# Returns the contents of the given file as an array, with the EOL
+# stripped from each input line.
+proc wh-file-content-list {fname} {
+    set fp [open $fname r]
+    set rc {}
+    while { [gets $fp line] >= 0 } {
+        lappend rc $line
+    }
+    return $rc
+}
+
+########################################################################
+# Checks the compiler for compile_commands.json support. If passed an
+# argument it is assumed to be the name of an autosetup boolean config
+# option to explicitly DISABLE the compile_commands.json support.
+#
+# Returns 1 if supported, else 0. Defines MAKE_COMPILATION_DB to "yes"
+# if supported, "no" if not.
+proc wh-check-compile-commands {{configOpt {}}} {
+    msg-checking "compile_commands.json support... "
+    if {"" ne $configOpt && [opt-bool $configOpt]} {
+        msg-result "explicitly disabled"
+        define MAKE_COMPILATION_DB no
+        return 0
+    } else {
+        if {[cctest -lang c -cflags {/dev/null -MJ} -source {}]} {
+            # This test reportedly incorrectly succeeds on one of
+            # Martin G.'s older systems.
+            msg-result "compiler supports compile_commands.json"
+            define MAKE_COMPILATION_DB yes
+            return 1
+        } else {
+            msg-result "compiler does not support compile_commands.json"
+            define MAKE_COMPILATION_DB no
+            return 0
+        }
+    }
 }
