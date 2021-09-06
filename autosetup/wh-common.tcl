@@ -3,15 +3,11 @@
 # managed under the umbrella of wanderinghorse.net.
 #
 # In the interest of assisting to keep multiple copies of this file
-# up to date:
+# up to date:s
 #
-# 1) the "canonical" version is the one in libfossil:
+# The "canonical" version is the one in libfossil:
 #
 #  https://fossil.wanderinghorse.net/r/libfossil/finfo?name=autosetup/wh-common.tcl
-#
-# 2) Please, dear maintainer, try to keep the following string updated:
-#
-# Last(?) update: 2021-09-01
 ########################################################################
 
 array set whcache {} ; # used for caching various results.
@@ -34,7 +30,8 @@ proc wh-check-function-in-lib {function libs {otherlibs {}}} {
 # calls after the first for a given combination will always return the
 # same result.
 #
-# As a special case, if defName is empty then no define is performed.
+# If defName is empty then "BIN_X" is used, where X is the upper-case
+# form of $binName with any '-' characters removed.
 proc wh-bin-define {binName {defName {}}} {
     global whcache
     set cacheName "$binName:$defName"
@@ -60,9 +57,10 @@ proc wh-bin-define {binName {defName {}}} {
         msg-result $check
         set whcache($cacheName) $check
     }
-    if {"" ne $defName} {
-        define $defName $check
+    if {"" eq $defName} {
+        set defName "BIN_[string toupper [string map {- {}} $binName]]"
     }
+    define $defName $check
     return $check
 }
 
@@ -71,7 +69,7 @@ proc wh-bin-define {binName {defName {}}} {
 # BIN_BASH to the full path to bash and returns that value. We
 # _require_ bash because it's the SHELL value used in our makefiles.
 proc wh-require-bash {} {
-    set bash [wh-bin-define bash BIN_BASH]
+    set bash [wh-bin-define bash]
     if {"" eq $bash} {
         user-error "Our Makefiles require the bash shell."
     }
@@ -79,28 +77,43 @@ proc wh-require-bash {} {
 }
 
 ########################################################################
-# Looks for `pkg-config` binary and returns a full path to it if
-# found, else an empty string. Also defines BIN_PKGCONFIG to the
-# (cached) result value.
-proc wh-bin-pkgconfig {} {
-    return [wh-bin-define pkg-config BIN_PKGCONFIG]
+# Internal impl for wh-opt-bool-01 and wh-opt-bool-01-invert.
+proc wh-opt-bool-01-impl {optName defName invert {descr {}}} {
+    if {"" eq $descr} {
+        set descr $defName
+    }
+    set rc 0
+    msg-checking "$descr ... "
+    if {[opt-bool $optName]} {
+        if {0 eq $invert} {
+            set rc 1
+        } else {
+            set rc 0
+        }
+    } elseif {0 ne $invert} {
+        set rc 1
+    }
+    msg-result $rc
+    define $defName $rc
+    return $rc
 }
 
-########################################################################
-# Looks for `install` binary and returns a full path to it if found,
-# else an empty string. Also defines BIN_INSTALL to the (cached)
-# result value.
-proc wh-bin-install {} {
-    return [wh-bin-define install BIN_INSTALL]
-}
 
 ########################################################################
-# Looks for `etags` binary and returns a full path to it if
-# found, else an empty string. Also defines BIN_ETAGS to the
-# (cached) result value.
-proc wh-bin-etags {} {
-    return [wh-bin-define etags BIN_ETAGS]
+# Checks [opt-bool $optName] and does [define $defName X] where X is 0
+# for false and 1 for true. descr is an optional [msg-checking]
+# argument which defaults to $defName. Returns X.
+proc wh-opt-bool-01 {optName defName {descr {}}} {
+    return [wh-opt-bool-01-impl $optName $defName 0 $descr]
 }
+########################################################################
+# An variant of wh-opt-bool-01 which inverts the boolean semantics: if
+# the option is set, it gets define'd to 0, else 1. Returns the
+# define'd value.
+proc wh-opt-bool-01-invert {optName defName {descr {}}} {
+    return [wh-opt-bool-01-impl $optName $defName 1 $descr]
+}
+
 
 ########################################################################
 # Curses!
@@ -121,8 +134,8 @@ proc wh-bin-etags {} {
 # that platform we simply guess from the core system level, ignoring
 # brew/macports options.
 proc wh-check-ncurses {} {
-    puts "Looking for \[n]curses..."
-    set pcBin [wh-bin-pkgconfig]
+    set pcBin [wh-bin-define pkg-config]
+    msg-checking "Looking for \[n]curses... "
     set LIB_CURSES ""
     set CFLAGS_CURSES ""
     set rc 0
@@ -135,7 +148,7 @@ proc wh-check-ncurses {} {
                 continue
             }
             set np $p
-            puts "Using pkg-config curses package \[$p]"
+            msg-result "Using pkg-config curses package \[$p]"
             break
         }
         if {"" ne $np} {

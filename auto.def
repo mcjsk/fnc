@@ -70,7 +70,7 @@ if {[cc-check-functions lstat]} {
 
 # Find some tools
 cc-check-tools ar strip
-wh-bin-install
+wh-bin-define install
 
 set extra_objs {}
 
@@ -95,12 +95,7 @@ if {[opt-bool no-debug]} {
 wh-check-compile-commands no-compile-commands
 
 define CFLAGS $cFlags
-
-if {[opt-bool loud]} {
-    define BUILD_QUIETLY 0
-    puts "Using 'loud' build mode."
-} else {
-    define BUILD_QUIETLY 1
+if {[wh-opt-bool-01-invert loud BUILD_QUIETLY]} {
     puts "Enabling quiet build mode. Use --loud to enable loud mode."
 }
 
