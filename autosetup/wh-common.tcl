@@ -13,6 +13,28 @@
 array set whcache {} ; # used for caching various results.
 
 ########################################################################
+# wh-lshift shifts $count elements from the list named $listVar and
+# returns them.
+#
+# Modified slightly from: https://wiki.tcl-lang.org/page/lshift
+#
+# On an empty list, returns "".
+proc wh-lshift {listVar {count 1}} {
+    upvar 1 $listVar l
+    if {![info exists l]} {
+        # make the error message show the real variable name
+        error "can't read \"$listVar\": no such variable"
+    }
+    if {![llength $l]} {
+        # error Empty
+        return ""
+    }
+    set r [lrange $l 0 [incr count -1]]
+    set l [lreplace $l [set l 0] $count]
+    return $r
+}
+
+########################################################################
 # A proxy for cc-check-function-in-lib which "undoes" any changes that
 # routine makes to the LIBS define. Returns the result of
 # cc-check-function-in-lib.
@@ -78,7 +100,31 @@ proc wh-require-bash {} {
 
 ########################################################################
 # Internal impl for wh-opt-bool-01 and wh-opt-bool-01-invert.
-proc wh-opt-bool-01-impl {optName defName invert {descr {}}} {
+#
+# args = {optName defName invert {descr {}}}
+proc wh-opt-bool-01-impl {args} {
+}
+
+
+########################################################################
+# Args: [-v] optName defName {descr {}}
+#
+# Checks [opt-bool $optName] and does [define $defName X] where X is 0
+# for false and 1 for true. descr is an optional [msg-checking]
+# argument which defaults to $defName. Returns X.
+#
+# If args[0] is -v then the boolean semantics are inverted: if
+# the option is set, it gets define'd to 0, else 1. Returns the
+# define'd value.
+proc wh-opt-bool-01 {args} {
+    set invert 0
+    if {[lindex $args 0] eq "-v"} {
+		set invert 1
+		set args [lrange $args 1 end]
+	}
+    set optName [wh-lshift args]
+    set defName [wh-lshift args]
+    set descr [wh-lshift args]
     if {"" eq $descr} {
         set descr $defName
     }
@@ -96,22 +142,6 @@ proc wh-opt-bool-01-impl {optName defName invert {descr {}}} {
     msg-result $rc
     define $defName $rc
     return $rc
-}
-
-
-########################################################################
-# Checks [opt-bool $optName] and does [define $defName X] where X is 0
-# for false and 1 for true. descr is an optional [msg-checking]
-# argument which defaults to $defName. Returns X.
-proc wh-opt-bool-01 {optName defName {descr {}}} {
-    return [wh-opt-bool-01-impl $optName $defName 0 $descr]
-}
-########################################################################
-# An variant of wh-opt-bool-01 which inverts the boolean semantics: if
-# the option is set, it gets define'd to 0, else 1. Returns the
-# define'd value.
-proc wh-opt-bool-01-invert {optName defName {descr {}}} {
-    return [wh-opt-bool-01-impl $optName $defName 1 $descr]
 }
 
 
@@ -324,5 +354,19 @@ proc wh-check-compile-commands {{configOpt {}}} {
             define MAKE_COMPILATION_DB no
             return 0
         }
+    }
+}
+
+########################################################################
+# Uses [make-template] to creates makefile(-like) file $filename from
+# $filename.in but explicitly makes the output read-only, to avoid
+# inadvertent editing (who, me?).
+#
+# The argument may be a list of filenames.
+proc wh-make-from-dot-in {filename} {
+    foreach f $filename {
+        catch { exec chmod u+w $f }
+        make-template $f.in $f
+        catch { exec chmod u-w $f }
     }
 }

@@ -95,26 +95,16 @@ if {[opt-bool no-debug]} {
 wh-check-compile-commands no-compile-commands
 
 define CFLAGS $cFlags
-if {[wh-opt-bool-01-invert loud BUILD_QUIETLY]} {
+if {[wh-opt-bool-01 -v loud BUILD_QUIETLY]} {
     puts "Enabling quiet build mode. Use --loud to enable loud mode."
 }
 
-# Creates mkefile(-like) file $name from $name.in but explicitly makes
-# the output read-only, to avoid inadvertent editing (who, me?).
-proc makeFromDotIn {name} {
-    catch { exec chmod u+w $name }
-    make-template $name.in $name
-    catch { exec chmod u-w $name }
-}
 # Each generated Makefile requires an input file with a .in extension:
-set makefiles {
+wh-make-from-dot-in {
     config.make
     Makefile
     src/Makefile
     fnc/Makefile
-}
-foreach {f} $makefiles {
-    makeFromDotIn $f
 }
 
 if {0} {

@@ -1,7 +1,6 @@
 all:
 include ../subdir-inc.make
-#$(error $(TOP_SRCDIR))
-#EXTRA_LIBS := -lz
+DISTCLEAN_FILES += Makefile
 
 THE_OBJ := libfossil.o
 ifneq (,$(wildcard sqlite3.c))
