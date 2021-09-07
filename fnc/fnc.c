@@ -85,6 +85,7 @@
 #define SPINNER		"\\|/-\0"
 #define NULL_DEVICE	"/dev/null"
 #define NULL_DEVICELEN (sizeof(NULL_DEVICE)-1)
+#define KEY_ESCAPE	27
 
 /* Portability macros. */
 #ifdef __OpenBSD__
@@ -462,6 +463,9 @@ static int		 write_commit_line(struct fnc_view *,
 			    struct fnc_commit_artifact *, int);
 static int		 view_input(struct fnc_view **, int *,
 			    struct fnc_view *, struct view_tailhead *);
+static void		 help(void);
+static void		 padpopup(WINDOW *, const char **, const char *);
+void			 centerprint(WINDOW *, int, int, int, const char *, chtype);
 static int		 tl_input_handler(struct fnc_view **, struct fnc_view *,
 			    int);
 static int		 timeline_scroll_down(struct fnc_view *, int);
@@ -1688,6 +1692,10 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 			view->parent->focus_child = false;
 		}
 		break;
+	case KEY_F(1):
+	case 'H':
+		help();
+		break;
 	case 'q':
 		rc = view->input(new, view, ch);
 		view->egress = true;
@@ -1746,6 +1754,233 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 	}
 
 	return rc;
+}
+
+static void
+help()
+{
+	static const char	*progname = NULL;
+	static const char	*help[] = {
+	    "",
+	    "Global",
+	    "  H,F1          Toggle help",
+	    "  f             Toggle fullscreen",
+	    "  Tab           Switch focus between open views",
+	    "  Q             Quit the program",
+	    "  q             Quit the active view",
+	    "",
+	    "Timeline",
+	    "  k,<Up>,<,,    Move selection cursor up one commit",
+	    "  j,<Down>,>,.  Move selection cursor down one commit",
+	    "  C-b,PgUp      Scroll up one page",
+	    "  C-f,PgDn      Scroll down one page",
+	    "  gg,Home       Jump to first line in the current view",
+	    "  G,End         Jump to last line in the current view",
+	    "  Enter,Space   Open a diff view of the selected commit",
+	    "  /             Open search prompt",
+	    "  n             Find next commit matching the current search term",
+	    "  N             Find previous commit matching current search term",
+	    "",
+	    "Diff",
+	    "  k,<Up>        Scroll up one line of diff output",
+	    "  j,<Down>      Scroll down one line of diff output",
+	    "  C-b,PgUp      Scroll up one page of diff output",
+	    "  C-f,PgDn      Scroll down one page of diff output",
+	    "  gg,Home       Scroll to the top of the diff view",
+	    "  G,End         Scroll to the end of the diff view",
+	    "  c             Toggle coloured diff output",
+	    "  i             Toggle inversion of diff output",
+	    "  v             Toggle verbosity of diff output",
+	    "  w             Toggle ignore whitespace-only changes in diff",
+	    "  -,_           Decrease the number of context lines",
+	    "  +,=           Increase the number of context lines",
+	    "  C-k,K,<,,     Display diff of next commit in the timeline",
+	    "  C-j,J,>,.     Display diff of previous commit in the timeline",
+	    "  /             Open search prompt to enter diff search term",
+	    "  n             Find next line matching current search term",
+	    "  N             Find previous line matching current search term",
+	    0};
+	/* Looks pretty, but scrambles the screen on unsupported consoles. */
+	/* static const char	*help[] = */
+	/* { */
+	/*	"Global", */
+	/*	"  ❬H❭❬F1❭         Toggle help", */
+	/*	"  ❬f❭             Toggle fullscreen", */
+	/*	"  ❬TAB❭           Switch focus between open views", */
+	/*	"  ❬Q❭             Quit the program", */
+	/*	"  ❬q❭             Quit the active view", */
+	/*	"", */
+	/*	"Timeline", */
+	/*	"  ❬↑❭❬k❭❬<❭❬,❭    Move selection cursor up one commit", */
+	/*	"  ❬↓❭❬j❭❬>❭❬.❭    Move selection cursor down one commit", */
+	/*	"  ❬C-b❭❬PgUp❭     Scroll up one page", */
+	/*	"  ❬C-f❭❬PgDn❭     Scroll down one page", */
+	/*	"  ❬gg❭❬Home❭      Jump to first line in the current view", */
+	/*	"  ❬G❭❬End❭        Jump to last line in the current view", */
+	/*	"  ❬Enter❭❬Space❭  Open a diff view of the selected commit", */
+	/*	"  ❬/❭             Open search prompt", */
+	/*	"  ❬n❭             Find next commit matching the current search", */
+	/*	"  ❬N❭             Find previous commit matching the current " */
+	/*	"search ", */
+	/*	"", */
+	/*	"Diff", */
+	/*	"  ❬↑❭❬k❭          Scroll up one line of diff output", */
+	/*	"  ❬↓❭❬j❭          Scroll down one line of diff output", */
+	/*	"  ❬C-b❭❬PgUp❭     Scroll up one page of diff output", */
+	/*	"  ❬C-f❭❬PgDn❭     Scroll down one page of diff output", */
+	/*	"  ❬gg❭❬Home❭      Scroll to the top of the diff view", */
+	/*	"  ❬G❭❬End❭        Scroll to the end of the diff view", */
+	/*	"  ❬c❭             Toggle coloured diff output", */
+	/*	"  ❬i❭             Toggle inversion of diff output", */
+	/*	"  ❬v❭             Toggle verbosity of diff output", */
+	/*	"  ❬w❭             Toggle ignore whitespace-only changes in diff", */
+	/*	"  ❬-❭❬_❭          Decrease the number of context lines", */
+	/*	"  ❬+❭❬=❭          Increase the number of context lines", */
+	/*	"  ❬C-k❭❬K❭❬<❭❬,❭  Display diff of next commit in the timeline", */
+	/*	"  ❬C-j❭❬J❭❬>❭❬.❭  Display diff of previous commit in the " */
+	/*	"timeline", */
+	/*	"  ❬/❭             Open search prompt to enter diff search term", */
+	/*	"  ❬n❭             Find next line matching the current search", */
+	/*	"  ❬N❭             Find previous line matching the current search " */
+	/* }; */
+
+	progname = fsl_mprintf("%s %s Help\n", fcli_progname(), PRINT_VERSION);
+	padpopup(stdscr, help, progname);
+}
+
+/*
+ * Create popup pad in which to write the supplied txt string and optional
+ * title. The pad is contained within a window that is offset four columns in
+ * and two lines down from the parent window.
+ */
+void
+padpopup(WINDOW *parent, const char **txt, const char *title)
+{
+	WINDOW	*help, *content, *fnc_win = NULL;
+	int	 ch, cury, end, idx, len, py, px, wy, wx, x0, y0;
+
+	x0 = 4;		/* Number of columns to border help window. */
+	y0 = 2;		/* Number of lines to border help window. */
+	cury = 0;
+	wx = getmaxx(parent) - ((x0 + 1) * 2);  /* Width of help window. */
+	wy = getmaxy(parent) - ((y0 + 1) * 2);  /* Height of help window. */
+	ch = ERR;
+
+	/*
+	 * Compute longest line and total number of lines in text to be
+	 * displayed to determine pad dimensions.
+	 */
+	px = 0;  /* Width of help pad (i.e., longest line in txt). */
+	for (idx = 0; txt[idx] != 0; ++idx) {
+		len = fsl_strlen(txt[idx]);
+		if (px < len)
+			px = len;
+	}
+	py = idx;  /* Height of help pad (i.e., number of lines in txt). */
+	if (title)
+		px = MAX(fsl_strlen(title), (fsl_size_t)px);
+
+	if ((help = newwin(wy, wx, y0, x0)) == 0)
+		return;
+	if ((content = newpad(py + 1, px + 1)) == 0) {
+		delwin(help);
+		return;
+	}
+
+	doupdate();
+	fnc_win = dupwin(curscr);
+	keypad(content, TRUE);
+
+	/* Write text content to pad. */
+	init_pair(1, COLOR_YELLOW, COLOR_RED);
+	if (title)
+		centerprint(content, 0, 0, px, title, 0);
+	for (idx = 0; idx < py; ++idx) {
+		waddstr(content, txt[idx]);
+		if ((idx + 1) < py)
+			waddch(content, '\n');
+	}
+
+	end = (getcury(content) - (wy - 3));  /* No. lines past end of pad. */
+	do {
+		switch (ch) {
+			case KEY_UP:
+			case 'k':
+				if (cury > 0)
+					--cury;
+				break;
+			case KEY_DOWN:
+			case 'j':
+				if (cury < end)
+					++cury;
+				break;
+			case KEY_PPAGE:
+			case CTRL('b'):
+				if (cury > 0) {
+					cury -= wy / 2;
+					if (cury < 0)
+						cury = 0;
+				}
+				break;
+			case KEY_NPAGE:
+			case CTRL('f'):
+				if (cury < end) {
+					cury += wy / 2;
+					if (cury > end)
+						cury = end;
+				}
+				break;
+			case KEY_HOME:
+				cury = 0;
+				break;
+			case KEY_END:
+				cury = end;
+				break;
+			case ERR:
+			default:
+				break;
+		}
+		werase(help);
+		box(help, 0, 0);
+		wnoutrefresh(help);
+		pnoutrefresh(content, cury, 0, y0 + 1, x0 + 1, wy, wx);
+		doupdate();
+	} while ((ch = wgetch(content)) != 'q' && ch != KEY_ESCAPE
+	    && ch != ERR);
+
+	/* Destroy help window. */
+	werase(help);
+	wrefresh(help);
+	delwin(help);
+	delwin(content);
+
+	/* Restore fnc window content. */
+	touchwin(fnc_win);
+	wnoutrefresh(fnc_win);
+	doupdate();
+	delwin(fnc_win);
+}
+
+void
+centerprint(WINDOW *win, int starty, int startx, int cols, const char *str,
+    chtype colour)
+{
+	int	x, y;
+
+	if (win == NULL)
+		win = stdscr;
+
+	getyx(win, y, x);
+	x = startx ? startx : x;
+	y = starty ? starty : y;
+	if (!cols)
+		cols = getmaxx(win);
+
+	x = startx + (cols - fsl_strlen(str)) / 2;
+	wattron(win, colour ? colour : A_UNDERLINE);
+	mvwprintw(win, y, x, "%s", str);
+	wattroff(win, colour ? colour : A_UNDERLINE);
+	refresh();
 }
 
 static int
