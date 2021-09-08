@@ -1777,9 +1777,10 @@ help()
 	    "  gg,Home       Jump to first line in the current view",
 	    "  G,End         Jump to last line in the current view",
 	    "  Enter,Space   Open a diff view of the selected commit",
-	    "  /             Open search prompt",
+	    "  /             Open prompt to enter timeline search",
 	    "  n             Find next commit matching the current search term",
-	    "  N             Find previous commit matching current search term",
+	    "  N             Find previous commit matching the current search "
+	    "term",
 	    "",
 	    "Diff",
 	    "  k,<Up>        Scroll up one line of diff output",
@@ -1796,56 +1797,60 @@ help()
 	    "  +,=           Increase the number of context lines",
 	    "  C-k,K,<,,     Display diff of next commit in the timeline",
 	    "  C-j,J,>,.     Display diff of previous commit in the timeline",
-	    "  /             Open search prompt to enter diff search term",
-	    "  n             Find next line matching current search term",
-	    "  N             Find previous line matching current search term",
+	    "  /             Open prompt to enter diff search",
+	    "  n             Find next line matching the current search term",
+	    "  N             Find previous line matching the current search "
+	    "term",
 	    0};
-	/* Looks pretty, but scrambles the screen on unsupported consoles. */
-	/* static const char	*help[] = */
-	/* { */
-	/*	"Global", */
-	/*	"  ❬H❭❬F1❭         Toggle help", */
-	/*	"  ❬f❭             Toggle fullscreen", */
-	/*	"  ❬TAB❭           Switch focus between open views", */
-	/*	"  ❬Q❭             Quit the program", */
-	/*	"  ❬q❭             Quit the active view", */
-	/*	"", */
-	/*	"Timeline", */
-	/*	"  ❬↑❭❬k❭❬<❭❬,❭    Move selection cursor up one commit", */
-	/*	"  ❬↓❭❬j❭❬>❭❬.❭    Move selection cursor down one commit", */
-	/*	"  ❬C-b❭❬PgUp❭     Scroll up one page", */
-	/*	"  ❬C-f❭❬PgDn❭     Scroll down one page", */
-	/*	"  ❬gg❭❬Home❭      Jump to first line in the current view", */
-	/*	"  ❬G❭❬End❭        Jump to last line in the current view", */
-	/*	"  ❬Enter❭❬Space❭  Open a diff view of the selected commit", */
-	/*	"  ❬/❭             Open search prompt", */
-	/*	"  ❬n❭             Find next commit matching the current search", */
-	/*	"  ❬N❭             Find previous commit matching the current " */
-	/*	"search ", */
-	/*	"", */
-	/*	"Diff", */
-	/*	"  ❬↑❭❬k❭          Scroll up one line of diff output", */
-	/*	"  ❬↓❭❬j❭          Scroll down one line of diff output", */
-	/*	"  ❬C-b❭❬PgUp❭     Scroll up one page of diff output", */
-	/*	"  ❬C-f❭❬PgDn❭     Scroll down one page of diff output", */
-	/*	"  ❬gg❭❬Home❭      Scroll to the top of the diff view", */
-	/*	"  ❬G❭❬End❭        Scroll to the end of the diff view", */
-	/*	"  ❬c❭             Toggle coloured diff output", */
-	/*	"  ❬i❭             Toggle inversion of diff output", */
-	/*	"  ❬v❭             Toggle verbosity of diff output", */
-	/*	"  ❬w❭             Toggle ignore whitespace-only changes in diff", */
-	/*	"  ❬-❭❬_❭          Decrease the number of context lines", */
-	/*	"  ❬+❭❬=❭          Increase the number of context lines", */
-	/*	"  ❬C-k❭❬K❭❬<❭❬,❭  Display diff of next commit in the timeline", */
-	/*	"  ❬C-j❭❬J❭❬>❭❬.❭  Display diff of previous commit in the " */
-	/*	"timeline", */
-	/*	"  ❬/❭             Open search prompt to enter diff search term", */
-	/*	"  ❬n❭             Find next line matching the current search", */
-	/*	"  ❬N❭             Find previous line matching the current search " */
-	/* }; */
+	 static const char	*help0[] =
+	 {
+	    "Global",
+	    "  ❬H❭❬F1❭         Toggle help",
+	    "  ❬f❭             Toggle fullscreen",
+	    "  ❬TAB❭           Switch focus between open views",
+	    "  ❬Q❭             Quit the program",
+	    "  ❬q❭             Quit the active view",
+	    "",
+	    "Timeline",
+	    "  ❬↑❭❬k❭❬<❭❬,❭    Move selection cursor up one commit",
+	    "  ❬↓❭❬j❭❬>❭❬.❭    Move selection cursor down one commit",
+	    "  ❬C-b❭❬PgUp❭     Scroll up one page",
+	    "  ❬C-f❭❬PgDn❭     Scroll down one page",
+	    "  ❬gg❭❬Home❭      Jump to first line in the current view",
+	    "  ❬G❭❬End❭        Jump to last line in the current view",
+	    "  ❬Enter❭❬Space❭  Open diff view of the selected commit",
+	    "  ❬/❭             Open prompt to enter timeline search",
+	    "  ❬n❭             Find next commit matching the current search "
+	    "term",
+	    "  ❬N❭             Find previous commit matching the current search"
+	    " term",
+	    "",
+	    "Diff",
+	    "  ❬↑❭❬k❭          Scroll up one line of diff output",
+	    "  ❬↓❭❬j❭          Scroll down one line of diff output",
+	    "  ❬C-b❭❬PgUp❭     Scroll up one page of diff output",
+	    "  ❬C-f❭❬PgDn❭     Scroll down one page of diff output",
+	    "  ❬gg❭❬Home❭      Scroll to the top of the diff view",
+	    "  ❬G❭❬End❭        Scroll to the end of the diff view",
+	    "  ❬c❭             Toggle coloured diff output",
+	    "  ❬i❭             Toggle inversion of diff output",
+	    "  ❬v❭             Toggle verbosity of diff output",
+	    "  ❬w❭             Toggle ignore whitespace-only changes in diff",
+	    "  ❬-❭❬_❭          Decrease the number of context lines",
+	    "  ❬+❭❬=❭          Increase the number of context lines",
+	    "  ❬C-k❭❬K❭❬<❭❬,❭  Display diff of next commit in the timeline",
+	    "  ❬C-j❭❬J❭❬>❭❬.❭  Display diff of previous commit in the "
+	    "timeline",
+	    "  ❬/❭             Open prompt to enter diff search",
+	    "  ❬n❭             Find next line matching the current search term",
+	    "  ❬N❭             Find previous line matching the current search "
+	    "term",
+	    0
+	 };
+	const char		*codeset = nl_langinfo(CODESET);
 
 	progname = fsl_mprintf("%s %s Help\n", fcli_progname(), PRINT_VERSION);
-	padpopup(stdscr, help, progname);
+	padpopup(stdscr, !strcmp(codeset, "UTF-8") ? help0 : help, progname);
 }
 
 /*
