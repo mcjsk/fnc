@@ -1694,6 +1694,7 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 		break;
 	case KEY_F(1):
 	case 'H':
+	case '?':
 		help();
 		break;
 	case 'q':
@@ -1763,7 +1764,7 @@ help()
 	static const char	*help[] = {
 	    "",
 	    "Global",
-	    "  H,F1          Toggle help",
+	    "  H,?,F1        Open in-app help",
 	    "  f             Toggle fullscreen",
 	    "  Tab           Switch focus between open views",
 	    "  Q             Quit the program",
@@ -1805,7 +1806,7 @@ help()
 	 static const char	*help0[] =
 	 {
 	    "Global",
-	    "  ❬H❭❬F1❭         Toggle help",
+	    "  ❬H❭❬?❭❬F1❭      Open in-app help",
 	    "  ❬f❭             Toggle fullscreen",
 	    "  ❬TAB❭           Switch focus between open views",
 	    "  ❬Q❭             Quit the program",
@@ -1897,7 +1898,6 @@ padpopup(WINDOW *parent, const char **txt, const char *title)
 	keypad(content, TRUE);
 
 	/* Write text content to pad. */
-	init_pair(1, COLOR_YELLOW, COLOR_RED);
 	if (title)
 		centerprint(content, 0, 0, px, title, 0);
 	for (idx = 0; idx < py; ++idx) {
@@ -1929,6 +1929,7 @@ padpopup(WINDOW *parent, const char **txt, const char *title)
 				break;
 			case KEY_NPAGE:
 			case CTRL('f'):
+			case ' ':
 				if (cury < end) {
 					cury += wy / 2;
 					if (cury > end)
