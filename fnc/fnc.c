@@ -365,6 +365,11 @@ struct fnc_tl_thread_cx {
 	enum fnc_search_mvmnt	 *searching;
 	int			  spin_idx;
 	int			  ncommits_needed;
+	/*
+	 * XXX Is there a more elegant solution to retrieving return codes from
+	 * thread functions while pinging between, but before we join, threads?
+	 */
+	int			  rc;
 	bool			  endjmp;
 	bool			  timeline_end;
 	sig_atomic_t		 *quit;
@@ -454,6 +459,8 @@ static int		 show_timeline_view(struct fnc_view *);
 static void		*tl_producer_thread(void *);
 static int		 block_main_thread_signals(void);
 static int		 build_commits(struct fnc_tl_thread_cx *);
+static int		 commit_builder(struct fnc_commit_artifact **, fsl_id_t,
+			    fsl_stmt *);
 static int		 signal_tl_thread(struct fnc_view *, int);
 static int		 draw_commits(struct fnc_view *);
 static void		 parse_emailaddr_username(char **);
@@ -536,6 +543,7 @@ static void		 sigwinch_handler(int);
 static void		 sigpipe_handler(int);
 static void		 sigcont_handler(int);
 static char		*fnc_strsep (char **, const char *);
+static int		 fnc_set_errno_err(int, const char *, ...);
 
 int
 main(int argc, const char **argv)
@@ -848,6 +856,7 @@ open_timeline_view(struct fnc_view *view)
 		goto end;
 	fsl_stmt_step(s->thread_cx.q);
 
+	s->thread_cx.rc = 0;
 	s->thread_cx.db = db;
 	s->thread_cx.spin_idx = 0;
 	s->thread_cx.ncommits_needed = view->nlines - 1;
@@ -875,11 +884,11 @@ view_loop(struct fnc_view *view)
 {
 	struct view_tailhead	 views;
 	struct fnc_view		*new_view;
-	fsl_cx			*f = fcli_cx();
 	int			 done = 0, rc = 0;
 
 	if ((rc = pthread_mutex_lock(&fnc_mutex)))
-		return fsl_cx_err_set(f, rc, "mutex lock");
+		return fnc_set_errno_err(rc, "%s::%s:%d", __FUNCTION__,
+		    __FILE__, __LINE__);
 
 	TAILQ_INIT(&views);
 	TAILQ_INSERT_HEAD(&views, view, entries);
@@ -989,9 +998,12 @@ end:
 		view_close(view);
 	}
 
-	rc = pthread_mutex_unlock(&fnc_mutex);
-	if (rc)
-		fsl_cx_err_set(f, rc, "mutex unlock");
+	if (!rc) {
+		if ((rc = pthread_mutex_unlock(&fnc_mutex)))
+			fnc_set_errno_err(rc, "%s::%s:%d", __FUNCTION__,
+			    __FILE__, __LINE__);
+	} else
+		pthread_mutex_unlock(&fnc_mutex);
 
 	return rc;
 }
@@ -1006,7 +1018,8 @@ show_timeline_view(struct fnc_view *view)
 		rc = pthread_create(&s->thread_id, NULL, tl_producer_thread,
 		    &s->thread_cx);
 		if (rc)
-			return fsl_errno_to_rc(errno, rc);
+			return fnc_set_errno_err(rc, "%s::%s:%d", __FUNCTION__,
+			    __FILE__, __LINE__);
 		if (s->thread_cx.ncommits_needed > 0) {
 			rc = signal_tl_thread(view, 1);
 			if (rc)
@@ -1021,7 +1034,6 @@ static void *
 tl_producer_thread(void *state)
 {
 	struct fnc_tl_thread_cx	*cx = state;
-	fsl_cx			*f = fcli_cx();
 	int			 rc;
 	bool			 done = false;
 
@@ -1038,15 +1050,18 @@ tl_producer_thread(void *state)
 			rc = 0;
 			/* FALL THROUGH */
 		default:
-			if (rc)
+			if (rc) {
+				cx->rc = rc;
 				return (void *)(intptr_t)rc;
+			}
 			else if (cx->ncommits_needed > 0)
 				cx->ncommits_needed--;
 			break;
 		}
 
-		if (pthread_mutex_lock(&fnc_mutex)) {
-			rc = fsl_cx_err_set(f, FSL_RC_ERROR, "mutex lock fail");
+		if ((rc = pthread_mutex_lock(&fnc_mutex))) {
+			rc = fnc_set_errno_err(rc, "%s::%s:%d", __FUNCTION__,
+			    __FILE__, __LINE__);
 			break;
 		} else if (*cx->first_commit_onscreen == NULL) {
 			*cx->first_commit_onscreen =
@@ -1055,9 +1070,9 @@ tl_producer_thread(void *state)
 		} else if (*cx->quit)
 			done = true;
 
-		if (pthread_cond_signal(&cx->commit_producer)) {
-			rc = fsl_cx_err_set(f, FSL_RC_ERROR,
-			    "pthread_cond_signal");
+		if ((rc = pthread_cond_signal(&cx->commit_producer))) {
+			rc = fnc_set_errno_err(rc, "%s::%s:%d", __FUNCTION__,
+			    __FILE__, __LINE__);
 			pthread_mutex_unlock(&fnc_mutex);
 			break;
 		}
@@ -1066,15 +1081,15 @@ tl_producer_thread(void *state)
 			cx->ncommits_needed = 0;
 		else if (cx->ncommits_needed == 0) {
 			if (pthread_cond_wait(&cx->commit_consumer, &fnc_mutex))
-				rc = fsl_cx_err_set(f, FSL_RC_ERROR,
+				rc = fcli_err_set(FSL_RC_ERROR,
 				    "pthread_cond_wait");
 			if (*cx->quit)
 				done = true;
 		}
 
-		if (pthread_mutex_unlock(&fnc_mutex))
-			rc = fsl_cx_err_set(f, FSL_RC_ERROR,
-			    "mutex unlock fail");
+		if ((rc = pthread_mutex_unlock(&fnc_mutex)))
+			rc = fnc_set_errno_err(rc, "%s::%s:%d", __FUNCTION__,
+			    __FILE__, __LINE__);
 	}
 
 	cx->timeline_end = true;
@@ -1116,20 +1131,20 @@ block_main_thread_signals(void)
 static int
 build_commits(struct fnc_tl_thread_cx *cx)
 {
-	fsl_buffer	 buf = fsl_buffer_empty;
-	fsl_id_t	 rid = 0;
 	int		 rc = 0;
-	fsl_cx		*f = fcli_cx();
 
 	/*
-	 * Step through the result set returned from our SQL query,
-	 * parsing columns required to build commits for the timeline.
+	 * Step through the given SQL query, passing each row to the commit
+	 * builder to build commits for the timeline.
 	 */
 	do {
-		struct commit_entry	*dup_entry;
-		const char		*comment, *prefix, *type, *uuid;
+		struct fnc_commit_artifact	*commit = NULL;
+		struct commit_entry		*dup_entry, *entry;
 
-		uuid = fsl_stmt_g_text(cx->q, 0, NULL);
+		rc = commit_builder(&commit, 0, cx->q);
+		if (rc)
+			return fcli_err_set(rc, "%s::%s:%d", __FUNCTION__,
+			    __FILE__, __LINE__);
 		/*
 		 * TODO: Find out why, without this, fnc reads and displays
 		 * the first (i.e., latest) commit twice. This hack checks to
@@ -1137,91 +1152,25 @@ build_commits(struct fnc_tl_thread_cx *cx)
 		 * commit added to the list to avoid adding a duplicate entry.
 		 */
 		dup_entry = TAILQ_FIRST(&cx->commits->head);
-		if (dup_entry && !fsl_strcmp(dup_entry->commit->uuid, uuid)) {
+		if (cx->commits->ncommits == 1 &&
+		    !fsl_strcmp(dup_entry->commit->uuid, commit->uuid)) {
+			fnc_commit_artifact_close(commit);
 			cx->ncommits_needed++;
 			continue;
 		}
-		struct commit_entry		*entry;
-		struct fnc_commit_artifact	*commit;
-
-		if ((rc = fsl_stmt_get_id(cx->q, 3, &rid)))
-			break;
-
-		type = fsl_stmt_g_text(cx->q, 4, NULL);
-		/* Should we only build check-in commits for the timeline? */
-		/* if (*type != 'c') */
-		/*	continue; */
-
-		comment = fsl_stmt_g_text(cx->q, 6, NULL);
-		prefix = NULL;
-
-		switch (*type) {
-		case 'c':
-			type = "checkin";
-			break;
-		case 'w':
-			type = "wiki";
-			if (comment)
-				switch (*comment) {
-				case '+':
-					prefix = "Added: ";
-					++comment;
-					break;
-				case '-':
-					prefix = "Deleted: ";
-					++comment;
-					break;
-				case ':':
-					prefix = "Edited: ";
-					++comment;
-					break;
-				default:
-					break;
-				}
-			break;
-		case 'g':
-			  type = "tag";
-			  break;
-		case 'e':
-			  type = "technote";
-			  break;
-		case 't':
-			  type = "ticket";
-			  break;
-		case 'f':
-			  type = "forum";
-			  break;
-		};
-
-		commit = calloc(1, sizeof(*commit));
-		if (commit == NULL)
-			return fsl_cx_err_set(f, FSL_RC_OOM, "calloc fail");
-
-		fsl_buffer_append(&buf, prefix, -1);
-		fsl_buffer_append(&buf, comment, -1);
-		commit->comment = fsl_strdup(fsl_buffer_str(&buf));
-		fsl_buffer_clear(&buf);
-
-		/* Is there are more efficient way to get the parent? */
-		commit->puuid = fsl_db_g_text(cx->db, NULL,
-		    "SELECT uuid FROM plink, blob WHERE plink.cid=%d "
-		    "AND blob.rid=plink.pid AND plink.isprim", rid);
-		commit->uuid = fsl_strdup(uuid);
-		commit->timestamp = fsl_strdup(fsl_stmt_g_text(cx->q, 1, NULL));
-		commit->user = fsl_strdup(fsl_stmt_g_text(cx->q, 2, NULL));
-		commit->branch = fsl_strdup(fsl_stmt_g_text(cx->q, 5, NULL));
-		commit->type = fsl_strdup(type);
-		commit->rid = rid;
 
 		entry = fsl_malloc(sizeof(*entry));
 		if (entry == NULL)
-			return fsl_cx_err_set(f, FSL_RC_OOM, "malloc fail");
+			return fcli_err_set(FSL_RC_OOM, "%s::%s:%d",
+			    __FUNCTION__, __FILE__, __LINE__);
 
 		entry->commit = commit;
 		fsl_stmt_cached_yield(cx->q);
 
-		if (pthread_mutex_lock(&fnc_mutex))
-			return fsl_cx_err_set(f, FSL_RC_ERROR, "mutex lock");
+		rc = pthread_mutex_lock(&fnc_mutex);
+		if (rc)
+			return fnc_set_errno_err(rc, "%s::%s:%d", __FUNCTION__,
+			    __FILE__, __LINE__);
 
 		entry->idx = cx->commits->ncommits;
 		TAILQ_INSERT_TAIL(&cx->commits->head, entry, entries);
@@ -1233,8 +1182,10 @@ build_commits(struct fnc_tl_thread_cx *cx)
 				*cx->search_status = SEARCH_CONTINUE;
 		}
 
-		if (pthread_mutex_unlock(&fnc_mutex))
-			return fsl_cx_err_set(f, FSL_RC_ERROR, "mutex unlock");
+		rc = pthread_mutex_unlock(&fnc_mutex);
+		if (rc)
+			return fnc_set_errno_err(rc, "%s::%s:%d", __FUNCTION__,
+			    __FILE__, __LINE__);
 
 	} while ((rc = fsl_stmt_step(cx->q)) == FSL_RC_STEP_ROW
 	    && *cx->searching == SEARCH_FORWARD
@@ -1243,21 +1194,110 @@ build_commits(struct fnc_tl_thread_cx *cx)
 	return rc;
 }
 
+/*
+ * Given SQL statement q and, optionally, record ID rid, build the commit from
+ * the corresponding result set.
+ */
+static int
+commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
+{
+	fsl_cx				*f = fcli_cx();
+	fsl_db				*db = fsl_needs_repo(f);
+	struct fnc_commit_artifact	*commit = NULL;
+	fsl_buffer			 buf = fsl_buffer_empty;
+	const char			*comment, *prefix, *type;
+	int				 rc = 0;
+
+	type = fsl_stmt_g_text(q, 4, NULL);
+	comment = fsl_stmt_g_text(q, 6, NULL);
+	prefix = NULL;
+
+	switch (*type) {
+	case 'c':
+		type = "checkin";
+		break;
+	case 'w':
+		type = "wiki";
+		if (comment) {
+			switch (*comment) {
+			case '+':
+				prefix = "Added: ";
+				++comment;
+				break;
+			case '-':
+				prefix = "Deleted: ";
+				++comment;
+				break;
+			case ':':
+				prefix = "Edited: ";
+				++comment;
+				break;
+			default:
+				break;
+			}
+			if (prefix)
+				rc = fsl_buffer_append(&buf, prefix, -1);
+		}
+		break;
+	case 'g':
+		type = "tag";
+		break;
+	case 'e':
+		type = "technote";
+		break;
+	case 't':
+		type = "ticket";
+		break;
+	case 'f':
+		type = "forum";
+		break;
+	};
+	if (!rc)
+		rc = fsl_buffer_append(&buf, comment, -1);
+	if (rc)
+		return fcli_err_set(rc, "%s::%s:%d", __FUNCTION__, __FILE__,
+		    __LINE__);
+
+	commit = calloc(1, sizeof(*commit));
+	if (commit == NULL)
+		return fcli_err_set(rc, "%s::%s:%d", __FUNCTION__, __FILE__,
+		    __LINE__);
+
+
+	if (!rid && (rc = fsl_stmt_get_id(q, 3, &rid)))
+		return fcli_err_set(rc, "%s::%s:%d", __FUNCTION__, __FILE__,
+		    __LINE__);
+	/* Is there a more efficient way to get the parent? */
+	commit->puuid = fsl_db_g_text(db, NULL,
+	    "SELECT uuid FROM plink, blob WHERE plink.cid=%d "
+	    "AND blob.rid=plink.pid AND plink.isprim", rid);
+	commit->uuid = fsl_strdup(fsl_stmt_g_text(q, 0, NULL));
+	commit->rid = rid;
+	commit->type = fsl_strdup(type);
+	commit->timestamp = fsl_strdup(fsl_stmt_g_text(q, 1, NULL));
+	commit->user = fsl_strdup(fsl_stmt_g_text(q, 2, NULL));
+	commit->branch = fsl_strdup(fsl_stmt_g_text(q, 5, NULL));
+	commit->comment = fsl_strdup(fsl_buffer_str(&buf));
+	fsl_buffer_clear(&buf);
+
+	*ptr = commit;
+	return rc;
+}
+
 static int
 signal_tl_thread(struct fnc_view *view, int wait)
 {
-	struct fnc_tl_thread_cx	*ta = &view->state.timeline.thread_cx;
-	fsl_cx			*f = fcli_cx();
+	struct fnc_tl_thread_cx	*cx = &view->state.timeline.thread_cx;
 	int			 rc = 0;
 
-	while (ta->ncommits_needed > 0) {
-		if (ta->timeline_end)
+	while (cx->ncommits_needed > 0) {
+		if (cx->timeline_end)
 			break;
 
 		/* Wake timeline thread. */
-		if ((rc = pthread_cond_signal(&ta->commit_consumer)))
-			return fsl_cx_err_set(f, fsl_errno_to_rc(errno,
-			    FSL_RC_ERROR), "pthread_cond_signal consumer");
+		if ((rc = pthread_cond_signal(&cx->commit_consumer)))
+			return fnc_set_errno_err(rc, "%s::%s:%d", __FUNCTION__,
+			    __FILE__, __LINE__);
 
 		/*
 		 * Mutex will be released while view_loop().view_input() waits
@@ -1272,9 +1312,9 @@ signal_tl_thread(struct fnc_view *view, int wait)
 		doupdate();
 
 		/* Wait while the next commit is being loaded. */
-		if ((rc = pthread_cond_wait(&ta->commit_producer, &fnc_mutex)))
-			return fsl_cx_err_set(f, fsl_errno_to_rc(errno,
-			    FSL_RC_ERROR), "pthread_cond_signal producer");
+		if ((rc = pthread_cond_wait(&cx->commit_producer, &fnc_mutex)))
+			return fnc_set_errno_err(rc, "%s::%s:%d", __FUNCTION__,
+			    __FILE__, __LINE__);
 
 		/* Show status update in timeline view. */
 		show_timeline_view(view);
@@ -1282,7 +1322,7 @@ signal_tl_thread(struct fnc_view *view, int wait)
 		doupdate();
 	}
 
-	return rc;
+	return cx->rc;
 }
 
 static int
@@ -1649,7 +1689,7 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 		sched_yield();
 		if ((rc = pthread_mutex_lock(&fnc_mutex)))
 			return fsl_cx_err_set(f, rc, "mutex lock");
-		view->search_next(view);
+		rc = view->search_next(view);
 		return rc;
 	}
 
@@ -1738,7 +1778,7 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 			view->searching = (ch == 'n' ?
 			    SEARCH_FORWARD : SEARCH_REVERSE);
 			view->search_status = SEARCH_WAITING;
-			view->search_next(view);
+			rc = view->search_next(view);
 		} else
 			rc = view->input(new, view, ch);
 		break;
@@ -2270,7 +2310,7 @@ view_search_start(struct fnc_view *view)
 		view->searching = SEARCH_FORWARD;
 		view->search_status = SEARCH_WAITING;
 		view->state.timeline.thread_cx.endjmp = true;
-		view->search_next(view);
+		rc = view->search_next(view);
 
 		return rc;
 	}
@@ -2294,7 +2334,7 @@ view_search_start(struct fnc_view *view)
 		view->started_search = true;
 		view->searching = SEARCH_FORWARD;
 		view->search_status = SEARCH_WAITING;
-		view->search_next(view);
+		rc = view->search_next(view);
 	}
 
 	return rc;
@@ -2554,10 +2594,11 @@ fsl_list_object_free(void *elem, void *state)
 	switch (st->obj) {
 	case FNC_ARTIFACT_OBJ: {
 		struct fsl_file_artifact *ffa = elem;
-		if (ffa->fc)
-			fsl_free(ffa->fc);
-		if (ffa)
-			fsl_free(ffa);
+		fsl_free(ffa->fc->name);
+		fsl_free(ffa->fc->uuid);
+		fsl_free(ffa->fc->priorName);
+		fsl_free(ffa->fc);
+		fsl_free(ffa);
 		break;
 	}
 	case FNC_COLOUR_OBJ: {
@@ -2822,6 +2863,7 @@ create_changeset(struct fnc_commit_artifact *commit)
 
 		fdiff = fsl_malloc(sizeof(struct fsl_file_artifact));
 		fdiff->fc = fsl_malloc(sizeof(fsl_card_F));
+		*fdiff->fc = fsl_card_F_empty;
 		fdiff->fc->name = fsl_strdup(path);
 		if (!uuid) {
 			fdiff->fc->uuid = fsl_strdup(olduuid);
@@ -4490,5 +4532,27 @@ fnc_strsep(char **ptr, const char *sep)
 		*ptr = NULL;
 
 	return s;
+}
+
+/*
+ * For functions that return an errno value but don't set errno, pass the
+ * returned value as parameter rc to set an appropriate fsl_error. Optionally
+ * pass a string to prefix the resulting error message that is set.
+ */
+static int
+fnc_set_errno_err(int rc, const char *prefix, ...)
+{
+	char	errstr[sizeof(prefix) + 128], e[128];
+
+	va_list va;
+	va_start(va, prefix);
+	strerror_r(rc, e, sizeof(e));
+	fsl_errno_to_rc(rc, FSL_RC_ERROR);
+	fsl_snprintfv(errstr, sizeof(errstr), prefix, va);
+	va_end(va);
+
+	fsl_snprintf(errstr, sizeof(errstr), "%s: %s", errstr, e);
+
+	return fcli_err_set(rc, errstr);
 }
 
