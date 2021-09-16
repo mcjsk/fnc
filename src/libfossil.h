@@ -3537,7 +3537,7 @@ FSL_EXPORT int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *p
 
    @see fsl_julian_to_iso8601()
 */
-FSL_EXPORT char fsl_iso8601_to_julian( char const * zDate, double * pOut );
+FSL_EXPORT bool fsl_iso8601_to_julian( char const * zDate, double * pOut );
 
 /** 
     Converts the Julian Day J to an ISO8601 time string. If addMs is
@@ -3554,13 +3554,13 @@ FSL_EXPORT char fsl_iso8601_to_julian( char const * zDate, double * pOut );
 
     @see fsl_iso8601_to_julian()
 */
-FSL_EXPORT char fsl_julian_to_iso8601( double J, char * pOut, bool addMs );
+FSL_EXPORT bool fsl_julian_to_iso8601( double J, char * pOut, bool addMs );
 
 /**
    Returns the Julian Day time J value converted to a Unix Epoch
    timestamp. It assumes 86400 seconds per day and does not account
-   for any sort leap seconds, leap years, leap frogs, or any other
-   kind of leap, up to and including a leap of faith.
+   for leap seconds, leap years, leap frogs, or any other kind of
+   leap, up to and including leaps of faith.
 */
 FSL_EXPORT fsl_time_t fsl_julian_to_unix( double J );
 
@@ -11402,6 +11402,13 @@ FSL_EXPORT int fsl_repo_dir_names( fsl_cx * f, fsl_id_t rid,
    the update process, but could also be used to cancel the
    operation between files.
 
+   As of 2021-09-05 this routine automatically adds the files
+   (manifest, manifest.uuid, manifest.tags) to the zip file,
+   regardless of repository-level settings regarding those
+   pseudo-files (see fsl_ckout_manifest_write()). As there are no
+   F-cards associated with those non-files, the progressVisitor is not
+   called for those.
+
    BUG: this function does not honor symlink content in a
    fossil-compatible fashion. If it encounters a symlink entry
    during ZIP generation, it will fail and f's error state will be
@@ -12320,6 +12327,27 @@ FSL_EXPORT void fsl_leaves_computed_cleanup(fsl_cx * f);
    Results are undefined if f has no opened repository.
 */
 FSL_EXPORT bool fsl_repo_forbids_delta_manifests(fsl_cx * f);
+
+/**
+   This is a variant of fsl_ckout_manifest_write() which writes data
+   regarding the given manifest RID to the given blobs. If manifestRid
+   is 0 or less then the current checkout is assumed and FSL_RC_NOT_A_CKOUT
+   is returned if no checkout is opened.
+
+   For each buffer argument which is not NULL, the corresponding
+   checkin-related data are appended to it. All such blobs will end
+   in a terminating newline character.
+
+   Returns 0 on success, any of numerious non-0 fsl_rc_e codes on
+   error.
+*/
+FSL_EXPORT int fsl_repo_manifest_write(fsl_cx *f,
+                                       fsl_id_t manifestRid,
+                                       fsl_buffer * const manifest,
+                                       fsl_buffer * const manifestUuid,
+                                       fsl_buffer * const manifestTags );
+
+
 
 #if defined(__cplusplus)
 } /*extern "C"*/
@@ -14197,6 +14225,8 @@ FSL_EXPORT void fsl_ckout_manifest_setting(fsl_cx *f, int *m);
    checkout (i.e. not listed in the vfile table) will be removed from
    disk, but a failure while attempting to do so will be silently
    ignored.
+
+   @see fsl_repo_manifest_write()
 */
 FSL_EXPORT int fsl_ckout_manifest_write(fsl_cx *f,
                                         int manifest,
@@ -17280,9 +17310,14 @@ FSL_EXPORT int fsl_repo_login_clear( fsl_cx * f, fsl_id_t userId );
   Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
 
   ******************************************************************************
-  This file declares public APIs for working with fossil-managed content.
+  This file declares public APIs for working with fossil-managed forum
+  content.
 */
 
+
+#if defined(__cplusplus)
+extern "C" {
+#endif
 
 /**
    If the given fossil context has a db opened, this function

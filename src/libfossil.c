@@ -649,7 +649,7 @@ char * fsl_unix_to_iso8601( fsl_time_t u ){
 #endif
 
 
-char fsl_iso8601_to_julian( char const * zDate, double * out ){
+bool fsl_iso8601_to_julian( char const * zDate, double * out ){
   /* Adapted from this article:
 
      https://quasar.as.utexas.edu/BillInfo/JulianDatesG.html
@@ -705,7 +705,7 @@ fsl_time_t fsl_julian_to_unix( double JD ){
   return (fsl_time_t) ((JD - 2440587.5) * 86400);
 }
 
-char fsl_julian_to_iso8601( double J, char * out, bool addMs ){
+bool fsl_julian_to_iso8601( double J, char * out, bool addMs ){
   /* Adapted from this article:
 
      https://quasar.as.utexas.edu/BillInfo/JulianDatesG.html
@@ -16877,6 +16877,7 @@ int fsl_card_is_legal( fsl_satype_e t, char card ){
           return 0;
       };
     default:
+      MARKER(("invalid fsl_satype_e value: %d, card=%c\n", t, card));
       assert(!"Invalid fsl_satype_e.");
       return 0;
   };
@@ -17315,7 +17316,7 @@ int fsl_deck_R_set( fsl_deck * mf, fsl_uuid_cstr md5){
 }
 
 int fsl_deck_R_calc2(fsl_deck *mf, char ** tgt){
-  fsl_cx * f = mf->f;
+  fsl_cx * const f = mf->f;
   char const * theHash = 0;
   char hex[FSL_STRLEN_MD5+1];
   if(!f) return FSL_RC_MISUSE;
@@ -17400,7 +17401,7 @@ int fsl_deck_R_calc2(fsl_deck *mf, char ** tgt){
   assert(theHash);
   if(*tgt){
     memcpy(*tgt, theHash, FSL_STRLEN_MD5);
-    (*tgt)[FSL_STRLEN_MD5+1] = 0;
+    (*tgt)[FSL_STRLEN_MD5] = 0;
     return 0;
   }else{
     char * x = fsl_strdup(theHash);
@@ -17412,7 +17413,7 @@ int fsl_deck_R_calc2(fsl_deck *mf, char ** tgt){
 int fsl_deck_R_calc(fsl_deck * mf){
   char R[FSL_STRLEN_MD5+1] = {0};
   char * r = R;
-  int rc = fsl_deck_R_calc2(mf, &r);
+  const int rc = fsl_deck_R_calc2(mf, &r);
   return rc ? rc : fsl_deck_R_set(mf, r);
 }
 
@@ -31389,6 +31390,77 @@ int fsl_repo_fingerprint_search( fsl_cx *f, fsl_id_t rcvid, char ** zOut ){
   return rc;
 }
 
+int fsl_repo_manifest_write(fsl_cx *f,
+                            fsl_id_t manifestRid,
+                            fsl_buffer * const pManifest,
+                            fsl_buffer * const pHash,
+                            fsl_buffer * const pTags) {
+  fsl_db * const db = fsl_needs_ckout(f);
+  if(!db) return FSL_RC_NOT_A_CKOUT;
+  if(manifestRid<=0) manifestRid = f->ckout.rid;
+  else if(!manifestRid){
+    return fsl_cx_err_set(f, FSL_RC_RANGE,
+                          "Checkout RID is 0, so it has no manifest.");
+  }
+  int rc = 0;
+  char * str = 0;
+  fsl_uuid_str ridHash = 0;
+  fsl_buffer * bHash = 0;
+  assert(manifestRid>0);
+  
+  if(pManifest){
+    fsl_buffer_reuse(pManifest);
+    rc = fsl_content_get(f, f->ckout.rid, pManifest);
+    if(rc) goto end;
+  }
+  if(pHash){
+    if(f->ckout.rid!=manifestRid){
+      bHash = fsl_cx_scratchpad(f);
+      rc = fsl_rid_to_uuid2(f, manifestRid, bHash);
+      if(rc) goto end;
+      ridHash = (char *)bHash->mem;
+    }else{
+      ridHash = f->ckout.uuid;
+    }
+    assert(ridHash);
+    rc = fsl_buffer_append(pHash, ridHash, -1);
+    if(!rc) rc = fsl_buffer_append(pHash, "\n", 1);
+    if(rc) goto end;
+  }
+  if(pTags){
+    fsl_stmt q = fsl_stmt_empty;
+    fsl_db * const db = fsl_cx_db_repo(f);
+    assert(db && "We can't have a checkout w/o a repo.");
+    str = fsl_db_g_text(db, NULL, "SELECT VALUE FROM tagxref "
+                        "WHERE rid=%" FSL_ID_T_PFMT
+                        " AND tagid=%d /*%s()*/",
+                        f->ckout.rid, FSL_TAGID_BRANCH, __func__);
+    rc = fsl_buffer_appendf(pTags, "branch %z\n", str);
+    str = 0;
+    if(rc) goto end;
+    rc = fsl_db_prepare(db, &q,
+                        "SELECT substr(tagname, 5)"
+                        "  FROM tagxref, tag"
+                        " WHERE tagxref.rid=%" FSL_ID_T_PFMT
+                        "   AND tagxref.tagtype>0"
+                        "   AND tag.tagid=tagxref.tagid"
+                        "   AND tag.tagname GLOB 'sym-*'"
+                        " /*%s()*/",
+                        f->ckout.rid, __func__);
+    if(rc) goto end;
+    while( FSL_RC_STEP_ROW==fsl_stmt_step(&q) ){
+      const char *zName = fsl_stmt_g_text(&q, 0, NULL);
+      rc = fsl_buffer_appendf(pTags, "tag %s\n", zName);
+      if(rc) break;
+    }
+    fsl_stmt_finalize(&q);
+  }
+  end:
+  if(bHash){
+    fsl_cx_scratchpad_yield(f, bHash);
+  }
+  return rc;
+}
 
 /**
    NOT YET IMPLEMENTED. (We have the infrastructure, just need to glue
@@ -35847,7 +35919,7 @@ int fsl_vfile_load(fsl_cx * f, fsl_id_t vid,
 
   if(0==vid){
     /* This is either misuse or an empty/initial repo with no
-       checkins.  Let's assume the latter, since that's what triggered
+       checkins. Let's assume the latter, since that's what triggered
        the addition of this check. */
     goto end;
   }
@@ -35952,8 +36024,8 @@ int fsl_vfile_unload_except(fsl_cx * f, fsl_id_t vid){
 
    Returns 0 on success.
 */
-static int fsl_vfile_recheck_file_hash( fsl_cx * f, const char * zName,
-                                        fsl_size_t hashLen, fsl_buffer * pTgt ){
+static int fsl_vfile_recheck_file_hash( fsl_cx * const f, const char * const zName,
+                                        fsl_size_t hashLen, fsl_buffer * const pTgt ){
   bool errReported = false;
   int rc = 0;
   if((fsl_size_t)FSL_STRLEN_SHA1==hashLen){
@@ -35971,7 +36043,6 @@ static int fsl_vfile_recheck_file_hash( fsl_cx * f, const char * zName,
     rc = fsl_cx_err_set(f, rc, "Error %s while hashing file: %s",
                         fsl_rc_cstr(rc), zName);
   }
-  //if(!rc) assert(fsl_is_uuid_len(pTgt->used));
   return rc;
 }
 
@@ -35997,9 +36068,8 @@ int fsl_vfile_changes_scan(fsl_cx * f, fsl_id_t vid, unsigned cksigFlags){
   if(rc) return rc;
   if(f->ckout.rid != vid){
     rc = fsl_vfile_load(f, vid,
-                                 (FSL_VFILE_CKSIG_KEEP_OTHERS & cksigFlags)
-                                 ? false : true,
-                                 NULL);
+                        (FSL_VFILE_CKSIG_KEEP_OTHERS & cksigFlags)
+                        ? false : true, NULL);
   }
   if(rc) goto end;
 
@@ -37454,9 +37524,36 @@ int fsl_repo_zip_sym_to_filename( fsl_cx * f, char const * sym,
       }
       if(rc) goto end;
     }
-    rc = fsl_zip_end( &zs.z );
-    if(!rc) rc = fsl_buffer_to_filename( fsl_zip_body(&zs.z), fileName );
   }
+
+  /**
+     Always write he manifest files to the zip, regardless of
+     the repo-level settings. */
+  if(rc) goto end;
+  else {
+    fsl_buffer * const bManifest = &f->fileContent;
+    fsl_buffer * const bHash = fsl_cx_scratchpad(f);
+    fsl_buffer * const bTags = fsl_cx_scratchpad(f);
+    fsl_buffer_reuse(bManifest);
+    rc = fsl_repo_manifest_write(f, mf.rid, bManifest, bHash, bTags);
+    if(rc) goto mf_end;
+    rc = fsl_zip_file_add(&zs.z, "manifest", bManifest,
+                          FSL_FILE_PERM_REGULAR);
+    if(rc) goto mf_end;
+    rc = fsl_zip_file_add(&zs.z, "manifest.uuid", bHash,
+                          FSL_FILE_PERM_REGULAR);
+    if(rc) goto mf_end;
+    rc = fsl_zip_file_add(&zs.z, "manifest.tags", bTags,
+                          FSL_FILE_PERM_REGULAR);
+    mf_end:
+    fsl_buffer_reuse(bManifest);
+    fsl_cx_scratchpad_yield(f, bHash);
+    fsl_cx_scratchpad_yield(f, bTags);
+  }
+  if(rc) goto end;
+  rc = fsl_zip_end( &zs.z );
+  if(!rc) rc = fsl_buffer_to_filename( fsl_zip_body(&zs.z), fileName );
+  
   end:
   if(rc && !f->error.code){
     fsl_cx_err_set(f, rc, "Error #%d (%s) during ZIP.",
