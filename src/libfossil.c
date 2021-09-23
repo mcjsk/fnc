@@ -1159,6 +1159,14 @@ typedef long double LONGDOUBLE_TYPE;
 #endif
 
 /*
+  If FSLPRINTF_OMIT_SIZE is defined to a true value, then
+  the %n specifier is disabled.
+*/
+#ifndef FSLPRINTF_OMIT_SIZE
+#  define FSLPRINTF_OMIT_SIZE 0
+#endif
+
+/*
   If FSLPRINTF_OMIT_SQL is defined to a true value, then
   the %q, %Q, and %B specifiers are disabled.
 */
@@ -1212,7 +1220,7 @@ enum PrintfCategory {etRADIX = 1, /* Integer types.  %d, %x, %o, and so forth */
                      etFLOAT = 2, /* Floating point.  %f */
                      etEXP = 3, /* Exponentional notation. %e and %E */
                      etGENERIC = 4, /* Floating or exponential, depending on exponent. %g */
-                     /* 5 can be reused. Formerly etSIZE (%n) */
+                     etSIZE = 5, /* Return number of characters processed so far. %n */
                      etSTRING = 6, /* Strings. %s */
                      etDYNSTRING = 7, /* Dynamically allocated strings. %z */
                      etPERCENT = 8, /* Percent symbol. %% */
@@ -1378,7 +1386,7 @@ static const et_info fmtinfo[] = {
 {'k'/*107*/, 0, 0, 0, 0, 0 },
 {'l'/*108*/, 0, 0, 0, 0, 0 },
 {'m'/*109*/, 0, 0, 0, 0, 0 },
-{'n'/*110*/, 0, 0, 0, 0, 0 },
+{'n'/*110*/, 0, 0, etSIZE, 0, 0 },
 {'o'/*111*/, 8, 0, etRADIX,      0,  2 },
 {'p'/*112*/, 16, 0, etPOINTER, 0, 1 },
 #if FSLPRINTF_OMIT_SQL
@@ -1513,7 +1521,7 @@ typedef struct fsl_appendf_spec_handler_def
    precisions and such here can't work too well. (Nevermind:
    precision/justification is handled in fsl_appendfv().)
 */
-typedef int (*fsl_appendf_spec_handler)( fsl_output_f pf,
+typedef fsl_int_t (*fsl_appendf_spec_handler)( fsl_appendf_f pf,
                                                void * pfArg,
                                                unsigned int pfLen,
                                                void * vargp );
@@ -1523,8 +1531,11 @@ typedef int (*fsl_appendf_spec_handler)( fsl_output_f pf,
    fsl_appendf_spec_handler for etSTRING types. It assumes that varg
    is a NUL-terminated (char [const] *)
 */
-static int spech_string( fsl_output_f pf, void * pfArg,
-                         unsigned int pfLen, void * varg ){
+static fsl_int_t spech_string( fsl_appendf_f pf,
+                               void * pfArg,
+                               unsigned int pfLen,
+                               void * varg )
+{
   char const * ch = (char const *) varg;
   return ch ? pf( pfArg, ch, pfLen ) : 0;
 }
@@ -1534,38 +1545,45 @@ static int spech_string( fsl_output_f pf, void * pfArg,
    varg is a non-const (char *). It behaves identically to
    spec_string() and then calls fsl_free() on that (char *).
 */
-static int spech_dynstring( fsl_output_f pf, void * pfArg,
-                            unsigned int pfLen, void * varg ){
-  int const rc = spech_string( pf, pfArg, pfLen, varg );
+static fsl_int_t spech_dynstring( fsl_appendf_f pf,
+                                  void * pfArg,
+                                  unsigned int pfLen,
+                                  void * varg )
+{
+  fsl_int_t ret = spech_string( pf, pfArg, pfLen, varg );
   fsl_free( varg );
-  return rc;
+  return ret;
 }
 
 #if !FSLPRINTF_OMIT_HTML
-static int spech_string_to_html( fsl_output_f pf, void * pfArg,
-                                 unsigned int pfLen, void * varg ){
+static fsl_int_t spech_string_to_html( fsl_appendf_f pf,
+                                       void * pfArg,
+                                       unsigned int pfLen,
+                                       void * varg )
+{
   char const * ch = (char const *) varg;
   unsigned int i;
-  int rc = 0;
+  fsl_int_t ret = 0;
   if( ! ch ) return 0;
-  rc = 0;
-  for( i = 0; 0==rc && (i<pfLen) && *ch; ++ch, ++i )
+  ret = 0;
+  for( i = 0; (i<pfLen) && *ch; ++ch, ++i )
   {
     switch( *ch )
     {
-      case '<': rc = pf( pfArg, "&lt;", 4 );
+      case '<': ret += pf( pfArg, "&lt;", 4 );
         break;
-      case '&': rc = pf( pfArg, "&amp;", 5 );
+      case '&': ret += pf( pfArg, "&amp;", 5 );
         break;
       default:
-        rc = pf( pfArg, ch, 1 );
+        ret += pf( pfArg, ch, 1 );
         break;
     };
   }
-  return rc;
+  return ret;
 }
 
-static int httpurl_needs_escape( int c ){
+static int httpurl_needs_escape( int c )
+{
   /*
     Definition of "safe" and "unsafe" chars
     was taken from:
@@ -1589,10 +1607,13 @@ static int httpurl_needs_escape( int c ){
    encoded string to pf(). It returns the total length of the output
    string.
 */
-static int spech_urlencode( fsl_output_f pf, void * pfArg,
-                            unsigned int pfLen, void * varg ){
+static fsl_int_t spech_urlencode( fsl_appendf_f pf,
+                                  void * pfArg,
+                                  unsigned int pfLen,
+                                  void * varg )
+{
   char const * str = (char const *) varg;
-  int rc = 0;
+  fsl_int_t ret = 0;
   char ch = 0;
   char const * hex = "0123456789ABCDEF";
 #define xbufsz 10
@@ -1603,21 +1624,24 @@ static int spech_urlencode( fsl_output_f pf, void * pfArg,
   ch = *str;
 #define xbufsz 10
   slen = 0;
-  for( ; 0==rc && ch; ch = *(++str) ){
-    if( ! httpurl_needs_escape( ch ) ){
-      rc = pf( pfArg, str, 1 );
+  for( ; ch; ch = *(++str) )
+  {
+    if( ! httpurl_needs_escape( ch ) )
+    {
+      ret += pf( pfArg, str, 1 );
       continue;
-    }else{
+    }
+    else {
       xbuf[0] = '%';
       xbuf[1] = hex[((ch>>4)&0xf)];
       xbuf[2] = hex[(ch&0xf)];
       xbuf[3] = 0;
       slen = 3;
-      rc = pf( pfArg, xbuf, slen );
+      ret += pf( pfArg, xbuf, slen );
     }
   }
 #undef xbufsz
-  return rc;
+  return ret;
 }
 
 /* 
@@ -1626,7 +1650,8 @@ static int spech_urlencode( fsl_output_f pf, void * pfArg,
    For 'a'-'f', 'A'-'F' and '0'-'9', returns the appropriate decimal
    number.  For any other character it returns -1.
 */
-static int hexchar_to_int( int ch ){
+static int hexchar_to_int( int ch )
+{
   if( (ch>='0' && ch<='9') ) return ch-'0';
   else if( (ch>='a' && ch<='f') ) return ch-'a'+10;
   else if( (ch>='A' && ch<='F') ) return ch-'A'+10;
@@ -1643,18 +1668,23 @@ static int hexchar_to_int( int ch ){
    If the input string contains malformed %XX codes then this
    function will return prematurely.
 */
-static int spech_urldecode( fsl_output_f pf, void * pfArg,
-                            unsigned int pfLen, void * varg ){
+static fsl_int_t spech_urldecode( fsl_appendf_f pf,
+                                  void * pfArg,
+                                  unsigned int pfLen,
+                                  void * varg )
+{
   char const * str = (char const *) varg;
-  int rc = 0;
+  fsl_int_t ret = 0;
   char ch = 0;
   char ch2 = 0;
   char xbuf[4];
   int decoded;
   if( ! str ) return 0;
   ch = *str;
-  while( 0==rc && ch ){
-    if( ch == '%' ){
+  while( ch )
+  {
+    if( ch == '%' )
+    {
       ch = *(++str);
       ch2 = *(++str);
       if( isxdigit((int)ch) &&
@@ -1664,31 +1694,35 @@ static int spech_urldecode( fsl_output_f pf, void * pfArg,
           + hexchar_to_int( ch2 );
         xbuf[0] = (char)decoded;
         xbuf[1] = 0;
-        rc = pf( pfArg, xbuf, 1 );
+        ret += pf( pfArg, xbuf, 1 );
         ch = *(++str);
         continue;
-      }else{
+      }
+      else
+      {
         xbuf[0] = '%';
         xbuf[1] = ch;
         xbuf[2] = ch2;
         xbuf[3] = 0;
-        rc = pf( pfArg, xbuf, 3 );
+        ret += pf( pfArg, xbuf, 3 );
         ch = *(++str);
         continue;
       }
-    }else if( ch == '+' ){
+    }
+    else if( ch == '+' )
+    {
       xbuf[0] = ' ';
       xbuf[1] = 0;
-      rc = pf( pfArg, xbuf, 1 );
+      ret += pf( pfArg, xbuf, 1 );
       ch = *(++str);
       continue;
     }
     xbuf[0] = ch;
     xbuf[1] = 0;
-    rc = pf( pfArg, xbuf, 1 );
+    ret += pf( pfArg, xbuf, 1 );
     ch = *(++str);
   }
-  return rc;
+  return ret;
 }
 
 #endif /* !FSLPRINTF_OMIT_HTML */
@@ -1704,16 +1738,19 @@ static int spech_urldecode( fsl_output_f pf, void * pfArg,
    Search this file for those constants to find
    the associated documentation.
 */
-static int spech_sqlstring_main( int xtype, fsl_output_f pf,
-                                 void * pfArg, unsigned int pfLen,
-                                 void * varg ){
+static fsl_int_t spech_sqlstring_main( int xtype,
+                                       fsl_appendf_f pf,
+                                       void * pfArg,
+                                       unsigned int pfLen,
+                                       void * varg )
+{
   unsigned int i, n;
   int j, ch, isnull;
   int needQuote;
   char q = ((xtype==etSQLESCAPE3)?'"':'\'');   /* Quote character */
   char const * escarg = (char const *) varg;
   char * bufpt = NULL;
-  int rc;
+  fsl_int_t ret;
   isnull = escarg==0;
   if( isnull ) escarg = (xtype==etSQLESCAPE2 ? "NULL" : "(NULL)");
   for(i=n=0; (i<pfLen) && ((ch=escarg[i])!=0); ++i){
@@ -1723,7 +1760,7 @@ static int spech_sqlstring_main( int xtype, fsl_output_f pf,
   n += i + 1 + needQuote*2;
   /* FIXME: use a static buffer here instead of malloc()! Shame on you! */
   bufpt = (char *)fsl_malloc( n );
-  if( ! bufpt ) return FSL_RC_OOM;
+  if( ! bufpt ) return -1;
   j = 0;
   if( needQuote ) bufpt[j++] = q;
   for(i=0; (ch=escarg[i])!=0; i++){
@@ -1732,27 +1769,47 @@ static int spech_sqlstring_main( int xtype, fsl_output_f pf,
   }
   if( needQuote ) bufpt[j++] = q;
   bufpt[j] = 0;
-  rc = pf( pfArg, bufpt, j );
+  ret = pf( pfArg, bufpt, j );
   fsl_free( bufpt );
-  return rc;
+  return ret;
 }
 
-static int spech_sqlstring1( fsl_output_f pf, void * pfArg,
-                             unsigned int pfLen, void * varg ){
+static fsl_int_t spech_sqlstring1( fsl_appendf_f pf,
+                                   void * pfArg,
+                                   unsigned int pfLen,
+                                   void * varg )
+{
   return spech_sqlstring_main( etSQLESCAPE, pf, pfArg, pfLen, varg );
 }
 
-static int spech_sqlstring2( fsl_output_f pf, void * pfArg,
-                             unsigned int pfLen, void * varg ){
+static fsl_int_t spech_sqlstring2( fsl_appendf_f pf,
+                                   void * pfArg,
+                                   unsigned int pfLen,
+                                   void * varg )
+{
   return spech_sqlstring_main( etSQLESCAPE2, pf, pfArg, pfLen, varg );
 }
 
-static int spech_sqlstring3( fsl_output_f pf, void * pfArg,
-                             unsigned int pfLen, void * varg ){
+static fsl_int_t spech_sqlstring3( fsl_appendf_f pf,
+                                   void * pfArg,
+                                   unsigned int pfLen,
+                                   void * varg )
+{
   return spech_sqlstring_main( etSQLESCAPE3, pf, pfArg, pfLen, varg );
 }
 
 #endif /* !FSLPRINTF_OMIT_SQL */
+
+#if 0
+static fsl_int_t spech_blob2( fsl_appendf_f pf,
+                              void * pfArg,
+                              unsigned int pfLen,
+                              void * varg )
+{
+  fsl_buffer * b = (fsl_buffer *)varg;
+  return spech_sqlstring_main( etSQLESCAPE3, pf, pfArg, pfLen, varg );
+}
+#endif
 
 #if FSLPRINTF_ENABLE_JSON
 /* TODO? Move these UTF8 bits into the public API? */
@@ -1860,18 +1917,20 @@ struct SpechJson {
    fsl_appendf_spec_handler for etJSONSTR. It assumes that varg is a
    SpechJson struct instance.
 */
-static int spech_json( fsl_output_f pf, void * pfArg,
-                       unsigned int pfLen, void * varg ){
+static fsl_int_t spech_json( fsl_appendf_f pf, void * pfArg,
+                             unsigned int pfLen, void * varg )
+{
   struct SpechJson const * state = (struct SpechJson *)varg;
-  int pfRc = 0;
+  fsl_int_t pfRcTmp = 0;
+  fsl_int_t pfRc = 0;
   const unsigned char *z = (const unsigned char *)state->z;
   const unsigned char *zEnd = z + pfLen;
   const unsigned char * zNext = 0;
   unsigned int c;
   unsigned char c1;
 
-#define out(X,N) pfRc=pf(pfArg, (char const *)(X), N); \
-  if(0!=pfRc) return pfRc
+#define out(X,N) pfRcTmp=pf(pfArg, (char const *)(X), N); \
+  if(pfRcTmp<0) return pfRcTmp; pfRc+=pfRcTmp
 #define outc c1 = (unsigned char)c; out(&c1,1)
   if(!z){
     out("null",4);
@@ -1880,8 +1939,7 @@ static int spech_json( fsl_output_f pf, void * pfArg,
   if(state->addQuotes){
     out("\"", 1);
   }
-  for( ; 0==pfRc && (z < zEnd)
-         && (c=fsl_utf8_read_char(z, zEnd, &zNext));
+  for( ; (z < zEnd) && (c=fsl_utf8_read_char(z, zEnd, &zNext));
        z = zNext ){
     if( c=='\\' || c=='"' ){
       out("\\", 1);
@@ -1994,11 +2052,11 @@ static int StrNLen32(const char *z, int N){
   31 Oct 2008 by Stephan Beal: refactored the et_info lookup to be
   constant-time instead of linear.
 */
-int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
-                 void * pfAppendArg,     /* Passed as first arg to pfAppend. */
-                 const char *fmt,        /* Format string */
-                 va_list ap              /* arguments */
-                 ){
+fsl_int_t fsl_appendfv(fsl_appendf_f pfAppend, /* Accumulate results here */
+                       void * pfAppendArg,     /* Passed as first arg to pfAppend. */
+                       const char *fmt,        /* Format string */
+                       va_list ap              /* arguments */
+                       ){
   /**
      HISTORIC NOTE (author and year unknown):
 
@@ -2006,6 +2064,8 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
      seems to make a big difference in determining how fast this beast
      will run.
   */
+
+  fsl_int_t outCount = 0;          /* accumulated output count */
   int pfrc = 0;              /* result from calling pfAppend */
   int c;                     /* Next character in the format string */
   char *bufpt = 0;           /* Pointer to the conversion buffer */
@@ -2064,8 +2124,8 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
   /* FSLPRINTF_RETURN, FSLPRINTF_CHECKERR, and FSLPRINTF_SPACES
      are internal helpers.
   */
-#define FSLPRINTF_RETURN if( zExtra ) fsl_free(zExtra); return pfrc
-#define FSLPRINTF_CHECKERR if( 0!=pfrc ) { FSLPRINTF_RETURN; } (void)0
+#define FSLPRINTF_RETURN if( zExtra ) fsl_free(zExtra); return outCount
+#define FSLPRINTF_CHECKERR if( pfrc<0 ) { FSLPRINTF_RETURN; } else outCount += pfrc
 #define FSLPRINTF_SPACES(N)                     \
   {                                             \
     FSLPRINTF_CHARARRAY(zSpaces,N);             \
@@ -2078,7 +2138,6 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
   length = 0;
   bufpt = 0;
   for(; (c=(*fmt))!=0; ++fmt){
-    assert(0==pfrc);
     if( c!='%' ){
       int amt;
       bufpt = (char *)fmt;
@@ -2140,6 +2199,7 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
         if( precision<0 ){
           precision = precision >= -2147483647 ? -precision : -1;
         }
+
       }else{
         unsigned px = 0;
         while( c>='0' && c<='9' ){
@@ -2179,6 +2239,7 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
     if( (!infop) || (!infop->type) ){
       FSLPRINTF_RETURN;
     }
+
 
     /* Limit the precision to prevent overflowing buf[] during conversion */
     if( precision>FSLPRINTF_BUF_SIZE-40 && (infop->flags & FLAG_STRING)==0 ){
@@ -2250,8 +2311,10 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
           bufpt -= 2;
         }
         {
-          int const base = infop->base;
-          const char *cset = &aDigits[infop->charset];
+          const char *cset;
+          int base;
+          cset = &aDigits[infop->charset];
+          base = infop->base;
           do{                                           /* Convert to ascii */
             *(--bufpt) = cset[longvalue%base];
             longvalue = longvalue/base;
@@ -2448,6 +2511,12 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
         }
 #endif /* !FSLPRINTF_OMIT_FLOATING_POINT */
         break;
+#if !FSLPRINTF_OMIT_SIZE
+      case etSIZE:
+        *(va_arg(ap,int*)) = outCount;
+        length = width = 0;
+        break;
+#endif
       case etPERCENT:
         buf[0] = '%';
         bufpt = buf;
@@ -2664,9 +2733,9 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
 #undef FSLPRINTF_BUF_SIZE
 #undef FSLPRINTF_OMIT_HTML
 
-int fsl_appendf(fsl_output_f pfAppend, void * pfAppendArg,
-                const char *fmt, ... ){
-  int ret;
+fsl_int_t fsl_appendf(fsl_appendf_f pfAppend, void * pfAppendArg,
+                      const char *fmt, ... ){
+  fsl_int_t ret;
   va_list vargs;
   va_start( vargs, fmt );
   ret = fsl_appendfv( pfAppend, pfAppendArg, fmt, vargs );
@@ -2674,19 +2743,34 @@ int fsl_appendf(fsl_output_f pfAppend, void * pfAppendArg,
   return ret;
 }
 
-int fsl_fprintfv( FILE * fp, char const * fmt, va_list args ){
+
+/*
+   fsl_appendf_f() impl which requires that state be-a writable
+   (FILE*).
+*/
+fsl_int_t fsl_appendf_f_FILE( void * state,
+                              char const * s, fsl_int_t n ){
+  if( !state ) return -1;
+  else return (1==fwrite( s, (size_t)n, 1, (FILE *)state ))
+    ? n : -2;
+}
+
+fsl_int_t fsl_fprintfv( FILE * fp, char const * fmt, va_list args ){
   return (fp && fmt)
-    ? fsl_appendfv( fsl_output_f_FILE, fp, fmt, args )
+    ? fsl_appendfv( fsl_appendf_f_FILE, fp, fmt, args )
     :  -1;
 }
 
-int fsl_fprintf( FILE * fp, char const * fmt, ... ){
-  int ret;
-  va_list vargs;
-  va_start( vargs, fmt );
-  ret = fsl_appendfv( fsl_output_f_FILE, fp, fmt, vargs );
-  va_end(vargs);
-  return ret;
+fsl_int_t fsl_fprintf( FILE * fp, char const * fmt, ... ){
+  if(!fp || !fmt) return -1;
+  else {
+    fsl_int_t ret;
+    va_list vargs;
+    va_start( vargs, fmt );
+    ret = fsl_appendfv( fsl_appendf_f_FILE, fp, fmt, vargs );
+    va_end(vargs);
+    return ret;
+  }
 }
 
 char * fsl_mprintfv( char const * fmt, va_list vargs ){
@@ -2726,42 +2810,42 @@ struct fsl_snp_state {
 };
 typedef struct fsl_snp_state fsl_snp_state;
 
-static int fsl_output_f_snprintf( void * arg,
-                                  void const * data_,
-                                  fsl_size_t n ){
-  char const * data = (char const *)data_;
+static fsl_int_t fsl_appendf_f_snprintf( void * arg,
+                                         char const * data,
+                                         fsl_int_t n ){
   fsl_snp_state * st = (fsl_snp_state*) arg;
   assert(n>=0);
   if(n==0 || (st->pos >= st->len)) return 0;
   else if((n + st->pos) > st->len){
     n = st->len - st->pos;
   }
-  memcpy(st->dest + st->pos, data, n);
+  memcpy(st->dest + st->pos, data, (fsl_size_t)n);
   st->pos += n;
   assert(st->pos <= st->len);
-  return 0;
+  return n;
 }
 
-int fsl_snprintfv( char * dest, fsl_size_t n,
-                   char const * fmt, va_list args){
+fsl_int_t fsl_snprintfv( char * dest, fsl_size_t n,
+                         char const * fmt, va_list args){
   fsl_snp_state st = {NULL,0,0};
-  int rc = 0;
-  if(!dest || !fmt) return FSL_RC_MISUSE;
+  fsl_int_t rc;
+  if(!dest || !fmt) return -1;
   else if(!n || !*fmt){
     if(dest) *dest = 0;
     return 0;
   }
   st.len = n;
   st.dest = dest;
-  rc = fsl_appendfv( fsl_output_f_snprintf, &st, fmt, args );
+  rc = fsl_appendfv( fsl_appendf_f_snprintf, &st, fmt, args );
   if(st.pos < st.len){
     dest[st.pos] = 0;
   }
+  assert( rc <= (fsl_int_t)n );
   return rc;
 }
 
-int fsl_snprintf( char * dest, fsl_size_t n, char const * fmt, ... ){
-  int rc = 0;
+fsl_int_t fsl_snprintf( char * dest, fsl_size_t n, char const * fmt, ... ){
+  fsl_int_t rc;
   va_list vargs;
   va_start( vargs, fmt );
   rc = fsl_snprintfv( dest, n, fmt, vargs );
@@ -3234,13 +3318,69 @@ int fsl_buffer_append( fsl_buffer * b,
   }
 }
 
-int fsl_buffer_appendfv( fsl_buffer * const b, char const * fmt,
-                         va_list args){
-  return fsl_appendfv( fsl_output_f_buffer, b, fmt, args );
+/*
+   Internal helper for implementing fsl_buffer_appendf()
+*/
+typedef struct BufferAppender {
+  fsl_buffer * b;
+  /*
+     Result code of the appending process.
+  */
+  int rc;
+} BufferAppender;
+
+/*
+   fsl_appendf_f() impl which requires arg to be a (fsl_buffer*).
+   It appends the data to arg. Returns the number of bytes written
+   on success, a negative value on error. Always NUL-terminates the
+   buffer on success.
+*/
+static fsl_int_t fsl_appendf_f_buffer( void * arg,
+                                       char const * data, fsl_int_t n ){
+  BufferAppender * ba = (BufferAppender*)arg;
+  fsl_buffer * sb = ba->b;
+  if( !sb || (n<0) ) return -1;
+  else if( ! n ) return 0;
+  else{
+    fsl_int_t rc;
+    fsl_size_t npos = sb->used + n;
+    if( npos >= sb->capacity ){
+      const size_t asz = npos ? ((4 * npos / 3) + 1) : 16;
+      if( asz < npos ) {
+        ba->rc = FSL_RC_RANGE;
+        return -1; /* overflow */
+      }
+      else{
+        rc = fsl_buffer_reserve( sb, asz );
+        if(rc) {
+          ba->rc = FSL_RC_OOM;
+          return -1;
+        }
+      }
+    }
+    rc = 0;
+    for( ; rc < n; ++rc, ++sb->used ){
+      sb->mem[sb->used] = data[rc];
+    }
+    sb->mem[sb->used] = 0;
+    return rc;
+  }
+}
+
+int fsl_buffer_appendfv( fsl_buffer * b,
+                         char const * fmt, va_list args){
+  if(!b || !fmt) return FSL_RC_MISUSE;
+  else{
+    BufferAppender ba;
+    ba.b = b;
+    ba.rc = 0;
+    fsl_appendfv( fsl_appendf_f_buffer, &ba, fmt, args );
+    return ba.rc;
+  }
 }
 
 
-int fsl_buffer_appendf( fsl_buffer * const b,
+int fsl_buffer_appendf( fsl_buffer * b,
                         char const * fmt, ... ){
   if(!b || !fmt) return FSL_RC_MISUSE;
   else{
@@ -17520,7 +17660,7 @@ int fsl_deck_F_foreach( fsl_deck * d, fsl_card_F_visitor_f cb, void * visitorSta
 
   
 /**
-    Output state for fsl_output_f_mf() and friends. Used for managing
+    Output state for fsl_appendf_f_mf() and friends. Used for managing
     the output of a fsl_deck.
  */
 struct fsl_deck_out_state {
@@ -17557,7 +17697,7 @@ struct fsl_deck_out_state {
 
   /**
       Incrementally-calculated MD5 sum of all output sent via
-      fsl_output_f_mf().
+      fsl_appendf_f_mf().
    */
   fsl_md5_cx md5;
 
@@ -17584,26 +17724,29 @@ NULL/*scratch*/
 };
 
 /**
-    fsl_output_f() impl which forwards its data to arg->out(). arg
+    fsl_appendf_f() impl which forwards its data to arg->out(). arg
     must be a (fsl_deck_out_state *). Updates arg->rc to the result of
     calling arg->out(fp->fState, data, n). If arg->out() succeeds then
     arg->md5 is updated to reflect the given data. i.e. this is where
     the Z-card gets calculated incrementally during output of a deck.
 */
-static int fsl_output_f_mf( void * arg, void const * data,
-                            fsl_size_t n ){
-  fsl_deck_out_state * const os = (fsl_deck_out_state *)arg;
+static fsl_int_t fsl_appendf_f_mf( void * arg,
+                                   char const * data,
+                                   fsl_int_t n ){
+  fsl_deck_out_state * os = (fsl_deck_out_state *)arg;
   if((n>0)
      && !(os->rc = os->out(os->outState, data, (fsl_size_t)n))
      && (os->md5.isInit)){
     fsl_md5_update( &os->md5, data, (fsl_size_t)n );
   }
-  return os->rc;
+  return (0==os->rc)
+    ? n
+    : -1;
 }
 
 /**
     Internal helper for fsl_deck_output(). Appends formatted output to
-    os->out() via fsl_output_f_mf(). Returns os->rc (0 on success).
+    os->out() via fsl_appendf_f_mf(). Returns os->rc (0 on success).
  */
 static int fsl_deck_append( fsl_deck_out_state * os,
                             char const * fmt, ... ){
@@ -17612,7 +17755,7 @@ static int fsl_deck_append( fsl_deck_out_state * os,
   assert(os);
   assert(fmt && *fmt);
   va_start(args,fmt);
-  rc = fsl_appendfv( fsl_output_f_mf, os, fmt, args);
+  rc = fsl_appendfv( fsl_appendf_f_mf, os, fmt, args);
   va_end(args);
   if(rc<0 && !os->rc) os->rc = FSL_RC_IO;
   return os->rc;
@@ -17845,7 +17988,7 @@ static int fsl_deck_out_F_one(fsl_deck_out_state *os,
       if(!rc) rc = fsl_deck_append( os, " %b", os->scratch);
     }
   }
-  if(!rc) fsl_output_f_mf(os, "\n", 1);
+  if(!rc) fsl_appendf_f_mf(os, "\n", 1);
   return os->rc;
 }
 
@@ -17962,11 +18105,11 @@ static int fsl_list_v_mf_output_card_P(void * obj, void * visitorState ){
     os->rc = fsl_error_set(&os->error, FSL_RC_RANGE,
                            "Invalid UUID in P card.");
   }
-  else if(!os->counter++) fsl_output_f_mf(os, "P ", 2);
-  else fsl_output_f_mf(os, " ", 1);
+  else if(!os->counter++) fsl_appendf_f_mf(os, "P ", 2);
+  else fsl_appendf_f_mf(os, " ", 1);
   /* Reminder: fsl_appendf_f_mf() updates os->rc. */
   if(!os->rc){
-    fsl_output_f_mf(os, uuid, (fsl_size_t)uLen);
+    fsl_appendf_f_mf(os, uuid, (fsl_size_t)uLen);
   }
   return os->rc;
 }
@@ -17978,7 +18121,7 @@ static int fsl_deck_out_P( fsl_deck_out_state * os ){
     os->counter = 0;
     os->rc = fsl_list_visit( &os->d->P, 0, fsl_list_v_mf_output_card_P, os );
     assert(os->counter);
-    if(!os->rc) fsl_output_f_mf(os, "\n", 1);
+    if(!os->rc) fsl_appendf_f_mf(os, "\n", 1);
   }
 #if 1
   /* Arguable: empty P-cards are harmless but cosmetically unsightly. */
@@ -18154,12 +18297,12 @@ static int fsl_list_v_mf_output_card_T(void * obj, void * visitorState ){
        the spec doesn't disallow it and they are harmless
        for (aren't used by) fossil(1). */
     fsl_deck_fossilize(os, (unsigned char const *)t->value, -1);
-    if(!os->rc) fsl_output_f_mf(os, " ", 1);
-    if(!os->rc) fsl_output_f_mf(os, (char const*)os->scratch->mem,
-                                (fsl_int_t)os->scratch->used);
+    if(!os->rc) fsl_appendf_f_mf(os, " ", 1);
+    if(!os->rc) fsl_appendf_f_mf(os, (char const*)os->scratch->mem,
+                                 (fsl_int_t)os->scratch->used);
   }
   if(!os->rc){
-    fsl_output_f_mf(os, "\n", 1);
+    fsl_appendf_f_mf(os, "\n", 1);
   }
   return os->rc;
 }
@@ -23133,27 +23276,28 @@ NULL/*oState*/,
     Internal helper. Sends src to o->out(). If n is negative, fsl_strlen()
     is used to determine the length.
  */
-static int diff_out( DiffOutState * const o, void const * src, fsl_int_t n ){
+static int diff_out( DiffOutState * o, void const * src, fsl_int_t n ){
   return o->rc = n
-    ? o->out(o->oState, src, n<0 ? fsl_strlen((char const *)src) : (fsl_size_t)n)
+    ? o->out(o->oState, src, (n<0)?fsl_strlen((char const *)src):(fsl_size_t)n)
     : 0;
 }
 
+
 /**
-    fsl_output_f() impl for use with diff_outf(). state must be a
+    fsl_appendf_f() impl for use with diff_outf(). state must be a
     (DiffOutState*).
  */
-static int fsl_output_f_diff_out( void * state, void const * s,
-                                  fsl_size_t n ){
+static fsl_int_t fsl_appendf_f_diff_out( void * state, char const * s,
+                                         fsl_int_t n ){
   DiffOutState * os = (DiffOutState *)state;
   diff_out(os, s, n);
-  return os->rc;
+  return os->rc ? -1 : n;
 }
 
 static int diff_outf( DiffOutState * o, char const * fmt, ... ){
   va_list va;
   va_start(va,fmt);
-  fsl_appendfv(fsl_output_f_diff_out, o, fmt, va);
+  fsl_appendfv(fsl_appendf_f_diff_out, o, fmt, va);
   va_end(va);
   return o->rc;
 }
@@ -23757,7 +23901,7 @@ static int contextDiff(
        context diff that contains line numbers, show the separator from
        the previous block.
     */
-    ++nChunk;
+    nChunk++;
     if( showLn ){
       if( !showDivider ){
         /* Do not show a top divider */
@@ -27635,17 +27779,23 @@ void fsl_glob_list_clear( fsl_list * globList ){
     fsl_appendf_f() impl which sends its output to fsl_output(). state
     must be a (fsl_cx*).
  */
-static int fsl_output_f_fsl_output( void * state, void const * s,
-                                    fsl_size_t n ){
-  return fsl_output( (fsl_cx *)state, s, n );
+static fsl_int_t fsl_appendf_f_fsl_output( void * state, char const * s,
+                                           fsl_int_t n ){
+  return fsl_output( (fsl_cx *)state, s, (fsl_size_t)n )
+    ? -1
+    : n;
 }
-
 
 int fsl_outputfv( fsl_cx * f, char const * fmt, va_list args ){
   if(!f || !fmt) return FSL_RC_MISUSE;
   else if(!*fmt) return FSL_RC_RANGE;
-  return fsl_appendfv( fsl_output_f_fsl_output, f, fmt, args );
+  else{
+    long const prc = fsl_appendfv( fsl_appendf_f_fsl_output,
+                                   f, fmt, args );
+    return (prc>=0) ? 0 : FSL_RC_IO;
+  }
 }
+
     
 int fsl_outputf( fsl_cx * f, char const * fmt, ... ){
   if(!f || !fmt) return FSL_RC_MISUSE;
@@ -27659,6 +27809,7 @@ int fsl_outputf( fsl_cx * f, char const * fmt, ... ){
     return rc;
   }
 }
+
 
 int fsl_output( fsl_cx * cx, void const * src, fsl_size_t n ){
   if(!cx || !src) return FSL_RC_MISUSE;

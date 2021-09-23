@@ -555,7 +555,8 @@ FSL_EXPORT const fsl_state fsl_state_empty;
    of the output, and this interface doesn't support that
    operation).
 */
-typedef int (*fsl_output_f)( void * state, void const * src, fsl_size_t n );
+typedef int (*fsl_output_f)( void * state,
+                             void const * src, fsl_size_t n );
 
 
 /**
@@ -578,6 +579,13 @@ typedef int (*fsl_flush_f)(void * state);
    implementation-specified input file/buffer/whatever channel.
 */
 typedef int (*fsl_input_f)( void * state, void * dest, fsl_size_t * n );
+
+/**
+   fsl_output_f() implementation which requires state to be a
+   writeable (FILE*) handle. Is a no-op (returning 0) if
+   !n. Returns FSL_RC_MISUSE if !state or !src.
+*/
+FSL_EXPORT int fsl_output_f_FILE( void * state, void const * src, fsl_size_t n );
 
 /**
    fsl_output_f() implementation which requires state to be a
@@ -1278,19 +1286,18 @@ FSL_EXPORT int fsl_buffer_append( fsl_buffer * b,
                                   void const * src, fsl_int_t n );
 
 /**
-   Uses fsl_appendf() to append formatted output to the given buffer.
-   Returns 0 on success and FSL_RC_OOM if an allocation fails while
-   expanding dest. Results are undefined if either of the first two
-   arguments are NULL.
+   Uses fsl_appendf() to append formatted output to the given
+   buffer.  Returns 0 on success, FSL_RC_MISUSE if !f or !dest, and
+   FSL_RC_OOM if an allocation fails while expanding dest.
 
    @see fsl_buffer_append()
    @see fsl_buffer_reserve()
 */
-FSL_EXPORT int fsl_buffer_appendf( fsl_buffer * const dest,
+FSL_EXPORT int fsl_buffer_appendf( fsl_buffer * dest,
                                    char const * fmt, ... );
 
-/** va_list counterpart to fsl_buffer_appendf(). */
-FSL_EXPORT int fsl_buffer_appendfv( fsl_buffer * const dest,
+/** va_list counterpart to fsl_buffer_appendfv(). */
+FSL_EXPORT int fsl_buffer_appendfv( fsl_buffer * dest,
                                     char const * fmt, va_list args );
 
 /**
@@ -1675,18 +1682,20 @@ FSL_EXPORT char * fsl_mprintfv(char const * fmt, va_list vargs );
 
 /**
    An sprintf(3) clone which uses fsl_appendf() for the formatting.
-   Outputs at most n bytes to dest. Returns 0 on success, non-0
-   on error. Returns 0 without side-effects if !n or !*fmt.
+   Outputs at most n bytes to dest and returns the number of bytes
+   output. Returns a negative value if !dest or !fmt. Returns 0
+   without side-effects if !n or !*fmt.
 
-   If the destination buffer is long enough, this function
-   NUL-terminates it.
+   If the destination buffer is long enough (this function returns
+   a non-negative value less than n), this function NUL-terminates it.
+   If it returns n then there was no space for the terminator.
 */
-FSL_EXPORT int fsl_snprintf( char * dest, fsl_size_t n, char const * fmt, ... );
+FSL_EXPORT fsl_int_t fsl_snprintf( char * dest, fsl_size_t n, char const * fmt, ... );
 
 /**
    va_list counterpart to fsl_snprintf()
 */
-FSL_EXPORT int fsl_snprintfv( char * dest, fsl_size_t n, char const * fmt, va_list args );
+FSL_EXPORT fsl_int_t fsl_snprintfv( char * dest, fsl_size_t n, char const * fmt, va_list args );
 
 /**
    Equivalent to fsl_strndup(src,-1).
@@ -1858,6 +1867,40 @@ FSL_EXPORT FILE * fsl_fopen(char const * name, char const *mode);
 FSL_EXPORT void fsl_fclose(FILE * f);
 
 /**
+   @typedef fsl_int_t (*fsl_appendf_f)( void * state, char const * data, fsl_int_t n )
+
+   The fsl_appendf_f typedef is used to provide fsl_appendfv() with
+   a flexible output routine, so that it can be easily send its
+   output to arbitrary targets.
+
+   The policies which implementations need to follow are:
+
+   - state is an implementation-specific pointer (may be 0) which
+   is passed to fsl_appendf(). fsl_appendfv() doesn't know what
+   this argument is but passes it to its fsl_appendf_f argument.
+   Typically this pointer will be an object or resource handle to
+   which string data is pushed.
+
+   - The 'data' parameter is the data to append. The API does not
+   currently guaranty that data containing embeded NULs will survive
+   the ride through fsl_appendf() and its delegates.
+
+   - n is the number of bytes to read from data. The fact that n is
+   of a signed type is historical. It can be treated as an unsigned
+   type for purposes of fsl_appendf().
+
+   - Returns, on success, the number of bytes appended (may be 0).
+
+   - Returns, on error, an implementation-specified negative
+   number.  Returning a negative error code will cause
+   fsl_appendfv() to stop processing and return. Note that 0 is a
+   success value (some printf format specifiers do not add anything
+   to the output).
+*/
+typedef fsl_int_t (*fsl_appendf_f)( void * state, char const * data,
+                                    fsl_int_t n );
+
+/**
    This function works similarly to classical printf
    implementations, but instead of outputing somewhere specific, it
    uses a callback function to push its output somewhere. This
@@ -1868,7 +1911,7 @@ FSL_EXPORT void fsl_fclose(FILE * f);
 
    INPUTS:
 
-   pfAppend: The is a fsl_output_f function which is responsible
+   pfAppend: The is a fsl_appendf_f function which is responsible
    for accumulating the output. If pfAppend returns a negative
    value then processing stops immediately.
 
@@ -1885,13 +1928,20 @@ FSL_EXPORT void fsl_fclose(FILE * f);
 
    OUTPUTS:
 
-   ACHTUNG: this interface changed significantly in 2021-09:
-
-   - The output function was changed from a type specific to this
-   interface to fsl_output_f().
-
-   - The return semantics where changed from printf()-like to
-   0 on success, non-0 on error.
+   The return value is the total number of characters sent to the
+   function "func", or a negative number on a pre-output error. If
+   this function returns an integer greater than 1 it is in general
+   impossible to know if all of the elements were output. As such
+   failure can only happen if the callback function returns an
+   error or if one of the formatting options needs to allocate
+   memory and cannot. Both of those cases are very rare in a
+   printf-like context, so this is not considered to be a
+   significant problem. (The same is true for any classical printf
+   implementations.) Clients may use their own state objects which
+   can propagate errors from their own internals back to the
+   caller, but generically speaking it is difficult to trace errors
+   back through this routine. Then again, in practice that has
+   never proven to be a problem.
 
    Most printf-style specifiers work as they do in standard printf()
    implementations. There might be some very minor differences, but
@@ -1975,21 +2025,36 @@ FSL_EXPORT void fsl_fclose(FILE * f);
    Some of these extensions may be disabled by setting certain macros
    when compiling appendf.c (see that file for details).
 
+   FIXME? fsl_appendf_f() is an artifact of older code from which
+   this implementation derives. The first parameter should arguably
+   be replaced with fsl_output_f(), which does the same thing _but_
+   has different return semantics (more reliable, because the
+   current semantics report partial success as success in some
+   cases). Doing this would require us to change the return
+   semantics of this function, but that wouldn't necessarily be a
+   bad thing (we don't rely on sprintf()-like return semantics all
+   that much, if at all). Or we just add a proxy which forwards to
+   a fsl_output_f(). (Oh, hey, that's what fsl_outputf() does.) But
+   that doesn't catch certain types of errors (namely allocation
+   failures) which can happen as side-effects of some formatting
+   operations.
+
    Potential TODO: add fsl_bytes_fossilize_out() which works like
-   fsl_bytes_fossilize() but sends its output to an fsl_output_f(), so
-   that this routine doesn't need to alloc for that case.
+   fsl_bytes_fossilize() but sends its output to an fsl_output_f()
+   and fsl_appendf_f(), so that this routine doesn't need to alloc
+   for that case.
 */
-FSL_EXPORT int fsl_appendfv(fsl_output_f pfAppend, void * pfAppendArg,
-                            const char *fmt, va_list ap );
+FSL_EXPORT fsl_int_t fsl_appendfv(fsl_appendf_f pfAppend, void * pfAppendArg,
+                                  const char *fmt, va_list ap );
 
 /**
    Identical to fsl_appendfv() but takes an ellipses list (...)
    instead of a va_list.
 */
-FSL_EXPORT int fsl_appendf(fsl_output_f pfAppend,
-                           void * pfAppendArg,
-                           const char *fmt,
-                           ... )
+FSL_EXPORT fsl_int_t fsl_appendf(fsl_appendf_f pfAppend,
+                      void * pfAppendArg,
+                      const char *fmt,
+                      ... )
 #if 0
 /* Would be nice, but complains about our custom format options: */
   __attribute__ ((__format__ (__printf__, 3, 4)))
@@ -1997,23 +2062,23 @@ FSL_EXPORT int fsl_appendf(fsl_output_f pfAppend,
   ;
 
 /**
-   A fsl_output_f() impl which requires that state be an opened,
+   A fsl_appendf_f() impl which requires that state be an opened,
    writable (FILE*) handle.
 */
-FSL_EXPORT int fsl_output_f_FILE( void * state, void const * s,
-                                  fsl_size_t n );
+FSL_EXPORT fsl_int_t fsl_appendf_f_FILE( void * state, char const * s,
+                                         fsl_int_t n );
 
 
 /**
    Emulates fprintf() using fsl_appendf(). Returns the result of
    passing the data through fsl_appendf() to the given file handle.
 */
-FSL_EXPORT int fsl_fprintf( FILE * fp, char const * fmt, ... );
+FSL_EXPORT fsl_int_t fsl_fprintf( FILE * fp, char const * fmt, ... );
 
 /**
    The va_list counterpart of fsl_fprintf().
 */
-FSL_EXPORT int fsl_fprintfv( FILE * fp, char const * fmt, va_list args );
+FSL_EXPORT fsl_int_t fsl_fprintfv( FILE * fp, char const * fmt, va_list args );
 
 
 /**
