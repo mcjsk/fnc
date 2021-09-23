@@ -2830,7 +2830,7 @@ create_diff(struct fnc_diff_view_state *s)
 	st = st0;
 	lnoff = (s->line_offsets)[s->nlines - 1];
 	while ((line = fnc_strsep(&st, "\n")) != NULL) {
-		n = fsl_fprintf(s->f, "%s\n", line);
+		n = fprintf(s->f, "%s\n", line);
 		lnoff += n;
 		rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff);
 		if (rc)
@@ -2926,27 +2926,27 @@ write_commit_meta(struct fnc_diff_view_state *s)
 	off_t		 lnoff = 0;
 	int		 n, rc = 0;
 
-	if ((n = fsl_fprintf(s->f,"%s %s\n", s->selected_commit->type,
+	if ((n = fprintf(s->f,"%s %s\n", s->selected_commit->type,
 	    s->selected_commit->uuid)) < 0)
 		goto end;
 	lnoff += n;
 	if ((rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff)))
 		goto end;
 
-	if ((n = fsl_fprintf(s->f,"user: %s\n", s->selected_commit->user)) < 0)
+	if ((n = fprintf(s->f,"user: %s\n", s->selected_commit->user)) < 0)
 		goto end;
 	lnoff += n;
 	if ((rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff)))
 		goto end;
 
-	if ((n = fsl_fprintf(s->f,"tags: %s\n", s->selected_commit->branch ?
+	if ((n = fprintf(s->f,"tags: %s\n", s->selected_commit->branch ?
 	    s->selected_commit->branch : "/dev/null")) < 0)
 		goto end;
 	lnoff += n;
 	if ((rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff)))
 		goto end;
 
-	if ((n = fsl_fprintf(s->f,"date: %s\n",
+	if ((n = fprintf(s->f,"date: %s\n",
 	    s->selected_commit->timestamp)) < 0)
 		goto end;
 	lnoff += n;
@@ -2972,7 +2972,7 @@ write_commit_meta(struct fnc_diff_view_state *s)
 				goto end;
 		}
 		else {
-			if ((n = fsl_fprintf(s->f, "%s\n", line)) < 0)
+			if ((n = fprintf(s->f, "%s\n", line)) < 0)
 				goto end;
 			lnoff += n;
 			if ((rc = add_line_offset(&s->line_offsets, &s->nlines,
@@ -3011,7 +3011,7 @@ write_commit_meta(struct fnc_diff_view_state *s)
 			changeline = "[!] ";
 			break;
 		}
-		if ((n = fsl_fprintf(s->f, "%s%s\n", changeline,
+		if ((n = fprintf(s->f, "%s%s\n", changeline,
 		    file_change->fc->name)) < 0)
 			goto end;
 		lnoff += n;
@@ -3057,7 +3057,7 @@ wrapline(char *line, fsl_size_t ncols_avail, struct fnc_diff_view_state *s,
 				return rc;
 			cursor = 0;
 		}
-		if ((n  = fsl_fprintf(s->f, "%s ", word)) < 0)
+		if ((n  = fprintf(s->f, "%s ", word)) < 0)
 			return rc;
 		*lnoff += n;
 		cursor += n;
