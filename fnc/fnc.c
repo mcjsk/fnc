@@ -1345,7 +1345,7 @@ draw_commits(struct fnc_view *view)
 	char				*uuid = NULL;
 	wchar_t				*wcstr;
 	int				 ncommits = 0, rc = 0, wstrlen = 0;
-	int				 max_usrlen = -1;
+	int				 ncols_needed, max_usrlen = -1;
 
 	if (s->selected_commit && !(view->searching != SEARCH_DONE &&
 	    view->search_status == SEARCH_WAITING)) {
@@ -1375,19 +1375,23 @@ draw_commits(struct fnc_view *view)
 				search_str = "searching...";
 		}
 
-		if ((idxstr = fsl_mprintf(" [%d/%d] %s",
+		if ((idxstr = fsl_mprintf("%s [%d/%d] %s",
+		    !fsl_strcmp(uuid, s->curr_ckout_uuid) ? " [current]" : "",
 		    entry ? entry->idx + 1 : 0, s->commits.ncommits,
-		    search_str ? search_str :
-		    (branch ? branch : ""))) == NULL) {
+		    search_str ? search_str : (branch ? branch : "")))
+		    == NULL) {
 			rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d fsl_mprintf",
 			    __func__, __FILE__, __LINE__);
 			goto end;
 		}
 	}
-	if ((headln = fsl_mprintf("%s%c%s%s%s", type ? type : "", type ?
-	    ' ' : SPINNER[tcx->spin_idx], uuid ? uuid :
-	    "........................................", !fsl_strcmp(uuid,
-	    s->curr_ckout_uuid) ? " [current]" : "", idxstr)) == NULL) {
+	ncols_needed = fsl_strlen(type) + fsl_strlen(idxstr) + FSL_STRLEN_K256 +
+	    (fsl_strcmp(type, "wiki") ? 1 : 0);
+	if ((headln = fsl_mprintf("%s%c%.*s%s", type ? type : "", type ?
+	    ' ' : SPINNER[tcx->spin_idx], view->ncols < ncols_needed ?
+	    view->ncols - (ncols_needed - FSL_STRLEN_K256) : FSL_STRLEN_K256,
+	    uuid ? uuid : "........................................", idxstr))
+	    == NULL) {
 		rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d fsl_mprintf",
 		    __func__, __FILE__, __LINE__);
 		headln = NULL;
