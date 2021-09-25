@@ -4005,6 +4005,7 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		break;
 	case KEY_NPAGE:
 	case CTRL('f'):
+	case ' ':
 		if (s->eof)
 			break;
 		i = 0;
