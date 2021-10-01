@@ -472,7 +472,8 @@ static int		 view_input(struct fnc_view **, int *,
 			    struct fnc_view *, struct view_tailhead *);
 static void		 help(void);
 static void		 padpopup(WINDOW *, const char **, const char *);
-void			 centerprint(WINDOW *, int, int, int, const char *, chtype);
+void			 centerprint(WINDOW *, int, int, int, const char *,
+			    chtype);
 static int		 tl_input_handler(struct fnc_view **, struct fnc_view *,
 			    int);
 static int		 timeline_scroll_down(struct fnc_view *, int);
@@ -3944,9 +3945,9 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 			free(s);
 			return rc;
 		}
-		wattr_on(window, A_STANDOUT, NULL);
+		wattr_on(window, A_REVERSE, NULL);
 		waddwstr(window, wcstr);
-		wattr_off(window, A_STANDOUT, NULL);
+		wattr_off(window, A_REVERSE, NULL);
 		free(wcstr);
 		free(s);
 		ncols_avail -= wstrlen;
