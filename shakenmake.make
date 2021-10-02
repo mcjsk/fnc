@@ -519,7 +519,7 @@ $(call ShakeNMake.CALL.define-install-set,dlls,$(prefix)/lib,$(ShakeNMake.INSTAL
 #$(call ShakeNMake.CALL.define-install-set,docs,$(prefix)/share/doc/$(package.name),$(ShakeNMake.INSTALL.flags.nonbins))
 # Set up man page entries...
 $(foreach NUM,1 2 3 4 5 6 7 8 9,$(call \
-	ShakeNMake.CALL.define-install-set,man$(NUM),$(prefix)/man/man$(NUM),$(ShakeNMake.INSTALL.flags.nonbins)))
+	ShakeNMake.CALL.define-install-set,man$(NUM),$(prefix)/share/man/man$(NUM),$(ShakeNMake.INSTALL.flags.nonbins)))
 endif
 # /install
 ########################################################################
