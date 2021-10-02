@@ -2549,16 +2549,10 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			timeline_scroll_up(s, view->nlines - 1);
 		select_commit(s);
 		break;
-	case 'g': {
-		bool home = true;
-		halfdelay(10);	/* Block for 1 second, then return ERR. */
-		if (wgetch(view->window) != 'g')
-			home = false;
-		cbreak();	/* Return to blocking mode on user input. */
-		if (!home)
+	case 'g':
+		if (!fnc_home(view))
 			break;
 		/* FALL THROUGH */
-	}
 	case KEY_HOME:
 		if (s->first_commit_onscreen == NULL)
 			break;
@@ -4448,16 +4442,10 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		while (i++ < view->nlines - 1 && s->first_line_onscreen > 1)
 			--s->first_line_onscreen;
 		break;
-	case 'g': {
-		bool home = true;
-		halfdelay(10);	/* Only block for 1 second, then return ERR. */
-		if (wgetch(view->window) != 'g')
-			home = false;
-		cbreak();	/* Return to blocking mode on user input. */
-		if (!home)
+	case 'g':
+		if (!fnc_home(view))
 			break;
 		/* FALL THROUGH */
-	}
 	case KEY_HOME:
 		s->first_line_onscreen = 1;
 		break;
