@@ -38,6 +38,7 @@
 
 #include <sys/queue.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -84,12 +85,14 @@
 #define SPIN_INTERVAL	200		/* Status line progress indicator. */
 #define SPINNER		"\\|/-\0"
 #define NULL_DEVICE	"/dev/null"
-#define NULL_DEVICELEN (sizeof(NULL_DEVICE)-1)
+#define NULL_DEVICELEN (sizeof(NULL_DEVICE) - 1)
 #define KEY_ESCAPE	27
 
 /* Portability macros. */
-#ifdef __OpenBSD__
-#define strtol(s, p, b)	strtonum(s, INT_MIN, INT_MAX, (const char **)p)
+#ifndef __OpenBSD__
+#ifndef HAVE_STRTONUM
+#  define strtonum(s, min, max, o) strtol(s, (char **)o, 10)
+# endif /* HAVE_STRTONUM */
 #endif
 
 #if !defined(__dead)
@@ -104,13 +107,24 @@
 		(var) = (tmp))
 #endif
 
+#if defined __linux__
+# ifndef strlcat
+#  define strlcat(_d, _s, _sz) fnc_strlcat(_d, _s, _sz)
+# endif /* strlcat */
+# ifndef strlcpy
+#  define strlcpy(_d, _s, _sz) fnc_strlcpy(_d, _s, _sz)
+# endif /* strlcpy */
+#endif /* __linux__ */
+
 __dead static void	usage(void);
 static void		usage_timeline(void);
 static void		usage_diff(void);
+static void		usage_tree(void);
 static void		usage_blame(void);
 static int		fcli_flag_type_arg_cb(fcli_cliflag const *);
 static int		cmd_timeline(fcli_command const *);
 static int		cmd_diff(fcli_command const *);
+static int		cmd_tree(fcli_command const *);
 static int		cmd_blame(fcli_command const *);
 
 /*
@@ -155,10 +169,11 @@ static struct fnc_setup {
 	/* Command line flags and help. */
 	fcli_help_info	  fnc_help;			/* Global help. */
 	fcli_cliflag	  cliflags_global[3];		/* Global options. */
-	fcli_command	  cmd_args[4];			/* App commands. */
-	void		(*fnc_usage_cb[3])(void);	/* Command usage. */
+	fcli_command	  cmd_args[5];			/* App commands. */
+	void		(*fnc_usage_cb[4])(void);	/* Command usage. */
 	fcli_cliflag	  cliflags_timeline[10];	/* Timeline options. */
 	fcli_cliflag	  cliflags_diff[7];		/* Diff options. */
+	fcli_cliflag	  cliflags_tree[4];		/* Tree options. */
 	fcli_cliflag	  cliflags_blame[2];		/* Blame options. */
 } fnc_init = {
 	NULL,		/* cmdarg copy of argv[1] to aid usage/error report. */
@@ -196,23 +211,25 @@ static struct fnc_setup {
 	{ /* cmd_args available app commands. */
 	    {"timeline", "Show chronologically descending commit history of "
 	    "the repository.", cmd_timeline, fnc_init.cliflags_timeline},
-	    {"diff", "Show differences between versioned files in the "
-	    "repository.", cmd_diff, fnc_init.cliflags_diff},
+	    {"diff", "Show changes to versioned files introduced with a given "
+	    "commit.", cmd_diff, fnc_init.cliflags_diff},
+	    {"tree", "Show repository tree corresponding to a given commit",
+	    cmd_tree, fnc_init.cliflags_tree},
 	    {"blame", "Show commit attribution history for each line of a "
 	    "file.", cmd_blame, fnc_init.cliflags_blame},
 	    {NULL,NULL,NULL, NULL}	/* Sentinel. */
 	},
 
 	/* fnc_usage_cb individual command usage details. */
-	{&usage_timeline, &usage_diff, &usage_blame},
+	{&usage_timeline, &usage_diff, &usage_tree, &usage_blame},
 
 	{ /* cliflags_timeline timeline command related options. */
 	    FCLI_FLAG("T", "tag", "<tag>", &fnc_init.filter_tag,
             "Only display commits with T cards containing <tag>."),
 	    FCLI_FLAG("b", "branch", "<branch>", &fnc_init.filter_branch,
             "Only display commits that reside on the given <branch>."),
-	    FCLI_FLAG("c", "commit", "<sym>", &fnc_init.start_commit.sym,
-            "Open the timeline from commit <sym>. Common valid symbols are:\n"
+	    FCLI_FLAG("c", "commit", "<commit>", &fnc_init.start_commit.sym,
+            "Open the timeline from <commit>. Common symbols are:\n"
             "\tSHA{1,3} hash\n"
             "\tSHA{1,3} unique prefix\n"
             "\tbranch\n"
@@ -245,7 +262,7 @@ static struct fnc_setup {
 	}, /* End cliflags_timeline. */
 
 	{ /* cliflags_diff diff command related options. */
-	    FCLI_FLAG_BOOL("c", "no-colour", &fnc_init.nocolour,
+	    FCLI_FLAG_BOOL("C", "no-colour", &fnc_init.nocolour,
             "Disable coloured diff output, which is enabled by default on\n    "
             "supported terminals. Colour can also be toggled with the 'c' "
             "\n    key binding in diff view when this option is not used."),
@@ -267,6 +284,29 @@ static struct fnc_setup {
 	    fcli_cliflag_empty_m
 	}, /* End cliflags_diff. */
 
+	{ /* cliflags_tree tree command related options. */
+	    FCLI_FLAG_BOOL("C", "no-colour", &fnc_init.nocolour,
+            "Disable coloured output, which is enabled by default on supported"
+            "\n    terminals. Colour can also be toggled with the 'c' key "
+            "binding when\n    this option is not used."),
+	    FCLI_FLAG("c", "commit", "<commit>", &fnc_init.start_commit.sym,
+            "Display tree that reflects repository state as at <commit>.\n"
+            "    Common symbols are:"
+            "\n\tSHA{1,3} hash\n"
+            "\tSHA{1,3} unique prefix\n"
+            "\tbranch\n"
+            "\ttag:TAG\n"
+            "\troot:BRANCH\n"
+            "\tISO8601 date\n"
+            "\tISO8601 timestamp\n"
+            "\t{tip,current,prev,next}\n    "
+            "For a complete list of symbols see Fossil's Check-in Names:\n    "
+            "https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki"),
+	    FCLI_FLAG_BOOL("h", "help", NULL,
+            "Display tree command help and usage."),
+	    fcli_cliflag_empty_m
+	}, /* End cliflags_tree. */
+
 	{ /* cliflags_blame blame command related options. */
 	    FCLI_FLAG_BOOL("h", "help", NULL,
             "Display blame command help and usage."),
@@ -287,7 +327,8 @@ enum date_string {
 enum fnc_view_id {
 	FNC_VIEW_TIMELINE,
 	FNC_VIEW_DIFF,
-	FNC_VIEW_BLAME,
+	FNC_VIEW_TREE,
+	FNC_VIEW_BLAME
 };
 
 enum fnc_search_mvmnt {
@@ -304,11 +345,15 @@ enum fnc_search_state {
 	SEARCH_FOR_END
 };
 
-enum diff_colours {
+enum fnc_colours {
 	FNC_DIFF_META = 1,
 	FNC_DIFF_MINUS,
 	FNC_DIFF_PLUS,
 	FNC_DIFF_CHNK,
+	FNC_TREE_LINK,
+	FNC_TREE_DIR,
+	FNC_TREE_EXEC,
+	FNC_COMMIT
 };
 
 struct fnc_colour {
@@ -352,6 +397,64 @@ struct commit_queue {
 	int			ncommits;
 };
 
+/*
+ * The following two structs are used to construct the tree of the entire
+ * repository; that is, from the root through to all subdirectories and files.
+ */
+struct fnc_repository_tree {
+	struct fnc_repo_tree_node	*head;     /* Head of repository tree */
+	struct fnc_repo_tree_node	*tail;     /* Final node in the tree. */
+	struct fnc_repo_tree_node	*rootail;  /* Final root level node. */
+};
+
+struct fnc_repo_tree_node {
+	struct fnc_repo_tree_node	*next;	     /* Next node in tree. */
+	struct fnc_repo_tree_node	*prev;	     /* Prev node in tree. */
+	struct fnc_repo_tree_node	*parent_dir; /* Dir containing node. */
+	struct fnc_repo_tree_node	*sibling;    /* Next node in same dir */
+	struct fnc_repo_tree_node	*children;   /* List of node children */
+	struct fnc_repo_tree_node	*lastchild;  /* Last child in list. */
+	char				*basename;   /* Final path component. */
+	char				*path;	     /* Full pathname of node */
+	char				*uuid;	     /* File artifact hash. */
+	mode_t				 mode;	     /* File mode. */
+	double				 mtime;	     /* Mod time of file. */
+	uint_fast16_t			 pathlen;    /* Length of path. */
+	uint_fast16_t			 nparents;   /* Path components sans- */
+						     /* -basename. */
+};
+
+/*
+ * The following two structs represent a given subtree within the repository;
+ * for example, the top level tree and all its elements, or the elements of
+ * the src/ directory (but not any members of src/ subdirectories).
+ */
+struct fnc_tree_object {
+	struct fnc_tree_entry	*entries;  /* Array of tree entries. */
+	int			 nentries; /* Number of tree entries. */
+};
+
+struct fnc_tree_entry {
+	char			*basename; /* Final component of path. */
+	char			*path;	   /* Full pathname of tree entry. */
+	char			*uuid;	   /* File artifact hash. */
+	mode_t			 mode;	   /* File mode. */
+	double			 mtime;	   /* Modification time of file. */
+	int			 idx;	   /* Index of this tree entry. */
+};
+
+/*
+ * Each fnc_tree_object that is _not_ the repository root will have a (list of)
+ * fnc_parent_tree(s) to be tracked.
+ */
+struct fnc_parent_tree {
+	TAILQ_ENTRY(fnc_parent_tree)	 entry;
+	struct fnc_tree_object		*tree;
+	struct fnc_tree_entry		*first_entry_onscreen;
+	struct fnc_tree_entry		*selected_entry;
+	int				 selected_idx;
+};
+
 pthread_mutex_t fnc_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 struct fnc_tl_thread_cx {
@@ -361,6 +464,7 @@ struct fnc_tl_thread_cx {
 	fsl_db			 *db;
 	fsl_stmt		 *q;
 	regex_t			 *regex;
+	char			 *path;	     /* Match commits involving path. */
 	enum fnc_search_state	 *search_status;
 	enum fnc_search_mvmnt	 *searching;
 	int			  spin_idx;
@@ -386,6 +490,7 @@ struct fnc_tl_view_state {
 	struct commit_entry	*matched_commit;
 	struct commit_entry	*search_commit;
 	const char		*curr_ckout_uuid;
+	char			*path;	     /* Match commits involving path. */
 	int			 selected_idx;
 	sig_atomic_t		 quit;
 	pthread_t		 thread_id;
@@ -411,6 +516,27 @@ struct fnc_diff_view_state {
 	bool				 colour;
 };
 
+TAILQ_HEAD(fnc_parent_trees, fnc_parent_tree);
+struct fnc_tree_view_state {			  /* Parent trees of the- */
+	struct fnc_parent_trees		 parents; /* -current subtree. */
+	struct fnc_repository_tree	*repo;    /* The repository tree. */
+	struct fnc_tree_object		*root;    /* Top level repo tree. */
+	struct fnc_tree_object		*tree;    /* Currently displayed tree */
+	struct fnc_tree_entry		*first_entry_onscreen;
+	struct fnc_tree_entry		*last_entry_onscreen;
+	struct fnc_tree_entry		*selected_entry;
+	struct fnc_tree_entry		*matched_entry;
+	fsl_list			 colours;
+	char				*master_branch;
+	char				*tree_label;  /* Headline string. */
+	fsl_uuid_str			 commit_id;
+	fsl_id_t			 rid;
+	int				 ndisplayed;
+	int				 selected_idx;
+	bool				 colour;
+	bool				 show_id;
+};
+
 TAILQ_HEAD(view_tailhead, fnc_view);
 struct fnc_view {
 	TAILQ_ENTRY(fnc_view)	 entries;
@@ -421,6 +547,7 @@ struct fnc_view {
 	union {
 		struct fnc_diff_view_state	diff;
 		struct fnc_tl_view_state	timeline;
+		struct fnc_tree_view_state	tree;
 		/* struct fnc_blame_view_state	blame; */
 	} state;
 	enum fnc_view_id	 vid;
@@ -453,7 +580,8 @@ static volatile sig_atomic_t rec_sigcont;
 static void		 fnc_show_version(void);
 static int		 init_curses(void);
 static struct fnc_view	*view_open(int, int, int, int, enum fnc_view_id);
-static int		 open_timeline_view(struct fnc_view *);
+static int		 open_timeline_view(struct fnc_view *, fsl_id_t,
+			    const char *);
 static int		 view_loop(struct fnc_view *);
 static int		 show_timeline_view(struct fnc_view *);
 static void		*tl_producer_thread(void *);
@@ -472,7 +600,7 @@ static int		 view_input(struct fnc_view **, int *,
 			    struct fnc_view *, struct view_tailhead *);
 static void		 help(void);
 static void		 padpopup(WINDOW *, const char **, const char *);
-void			 centerprint(WINDOW *, int, int, int, const char *,
+static void		 centerprint(WINDOW *, int, int, int, const char *,
 			    chtype);
 static int		 tl_input_handler(struct fnc_view **, struct fnc_view *,
 			    int);
@@ -493,7 +621,6 @@ static int		 init_diff_commit(struct fnc_view **, int,
 static int		 open_diff_view(struct fnc_view *,
 			    struct fnc_commit_artifact *, int, bool, bool, bool,
 			    struct fnc_view *);
-static int		 set_diff_colours(fsl_list *);
 static void		 show_diff_status(struct fnc_view *);
 static int		 create_diff(struct fnc_diff_view_state *);
 static int		 create_changeset(struct fnc_commit_artifact *);
@@ -530,6 +657,43 @@ static int		 set_selected_commit(struct fnc_diff_view_state *,
 static int		 diff_search_init(struct fnc_view *);
 static int		 diff_search_next(struct fnc_view *);
 static int		 view_close(struct fnc_view *);
+static int		 map_repo_path(char **);
+static bool		 path_is_child(const char *, const char *, size_t);
+static int		 path_skip_common_ancestor(char **, const char *,
+			    size_t, const char *, size_t);
+static bool		 fnc_path_is_root_dir(const char *);
+/* static bool		 fnc_path_is_cwd(const char *); */
+static int		 open_tree_view(struct fnc_view *, const char *);
+static int		 create_repository_tree(struct fnc_repository_tree **,
+			    fsl_uuid_str *, fsl_id_t);
+static int		 tree_builder(struct fnc_repository_tree *,
+			    struct fnc_tree_object **, const char *);
+/* static void		 delete_tree_node(struct fnc_tree_entry **, */
+/*			    struct fnc_tree_entry *); */
+static int		 link_tree_node(struct fnc_repository_tree *,
+			    const char *, const char *, fsl_time_t);
+static int		 show_tree_view(struct fnc_view *);
+static int		 tree_input_handler(struct fnc_view **,
+			    struct fnc_view *, int);
+static int		 tree_search_init(struct fnc_view *);
+static int		 tree_search_next(struct fnc_view *);
+static int		 tree_entry_path(char **, struct fnc_parent_trees *,
+			    struct fnc_tree_entry *);
+static int		 draw_tree(struct fnc_view *, const char *);
+static int		 timeline_tree_entry(struct fnc_view **, int,
+			    struct fnc_tree_view_state *);
+static void		 tree_scroll_up(struct fnc_tree_view_state *, int);
+static void		 tree_scroll_down(struct fnc_tree_view_state *, int);
+static int		 visit_subtree(struct fnc_tree_view_state *,
+			    struct fnc_tree_object *);
+static int		 tree_entry_get_symlink_target(char **,
+			    struct fnc_tree_entry *);
+static int		 match_tree_entry(struct fnc_tree_entry *, regex_t *);
+static void		 fnc_object_tree_close(struct fnc_tree_object *);
+static void		 fnc_close_repository_tree(struct fnc_repository_tree *);
+static void		 view_set_child(struct fnc_view *, struct fnc_view *);
+static int		 view_close_child(struct fnc_view *);
+static int		 close_tree_view(struct fnc_view *);
 static int		 close_timeline_view(struct fnc_view *);
 static int		 close_diff_view(struct fnc_view *);
 static int		 view_resize(struct fnc_view *);
@@ -544,6 +708,16 @@ static void		 sigwinch_handler(int);
 static void		 sigpipe_handler(int);
 static void		 sigcont_handler(int);
 static char		*fnc_strsep (char **, const char *);
+#ifdef __linux__
+static size_t		 fnc_strlcat(char *, const char *, size_t);
+static size_t		 fnc_strlcpy(char *, const char *, size_t);
+#endif
+static int		 set_colours(fsl_list *, enum fnc_view_id vid);
+static int		 match_colour(const void *, const void *);
+static bool		 fnc_home(struct fnc_view *);
+static struct fnc_colour	*get_colour(fsl_list *, int);
+static struct fnc_tree_entry	*get_tree_entry(struct fnc_tree_object *,
+				    int);
 
 int
 main(int argc, const char **argv)
@@ -618,6 +792,7 @@ cmd_timeline(fcli_command const *argv)
 	struct fnc_view	*v;
 	fsl_cx		*f = fcli_cx();
 	fsl_id_t	 rid = -1;
+	char		*path = NULL;
 	int		 rc = 0;
 
 	rc = fcli_process_flags(argv->flags);
@@ -630,7 +805,7 @@ cmd_timeline(fcli_command const *argv)
 		ptr = NULL;
 		errno = 0;
 
-		fnc_init.nrecords.limit = strtol(s, (char **)&ptr, 10);
+		fnc_init.nrecords.limit = strtonum(s, INT_MIN, INT_MAX, &ptr);
 		if (errno == ERANGE)
 			return fsl_cx_err_set(f, FSL_RC_RANGE,
 			    "<n> out of range: -n|--limit=%s [%s]", s, ptr);
@@ -653,25 +828,226 @@ cmd_timeline(fcli_command const *argv)
 			fnc_init.start_commit.rid = rid;
 	}
 
-	rc = init_curses();
+	rc = map_repo_path(&path);
+	if (!rc)
+		rc = init_curses();
 	if (rc)
-		return fsl_cx_err_set(f, fsl_errno_to_rc(rc, FSL_RC_ERROR),
-		    "can not initialise ncurses");
+		goto end;
 	v = view_open(0, 0, 0, 0, FNC_VIEW_TIMELINE);
-	if (v == NULL)
-		return fsl_cx_err_set(f, FSL_RC_ERROR, "view_open() failed");
-	rc = open_timeline_view(v);
-	if (rc)
-		return rc;
-
-	return view_loop(v);
+	if (v == NULL) {
+		fcli_err_set(FSL_RC_ERROR, "%s::%s:%d view_open",
+		    __func__, __FILE__, __LINE__);
+		goto end;
+	}
+	rc = open_timeline_view(v, rid, path);
+	if (!rc)
+		rc = view_loop(v);
+end:
+	fsl_free(path);
+	return rc;
 }
+
+static int
+map_repo_path(char **requested_path)
+{
+	fsl_cx		*f = fcli_cx();
+	fsl_buffer	 buf = fsl_buffer_empty;
+	char		*canonpath = NULL, *ckoutdir = NULL, *path = NULL;
+	size_t		 len;
+	int		 rc = 0;
+	bool		 root;
+
+	*requested_path = NULL;
+
+	/* If no path argument is supplied, default to repository root. */
+	if (!fcli_next_arg(false)) {
+		*requested_path = fsl_strdup("/");
+		if (*requested_path == NULL)
+			return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
+			    __func__, __FILE__, __LINE__);
+		return rc;
+	}
+
+	canonpath = fsl_strdup(fcli_next_arg(true));
+	if (canonpath == NULL) {
+		rc = fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
+			    __func__, __FILE__, __LINE__);
+		goto end;
+	}
+
+	/*
+	 * Check if not in repository root or if supplied path is relative
+	 * to determine virtual root path for canonicalising.
+	 */
+	rc = fsl_cx_getcwd(f, &buf);
+	ckoutdir = fsl_strdup(f->ckout.dir);
+	ckoutdir[f->ckout.dirLen - 1] = '\0';
+	if (!rc)
+		root = fsl_strcmp(ckoutdir, fsl_buffer_cstr(&buf)) == 0;
+	else
+		goto end;
+	fsl_buffer_reuse(&buf);
+	rc = fsl_ckout_filename_check(f, (canonpath[0] == '.' || !root) ?
+	    true : false, canonpath, &buf);
+	if (rc)
+		goto end;
+	fsl_free(canonpath);
+	canonpath = fsl_strdup(fsl_buffer_str(&buf));
+
+	if (canonpath[0] == '\0') {
+		path = fsl_strdup(canonpath);
+		if (path == NULL) {
+			rc = fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
+			    __func__, __FILE__, __LINE__);
+			goto end;
+		}
+	} else {
+		fsl_buffer_reuse(&buf);
+		rc = fsl_file_canonical_name2(f->ckout.dir, canonpath, &buf,
+		    false);
+		if (rc)
+			goto end;
+		path = fsl_strdup(fsl_buffer_str(&buf));
+		if (path == NULL) {
+			rc = fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
+			    __func__, __FILE__, __LINE__);
+			goto end;
+		}
+		if (access(path, F_OK) != 0) {
+			rc = fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_ACCESS),
+			    "%s::%s:%d file doesn't exist or inaccessible [%s]",
+			    __func__, __FILE__, __LINE__, path);
+			goto end;
+		}
+		/* If path is ckout dir, clear it for future checks. */
+		len = fsl_strlen(path);
+		if (!fsl_strcmp(path, f->ckout.dir)) {
+			fsl_free(path);
+			path = fsl_strdup("");
+			if (path == NULL) {
+				rc = fcli_err_set(FSL_RC_OOM,
+				    "%s::%s:%d fsl_strdup", __func__, __FILE__,
+				    __LINE__);
+				goto end;
+			}
+		} else if (len > f->ckout.dirLen && path_is_child(path,
+		    f->ckout.dir, f->ckout.dirLen)) {
+			/* Matched a path on-disk within the repository. */
+			char *child;
+			/* Strip common prefix with repository path. */
+			rc = path_skip_common_ancestor(&child, f->ckout.dir,
+			    f->ckout.dirLen, path, len);
+			if (rc)
+				goto end;
+			fsl_free(path);
+			path = child;
+		} else {
+			/*
+			 * Matched a path on-disk outside the repository; treat
+			 * as relative to repo root. (Though this should fail.)
+			 */
+			fsl_free(path);
+			path = canonpath;
+			canonpath = NULL;
+		}
+	}
+
+	/* Make path absolute from repository root. */
+	if (path[0] != '/') {
+		char *abspath;
+		if ((abspath = fsl_mprintf("/%s", path)) == NULL) {
+			rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d fsl_mprintf",
+			    __func__, __FILE__, __LINE__);
+			goto end;
+		}
+		fsl_free(path);
+		path = abspath;
+	}
+
+	/* Trim trailing slash if it exists. */
+	if (path[fsl_strlen(path) - 1] == '/')
+		path[fsl_strlen(path) - 1] = '\0';
+
+
+end:
+	fsl_buffer_clear(&buf);
+	fsl_free(canonpath);
+	fsl_free(ckoutdir);
+	if (rc)
+		fsl_free(path);
+	else
+		*requested_path = path;
+	return rc;
+}
+
+static bool
+path_is_child(const char *child, const char *parent, size_t parentlen)
+{
+	if (parentlen == 0 || fnc_path_is_root_dir(parent))
+		return true;
+
+	if (fsl_strncmp(parent, child, parentlen) != 0)
+		return false;
+	if (child[parentlen - 1 /* Trailing slash */] != '/')
+		return false;
+
+	return true;
+}
+
+static bool
+fnc_path_is_root_dir(const char *path)
+{
+	while (*path == '/')
+		++path;
+	return (*path == '\0');
+}
+
+static int
+path_skip_common_ancestor(char **child, const char *parent_abspath,
+    size_t parentlen, const char *abspath, size_t len)
+{
+	size_t	bufsz;
+	int	rc = 0;
+
+	*child = NULL;
+
+	if (parentlen >= len)
+		return fcli_err_set(FSL_RC_TYPE, "%s::%s:%d invalid path",
+		    __func__, __FILE__, __LINE__);
+	if (fsl_strncmp(parent_abspath, abspath, parentlen) != 0)
+		return fcli_err_set(FSL_RC_TYPE, "%s::%s:%d invalid path",
+		    __func__, __FILE__, __LINE__);
+	if (!fnc_path_is_root_dir(parent_abspath) &&
+	    abspath[parentlen - 1 /* Trailing slash */] != '/')
+		return fcli_err_set(FSL_RC_TYPE, "%s::%s:%d invalid path",
+		    __func__, __FILE__, __LINE__);
+	while (abspath[parentlen] == '/')
+		++abspath;
+	bufsz = len - parentlen + 1;
+	*child = fsl_malloc(bufsz);
+	if (*child == NULL)
+		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_malloc",
+		    __func__, __FILE__, __LINE__);
+	if (strlcpy(*child, abspath + parentlen, bufsz) >= bufsz) {
+		rc = fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_RANGE),
+		    "%s::%s:%d strlcpy", __func__, __FILE__, __LINE__);
+		fsl_free(*child);
+		*child = NULL;
+	}
+	return rc;
+}
+
+#if 0
+static bool
+fnc_path_is_cwd(const char *path)
+{
+	return (path[0] == '.' && path[1] == '\0');
+}
+#endif
 
 static int
 init_curses(void)
 {
-	int rc = 0;
-
 	initscr();
 	cbreak();
 	noecho();
@@ -688,17 +1064,20 @@ init_curses(void)
 		use_default_colors();
 	}
 
-	if ((rc = sigaction(SIGPIPE,
-	    &(struct sigaction){{sigpipe_handler}}, NULL)))
-		return rc;
-	if ((rc = sigaction(SIGWINCH,
-	    &(struct sigaction){{sigwinch_handler}}, NULL)))
-		return rc;
-	if ((rc = sigaction(SIGCONT,
-	    &(struct sigaction){{sigcont_handler}}, NULL)))
-		return rc;
+	if (sigaction(SIGPIPE, &(struct sigaction){{sigpipe_handler}}, NULL)
+	    == -1)
+		return fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_ERROR),
+		    "%s::%s:%d sigaction", __func__, __FILE__, __LINE__);
+	if (sigaction(SIGWINCH, &(struct sigaction){{sigwinch_handler}}, NULL)
+	    == -1)
+		return fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_ERROR),
+		    "%s::%s:%d sigaction", __func__, __FILE__, __LINE__);
+	if (sigaction(SIGCONT, &(struct sigaction){{sigcont_handler}}, NULL)
+	    == -1)
+		return fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_ERROR),
+		    "%s::%s:%d sigaction", __func__, __FILE__, __LINE__);
 
-	return rc;
+	return 0;
 }
 
 static struct fnc_view *
@@ -733,7 +1112,7 @@ view_open(int nlines, int ncols, int start_ln, int start_col,
 }
 
 static int
-open_timeline_view(struct fnc_view *view)
+open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 {
 	struct fnc_tl_view_state	*s = &view->state.timeline;
 	fsl_cx				*f = fcli_cx();
@@ -743,15 +1122,35 @@ open_timeline_view(struct fnc_view *view)
 	fsl_id_t			 idtag = 0;
 	int				 idx, rc = 0;
 
+	if (path != s->path) {
+		fsl_free(s->path);
+		s->path = fsl_strdup(path);
+		if (s->path == NULL)
+			return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
+			    __func__, __FILE__, __LINE__);
+	}
+
+	/*
+	 * TODO: See about opening this API.
+	 * If a path has been supplied, create a table of all path's
+	 * ancestors and add "AND blob.rid IN fsl_computed_ancestors" to query.
+	 */
+	/* if (path[1]) { */
+	/*	rc = fsl_compute_ancestors(db, rid, 0, 0); */
+	/*	if (rc) */
+	/*		return fcli_err_set(FSL_RC_DB, */
+	/*		    "%s::%s:%d fsl_compute_ancestors", */
+	/*		    __func__, __FILE__, __LINE__); */
+	/* } */
 	s->thread_cx.q = NULL;
 	/* s->selected_idx = 0; */	/* Unnecessary? */
 
 	TAILQ_INIT(&s->commits.head);
 	s->commits.ncommits = 0;
 
-	if (fnc_init.start_commit.rid)
+	if (rid != -1)
 		startdate = fsl_mprintf("(SELECT mtime FROM event "
-		    "WHERE objid=%d)", fnc_init.start_commit.rid);
+		    "WHERE objid=%d)", rid);
 	else
 		fsl_ckout_version_info(f, NULL, &s->curr_ckout_uuid);
 
@@ -841,6 +1240,30 @@ open_timeline_view(struct fnc_view *view)
 		fsl_free(startdate);
 	}
 
+	/*
+	 * If path is not root ("/"), a versioned path in the repository has
+	 * been requested, only retrieve commits involving path.
+	 */
+	if (path[1]) {
+		fsl_buffer_appendf(&sql,
+		    " AND EXISTS(SELECT 1 FROM mlink"
+		    " WHERE mlink.mid = event.objid"
+		    " AND mlink.fnid IN ");
+		if (fsl_cx_is_case_sensitive(f)) {
+			fsl_buffer_appendf(&sql,
+			    "(SELECT fnid FROM filename"
+			    " WHERE name = %Q OR name GLOB '%q/*')",
+			    path + 1, path + 1);  /* Skip prepended slash. */
+		} else {
+			fsl_buffer_appendf(&sql,
+			    "(SELECT fnid FROM filename"
+			    " WHERE name = %Q COLLATE nocase"
+			    " OR lower(name) GLOB lower('%q/*'))",
+			    path + 1, path + 1);  /* Skip prepended slash. */
+		}
+		fsl_buffer_append(&sql, ")", 1);
+	}
+
 	fsl_buffer_appendf(&sql, " ORDER BY event.mtime DESC");
 
 	if (fnc_init.nrecords.limit > 0)
@@ -868,6 +1291,7 @@ open_timeline_view(struct fnc_view *view)
 	s->thread_cx.searching = &view->searching;
 	s->thread_cx.search_status = &view->search_status;
 	s->thread_cx.regex = &view->regex;
+	s->thread_cx.path = s->path;
 
 end:
 	fsl_buffer_clear(&sql);
@@ -1388,8 +1812,21 @@ draw_commits(struct fnc_view *view)
 	}
 	ncols_needed = fsl_strlen(type) + fsl_strlen(idxstr) + FSL_STRLEN_K256 +
 	    (fsl_strcmp(type, "wiki") ? 1 : 0);
-	if ((headln = fsl_mprintf("%s%c%.*s%s", type ? type : "", type ?
-	    ' ' : SPINNER[tcx->spin_idx], view->ncols < ncols_needed ?
+	/* If a path has been requested, display it in the headline. */
+	if (s->path[1]) {
+		if ((headln = fsl_mprintf("%s%c%.*s %s%s", type ? type : "",
+		    type ? ' ' : SPINNER[tcx->spin_idx], uuid && view->ncols <
+		    ncols_needed ? view->ncols - (ncols_needed -
+		    FSL_STRLEN_K256) : FSL_STRLEN_K256, uuid ? uuid :
+		    "........................................",
+		    s->path, idxstr)) == NULL) {
+			rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d fsl_mprintf",
+			    __func__, __FILE__, __LINE__);
+			headln = NULL;
+			goto end;
+		}
+	} else if ((headln = fsl_mprintf("%s%c%.*s%s", type ? type : "", type ?
+	    ' ' : SPINNER[tcx->spin_idx], uuid && view->ncols < ncols_needed ?
 	    view->ncols - (ncols_needed - FSL_STRLEN_K256) : FSL_STRLEN_K256,
 	    uuid ? uuid : "........................................", idxstr))
 	    == NULL) {
@@ -1526,7 +1963,7 @@ formatln(wchar_t **ptr, int *wstrlen, const char *mbstr, int column_limit,
 		} else if (width == -1) {
 			if (wline[i] == L'\t') {
 				width = TABSIZE -
-				((cols + column_limit) % TABSIZE);
+				    ((cols + column_limit) % TABSIZE);
 			} else {
 				width = 1;
 				wline[i] = L'.';
@@ -1563,7 +2000,7 @@ multibyte_to_wchar(const char *src, wchar_t **dst, size_t *dstlen)
 	 * https://en.cppreference.com/w/cpp/string/multibyte/mbstowcs
 	 */
 	*dstlen = mbstowcs(NULL, src, 0);
-	if (*dstlen < 0) {
+	if (*dstlen == (size_t)-1) {
 		if (errno == EILSEQ)
 			return fcli_err_set(FSL_RC_RANGE,
 			    "invalid multibyte character");
@@ -1603,7 +2040,7 @@ end:
  * to limit commit comment summary lines to a maximum 50 characters, and most
  * plaintext-based conventions suggest not exceeding 72-80 characters.
  *
- * When < 120 columns, the (abbreviated 9-character) UUID will be elided.
+ * When < 110 columns, the (abbreviated 9-character) UUID will be elided.
  */
 static int
 write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
@@ -1647,7 +2084,7 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	if (rc)
 		goto end;
 	waddwstr(view->window, usr_wcstr);
-	pad = fsl_mprintf("%*s",  max_usrlen - usrlen + 2, " ");
+	pad = fsl_mprintf("%*c",  max_usrlen - usrlen + 2, ' ');
 	waddstr(view->window, pad);
 	col_pos += (max_usrlen + 2);
 	if (col_pos > view->ncols)
@@ -2520,6 +2957,8 @@ close_timeline_view(struct fnc_view *view)
 	rc = join_tl_thread(s);
 	fnc_free_commits(&s->commits);
 	regfree(&view->regex);
+	fsl_free(s->path);
+	s->path = NULL;
 
 	return rc;
 }
@@ -2682,10 +3121,10 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	invert ? s->diff_flags |= FSL_DIFF_INVERT : 0;
 	s->timeline_view = timeline_view;
 	s->colours = fsl_list_empty;
-	s->colour = !fnc_init.nocolour;
+	s->colour = !fnc_init.nocolour && has_colors();
 
-	if (s->colour && has_colors())
-		set_diff_colours(&s->colours);
+	if (s->colour)
+		set_colours(&s->colours, FNC_VIEW_DIFF);
 	if (timeline_view && screen_is_split(view))
 		show_timeline_view(timeline_view); /* draw vborder */
 	show_diff_status(view);
@@ -2702,47 +3141,6 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	view->close = close_diff_view;
 	view->search_init = diff_search_init;
 	view->search_next = diff_search_next;
-
-	return rc;
-}
-
-static int
-set_diff_colours(fsl_list *s)
-{
-	struct fnc_colour	*colour;
-	fsl_size_t		 idx;
-	const char		*regexp[4] = {
-				    "^((checkin|wiki|ticket|technote) [0-9a-f]|"
-				    "hash [+-] |\\[[+~>-]] |[+-]{3} )",
-				    "^-", "^\\+", "^@@"
-				 };
-	int			 pairs[4][2] = {
-				    {FNC_DIFF_META, COLOR_GREEN},
-				    {FNC_DIFF_MINUS, COLOR_MAGENTA},
-				    {FNC_DIFF_PLUS, COLOR_CYAN},
-				    {FNC_DIFF_CHNK, COLOR_YELLOW}
-				 };
-	int			 rc = 0;
-
-	for (idx = 0; idx < nitems(regexp); ++idx) {
-		colour = fsl_malloc(sizeof(*colour));
-		if (colour == NULL)
-			return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_malloc",
-			    __func__, __FILE__, __LINE__);
-		rc = regcomp(&colour->regex, regexp[idx],
-		    REG_EXTENDED | REG_NEWLINE | REG_NOSUB);
-		if (rc) {
-			static char regerr[512];
-			regerror(rc, &colour->regex, regerr, sizeof(regerr));
-			free(colour);
-			return fcli_err_set(FSL_RC_ERROR,
-			    "%s::%s:%d regcomp(%s) -> %s", __func__, __FILE__,
-			    __LINE__, regexp[idx], regerr);
-		}
-		colour->scheme = pairs[idx][0];
-		init_pair(colour->scheme, pairs[idx][1], -1);
-		fsl_list_append(s, colour);
-	}
 
 	return rc;
 }
@@ -3323,6 +3721,7 @@ diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
 					break;
 				}
 			} while (cf);
+			fsl_deck_finalize(&d);
 		}
 		if (!xminus)
 			xminus = fsl_strdup(NULL_DEVICE);
@@ -3776,9 +4175,9 @@ write_diff(struct fnc_view *view, char *headln)
 	if (headln) {
 		if ((line = fsl_mprintf("[%d/%d] %s", (s->first_line_onscreen -
 		    1 + s->current_line), nlines, headln)) == NULL)
-			return fcli_err_set(fsl_errno_to_rc(errno,
-			    FSL_RC_ERROR), "%s::%s:%d fsl_mprintf", __func__,
-			    __FILE__, __LINE__);
+			return fcli_err_set(FSL_RC_RANGE,
+			    "%s::%s:%d fsl_mprintf", __func__, __FILE__,
+			    __LINE__);
 		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0);
 		fsl_free(line);
 		fsl_free(headln);
@@ -4391,6 +4790,7 @@ usage(void)
 	fsl_fprintf(f, "[usage]\n\n");
 	usage_timeline();
 	usage_diff();
+	usage_tree();
 	usage_blame();
 	fsl_fprintf(f, "  note: %s "
 	    "with no args defaults to the timeline command.\n\n",
@@ -4403,9 +4803,9 @@ static void
 usage_timeline(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " %s timeline [-T tag] [-b branch] [-c sym]"
-	    " [-h|--help] [-n n] [-t type] [-u user] [-z|--utc]\n"
-	    "  e.g.: %s timeline --type ci -u jimmy\n\n",
+	    " %s timeline [-T tag] [-b branch] [-c commit]"
+	    " [-h|--help] [-n n] [-t type] [-u user] [-z|--utc] [path]\n"
+	    "  e.g.: %s timeline --type ci -u jimmy src/frobnitz.c\n\n",
 	    fcli_progname(), fcli_progname());
 }
 
@@ -4413,9 +4813,18 @@ static void
 usage_diff(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " %s diff [-c|--no-colour] [-h|--help] [-i|--invert]"
+	    " %s diff [-C|--no-colour] [-h|--help] [-i|--invert]"
 	    " [-q|--quiet] [-w|--whitespace] [-x|--context n] "
-	    "[sym ...]\n  e.g.: %s diff --context 3 d34db33f c0ff33\n\n",
+	    "[commit ...]\n  e.g.: %s diff --context 3 d34db33f c0ff33\n\n",
+	    fcli_progname(), fcli_progname());
+}
+
+static void
+usage_tree(void)
+{
+	fsl_fprintf(fnc_init.err ? stderr : stdout,
+	    " %s tree [-C|--no-colour] [-h|--help] [-c commit]\n"
+	    "  e.g.: %s tree -c d34dc0d3\n\n" ,
 	    fcli_progname(), fcli_progname());
 }
 
@@ -4423,7 +4832,7 @@ static void
 usage_blame(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " %s blame [-h|--help] [-c hash] artifact\n"
+	    " %s blame [-h|--help] [-c commit] artifact\n"
 	    "  e.g.: %s blame -c d34db33f src/foo.c\n\n" ,
 	    fcli_progname(), fcli_progname());
 }
@@ -4434,10 +4843,9 @@ cmd_diff(fcli_command const *argv)
 	fsl_cx				*f = fcli_cx();
 	struct fnc_view			*view;
 	struct fnc_commit_artifact	*commit = NULL;
-	const char			*artifact1, *artifact2, *s;
-	char				*ptr;
+	const char			*artifact1, *artifact2, *ptr, *s;
 	fsl_id_t			 prid = -1, rid = -1;
-	int				 context, rc = 0;
+	int				 context = 5, rc = 0;
 
 	rc = fcli_process_flags(argv->flags);
 	if (rc || (rc = fcli_has_unused_flags(false)))
@@ -4504,35 +4912,1334 @@ cmd_diff(fcli_command const *argv)
 		    (!fsl_rid_is_a_checkin(f, rid) && rid != 0) ?
 		    artifact2 : artifact1);
 
-	init_curses();
+	rc = init_curses();
+	if (rc)
+		goto end;
 
 	if (fnc_init.context) {
 		s = fnc_init.context;
-		context = strtol(s, &ptr, 10);
+		context = strtonum(s, INT_MIN, INT_MAX, &ptr);
 		if (errno == ERANGE)
-			return fcli_err_set(FSL_RC_RANGE,
+			rc = fcli_err_set(FSL_RC_RANGE,
 			    "out of range: -x|--context=%s [%s]", s, ptr);
 		else if (errno != 0 || errno == EINVAL)
-			return fcli_err_set(FSL_RC_MISUSE,
+			rc = fcli_err_set(FSL_RC_MISUSE,
 			    "not a number: -x|--context=%s [%s]", s, ptr);
 		else if (ptr && *ptr != '\0')
-			return fcli_err_set(FSL_RC_MISUSE,
+			rc = fcli_err_set(FSL_RC_MISUSE,
 			    "invalid char: -x|--context=%s [%s]", s, ptr);
+		if (rc)
+			goto end;
 		context = MIN(DIFF_MAX_CTXT, context);
-	} else
-		context = 5;
+	}
 
 	view = view_open(0, 0, 0, 0, FNC_VIEW_DIFF);
-	if (view == NULL)
-		return fcli_err_set(FSL_RC_OOM, "view_open fail");
+	if (view == NULL) {
+		rc = fcli_err_set(FSL_RC_OOM, "view_open");
+		goto end;
+	}
 
 	rc = open_diff_view(view, commit, context, fnc_init.ws,
 	    fnc_init.invert, !fnc_init.quiet, NULL);
 	if (!rc)
 		rc = view_loop(view);
-
+end:
 	fnc_commit_artifact_close(commit);
 	return rc;
+}
+
+static int
+cmd_tree(fcli_command const *argv)
+{
+	fsl_cx		*f = fcli_cx();
+	struct fnc_view	*view;
+	char		*path = NULL;
+	int		 rc = 0;
+
+	rc = fcli_process_flags(argv->flags);
+	if (rc || (rc = fcli_has_unused_flags(false)))
+		goto end;
+
+	rc = map_repo_path(&path);
+	if (rc)
+		goto end;
+	if (fnc_init.start_commit.sym)
+		rc = fsl_sym_to_rid(f, fnc_init.start_commit.sym,
+		    FSL_SATYPE_CHECKIN, &fnc_init.start_commit.rid);
+	else
+		fsl_ckout_version_info(f, &fnc_init.start_commit.rid, NULL);
+
+	if (rc) {
+		switch (rc) {
+		case FSL_RC_AMBIGUOUS:
+			fcli_err_set(rc, "prefix too ambiguous [%s]",
+			    fnc_init.start_commit.sym);
+			goto end;
+		case FSL_RC_NOT_A_REPO:
+			fcli_err_set(rc, "%s tree needs a local checkout",
+			    fcli_progname());
+			goto end;
+		case FSL_RC_NOT_FOUND:
+			fcli_err_set(rc, "invalid symbolic checkin name [%s]",
+			    fnc_init.start_commit.sym);
+			goto end;
+		case FSL_RC_MISUSE:
+			/* FALL THROUGH */
+		default:
+			goto end;
+		}
+	}
+
+	if (!fsl_rid_is_a_checkin(f, fnc_init.start_commit.rid)) {
+		fcli_err_set(FSL_RC_TYPE, "%s tree can only open a check-in",
+		    fcli_progname());
+		goto end;
+	}
+
+	rc = init_curses();
+	if (rc)
+		goto end;
+
+	view = view_open(0, 0, 0, 0, FNC_VIEW_TREE);
+	if (view == NULL) {
+		fcli_err_set(FSL_RC_OOM, "view_open");
+		goto end;
+	}
+
+	rc = open_tree_view(view, path);
+	if (!rc)
+		rc = view_loop(view);
+end:
+	fsl_free(path);
+	return rc;
+}
+
+static int
+open_tree_view(struct fnc_view *view, const char *path)
+{
+	fsl_cx				*f = fcli_cx();
+	struct fnc_tree_view_state	*s = &view->state.tree;
+	int				 rc = 0;
+
+	TAILQ_INIT(&s->parents);
+	s->show_id = false;
+	s->colour = !fnc_init.nocolour && has_colors();
+	s->rid = fnc_init.start_commit.rid;
+	s->commit_id = fsl_rid_to_uuid(f, fnc_init.start_commit.rid);
+	if (s->commit_id == NULL)
+		return fcli_err_set(FSL_RC_AMBIGUOUS,
+		    "%s::%s:%d fsl_rid_to_uuid", __func__, __FILE__, __LINE__);
+
+	/*
+	 * Construct tree of entire repository from which all (sub)tress will
+	 * be derived. This object will be released when this view closes.
+	 */
+	rc = create_repository_tree(&s->repo, &s->commit_id, s->rid);
+	if (rc)
+		return fcli_err_set(FSL_RC_ERROR,
+		    "%s::%s:%d create_repository_tree [%s]",
+		    __func__, __FILE__, __LINE__, s->commit_id);
+	/*
+	 * Open the initial root level of the repository tree now. Subtrees
+	 * opened during traversal are built and destroyed on demand.
+	 */
+	rc = tree_builder(s->repo, &s->root, path);
+	if (rc)
+		goto end;
+	s->tree = s->root;
+
+	if ((s->tree_label = fsl_mprintf("checkin %s", s->commit_id)) == NULL) {
+		rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d fsl_mprintf",
+		    __func__, __FILE__, __LINE__);
+		goto end;
+	}
+
+	s->first_entry_onscreen = &s->tree->entries[0];
+	s->selected_entry = &s->tree->entries[0];
+
+	if (s->colour)
+		set_colours(&s->colours, FNC_VIEW_TREE);
+
+	view->show = show_tree_view;
+	view->input = tree_input_handler;
+	view->close = close_tree_view;
+	view->search_init = tree_search_init;
+	view->search_next = tree_search_next;
+end:
+	if (rc)
+		close_tree_view(view);
+	return rc;
+}
+
+/*
+ * This routine constructs the repository tree; from this tree, all displayed
+ * (sub)trees are derived.
+ */
+static int
+create_repository_tree(struct fnc_repository_tree **repo, fsl_uuid_str *id,
+    fsl_id_t rid)
+{
+	fsl_cx				*f = fcli_cx();
+	struct fnc_repository_tree	*ptr;
+	fsl_deck			 d = fsl_deck_empty;
+	const fsl_card_F		*cf = NULL;
+	int				 rc = 0;
+
+	ptr = fsl_malloc(sizeof(struct fnc_repository_tree));
+	if (ptr == NULL)
+		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_malloc",
+		    __func__, __FILE__, __LINE__);
+	memset(ptr, 0, sizeof(struct fnc_repository_tree));
+
+	rc = fsl_deck_load_rid(fcli_cx(), &d, fnc_init.start_commit.rid,
+	    FSL_SATYPE_CHECKIN);
+	if (rc)
+		return fcli_err_set(FSL_RC_ERROR,
+		    "%s::%s:%d fsl_deck_load_rid [%d]", __func__, __FILE__,
+		    __LINE__, fnc_init.start_commit.rid);
+	rc = fsl_deck_F_rewind(&d);
+	if (!rc)
+		rc = fsl_deck_F_next(&d, &cf);
+	if (rc)
+		goto end;;
+
+	while (cf) {
+		char		*filename = NULL, *uuid = NULL;
+		fsl_time_t	 mtime;
+
+		filename = fsl_strdup(cf->name);
+		if (filename == NULL) {
+			rc = fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
+			    __func__, __FILE__, __LINE__);
+			goto end;
+		}
+		uuid = fsl_strdup(cf->uuid);
+		if (uuid == NULL) {
+			rc = fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
+			    __func__, __FILE__, __LINE__);
+			goto end;
+		}
+		rc = fsl_mtime_of_F_card(f, rid, cf, &mtime);
+		rc = link_tree_node(ptr, filename, uuid, mtime);
+		fsl_free(filename);
+		fsl_free(uuid);
+		if (!rc)
+			rc = fsl_deck_F_next(&d, &cf);
+		if (rc)
+			goto end;
+	}
+end:
+	fsl_deck_finalize(&d);
+
+	*repo = ptr;
+	return rc;
+}
+
+/*
+ * This routine constructs the (sub)trees that are displayed. Each directory
+ * and its contents form a subtree.
+ */
+static int
+tree_builder(struct fnc_repository_tree *repo, struct fnc_tree_object **tree,
+    const char *dir)
+{
+	struct fnc_tree_entry		*te = NULL;
+	struct fnc_repo_tree_node	*tn = NULL;
+	int				 i = 0;
+
+	*tree = NULL;
+	*tree = fsl_malloc(sizeof(**tree));
+	if (*tree == NULL)
+		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_malloc",
+		    __func__, __FILE__, __LINE__);
+	memset(*tree, 0, sizeof(**tree));
+
+	/* Count how many elements will comprise the tree. */
+	for(tn = repo->head; tn; tn = tn->next) {
+		if ((!tn->parent_dir && fsl_strcmp(dir, "/")) ||
+		    (tn->parent_dir && fsl_strcmp(dir, tn->parent_dir->path)))
+			continue;
+		++i;
+	}
+	(*tree)->entries = calloc(i, sizeof(struct fnc_tree_entry));
+	if ((*tree)->entries == NULL)
+		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d calloc",
+		    __func__, __FILE__, __LINE__);
+	/* Construct the tree to be displayed. */
+	for(tn = repo->head, i = 0; tn; tn = tn->next) {
+		if ((!tn->parent_dir && fsl_strcmp(dir, "/")) ||
+		    (tn->parent_dir && fsl_strcmp(dir, tn->parent_dir->path)))
+			continue;
+		te = &(*tree)->entries[i];
+		te->mode = tn->mode;
+		te->mtime = tn->mtime;
+		te->basename = fsl_strdup(tn->basename);
+		if (te->basename == NULL)
+			return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
+			    __func__, __FILE__, __LINE__);
+		te->path = fsl_strdup(tn->path);
+		if (te->path == NULL)
+			return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
+			    __func__, __FILE__, __LINE__);
+		te->uuid = fsl_strdup(tn->uuid);
+		if (te->uuid == NULL && !S_ISDIR(te->mode))
+			return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
+			    __func__, __FILE__, __LINE__);
+		te->idx = i++;
+	}
+	(*tree)->nentries = i;
+
+	return 0;
+}
+
+#if 0
+static void
+delete_tree_node(struct fnc_tree_entry **head, struct fnc_tree_entry *del)
+{
+	struct fnc_tree_entry *temp = *head, *prev;
+
+	if (temp == del) {
+		*head = temp->next;
+		fsl_free(temp);
+		return;
+	}
+
+	while (temp != NULL && temp != del) {
+		prev = temp;
+		temp = temp->next;
+	}
+
+	if (temp == NULL)
+		return;
+
+	prev->next = temp->next;
+
+	fsl_free(temp);
+}
+#endif
+
+/*
+ * This routine inserts nodes into the doubly-linked repository tree.
+ *   tree    The repository tree into which nodes are inserted
+ *   path    The repository relative pathname of the versioned file
+ *   uuid    The SHA hash of the file
+ *   mtime   Modification time of the file
+ * Returns 0 on success, non-zero on error.
+ */
+static int
+link_tree_node(struct fnc_repository_tree *tree, const char *path,
+    const char *uuid, fsl_time_t mtime)
+{
+	fsl_cx				*f = fcli_cx();
+	struct fnc_repo_tree_node	*parent_dir;
+	fsl_buffer			 buf = fsl_buffer_empty;
+	struct stat			 s;
+	int				 i, rc = 0;
+
+	parent_dir = tree->tail;
+	while (parent_dir != 0 &&
+	    (strncmp(parent_dir->path, path, parent_dir->pathlen) != 0 ||
+            path[parent_dir->pathlen] != '/'))
+		parent_dir = parent_dir->parent_dir;
+
+	i = parent_dir ? parent_dir->pathlen + 1 : 0;
+
+	while (path[i]) {
+		struct fnc_repo_tree_node	*tn;
+		int				 nodesz, slash = i;
+
+		/* Find slash to demarcate final path component. */
+		while (path[i] && path[i] != '/')
+			i++;
+		nodesz = sizeof(*tn) + i + 1;
+
+		/*
+		 * If not at end of path string, node is a directory so don't
+		 * allocate space for the hash.
+		 */
+		if (uuid != 0 && path[i] == '\0')
+			nodesz += FSL_STRLEN_K256 + 1; /* NUL */
+		tn = fsl_malloc(nodesz);
+		if (tn == NULL)
+			return fcli_err_set(FSL_RC_OOM, "%s::%s:%d",
+			    __func__, __FILE__, __LINE__);
+		memset(tn, 0, sizeof(*tn));
+
+		tn->path = (char *)&tn[1];
+		memcpy(tn->path, path, i);
+		tn->path[i] = '\0';
+		tn->pathlen = i;
+
+		if (uuid != 0 && path[i] == '\0') {
+			tn->uuid = tn->path + i + 1;
+			memcpy(tn->uuid, uuid, fsl_strlen(uuid) + 1);
+		}
+
+		tn->basename = tn->path + slash;
+
+		/* Insert node into DLL or make it the head if first. */
+		if (tree->tail) {
+			tree->tail->next = tn;
+			tn->prev = tree->tail;
+		} else
+			tree->head = tn;
+
+		tree->tail = tn;
+		tn->parent_dir = parent_dir;
+		if (parent_dir) {
+			if (parent_dir->children)
+				parent_dir->lastchild->sibling = tn;
+			else
+				parent_dir->children = tn;
+			tn->nparents = parent_dir->nparents + 1;
+			parent_dir->lastchild = tn;
+		} else {
+			if (tree->rootail)
+				tree->rootail->sibling = tn;
+			tree->rootail = tn;
+		}
+
+		tn->mtime = mtime;
+		while (path[i] == '/')	/* Consume slashes. */
+			++i;
+		parent_dir = tn;
+
+		/* Stat path for tree display features. */
+		rc = fsl_file_canonical_name2(f->ckout.dir, tn->path, &buf,
+		    false);
+		if (!rc)
+			rc = lstat(fsl_buffer_cstr(&buf), &s);
+		if (rc)
+			goto end;
+		tn->mode = s.st_mode;
+		fsl_buffer_reuse(&buf);
+	}
+
+	while (parent_dir && parent_dir->parent_dir) {
+		if (parent_dir->parent_dir->mtime < parent_dir->mtime)
+			parent_dir->parent_dir->mtime = parent_dir->mtime;
+		parent_dir = parent_dir->parent_dir;
+	}
+end:
+	fsl_buffer_clear(&buf);
+	if (rc == -1)
+		return fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_ACCESS),
+		    "%s::%s:%d", __func__, __FILE__, __LINE__);
+	return rc;
+}
+
+static int
+show_tree_view(struct fnc_view *view)
+{
+	struct fnc_tree_view_state	*s = &view->state.tree;
+	char				*treepath;
+	int				 rc = 0;
+
+	rc = tree_entry_path(&treepath, &s->parents, NULL);
+	if (rc)
+		return rc;
+
+	rc = draw_tree(view, treepath);
+	fsl_free(treepath);
+	draw_vborder(view);
+
+	return rc;
+}
+
+/*
+ * Construct absolute repository path of current tree to display in the header.
+ */
+static int
+tree_entry_path(char **path, struct fnc_parent_trees *parents,
+    struct fnc_tree_entry *te)
+{
+	struct fnc_parent_tree	*pt;
+	size_t			 len = 2;  /* Leading slash and NUL. */
+	int			 rc = 0;
+
+	TAILQ_FOREACH(pt, parents, entry)
+		len += strlen(pt->selected_entry->basename) + 1 /* slash */;
+	if (te)
+		len += strlen(te->basename);
+
+	*path = calloc(1, len);
+	if (path == NULL)
+		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d calloc",
+		    __func__, __FILE__, __LINE__);
+
+	(*path)[0] = '/';  /* Make it absolute from the repository root. */
+	pt = TAILQ_LAST(parents, fnc_parent_trees);
+	while (pt) {
+		const char *name = pt->selected_entry->basename;
+		if (strlcat(*path, name, len) >= len) {
+			rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d strlcat",
+			    __func__, __FILE__, __LINE__);
+			goto end;
+		}
+		if (strlcat(*path, "/", len) >= len) {
+			rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d strlcat",
+			    __func__, __FILE__, __LINE__);
+			goto end;
+		}
+		pt = TAILQ_PREV(pt, fnc_parent_trees, entry);
+	}
+	if (te) {
+		if (strlcat(*path, te->basename, len) >= len) {
+			rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d strlcat",
+			    __func__, __FILE__, __LINE__);
+			goto end;
+		}
+	}
+end:
+	if (rc) {
+		fsl_free(*path);
+		*path = NULL;
+	}
+	return rc;
+}
+
+/*
+ * Draw the currently visited tree. Headline view with the checkin's SHA hash,
+ * and write subheader comprised of the tree path. Lexicographically order nodes
+ * (cf. ls(1)) and postfix with identifier corresponding to the file mode as
+ * returned by lstat(2) such that the tree takes the following form:
+ *
+ *  checkin COMMIT-HASH
+ *  /absolute/repository/tree/path/
+ *
+ *   ..
+ *   regularfile
+ *   dir/
+ *   executable*
+ *   symlink@ -> /path/to/source/file
+ *
+ * If the 'i' key binding is entered, prefix each versioned file with its
+ * SHA{1,3} hash. Directories, however, have no such hash UUID to display.
+ */
+static int
+draw_tree(struct fnc_view *view, const char *treepath)
+{
+	struct fnc_tree_view_state	*s = &view->state.tree;
+	struct fnc_tree_entry		*te;
+	struct fnc_colour		*c = NULL;
+	wchar_t				*wcstr;
+	int				 match = -1, rc = 0;
+	int				 wstrlen, n, idx, nentries;
+	int				 limit = view->nlines;
+	uint_fast8_t			 hashlen = FSL_UUID_STRLEN_MIN;
+
+	s->ndisplayed = 0;
+	werase(view->window);
+	if (limit == 0)
+		return rc;
+
+	/* Write (highlighted) headline (if view is active in splitscreen). */
+	rc = formatln(&wcstr, &wstrlen, s->tree_label, view->ncols, 0);
+	if (rc)
+		return rc;
+	if (screen_is_shared(view))
+		wstandout(view->window);
+	if (s->colour)
+		c = get_colour(&s->colours, FNC_COMMIT);
+	if (c)
+		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
+	waddwstr(view->window, wcstr);
+	if (c)
+		wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
+	if (screen_is_shared(view))
+		wstandend(view->window);
+	fsl_free(wcstr);
+	wcstr = NULL;
+	if (wstrlen < view->ncols - 1)
+		waddch(view->window, '\n');
+	if (--limit <= 0)
+		return rc;
+
+	/* Write this (sub)tree's absolute repository path subheader. */
+	rc = formatln(&wcstr, &wstrlen, treepath, view->ncols, 0);
+	if (rc)
+		return rc;
+	waddwstr(view->window, wcstr);
+	fsl_free(wcstr);
+	wcstr = NULL;
+	if (wstrlen < view->ncols - 1)
+		waddch(view->window, '\n');
+	if (--limit <= 0)
+		return rc;
+	waddch(view->window, '\n');
+	if (--limit <= 0)
+		return rc;
+
+	/* Write parent dir entry if the top of this tree is in view. */
+	if (s->first_entry_onscreen == NULL) {
+		te = &s->tree->entries[0];
+		if (s->selected_idx == 0) {
+			if (view->active)
+				wattr_on(view->window, A_REVERSE, NULL);
+			s->selected_entry = NULL;
+		}
+		waddstr(view->window, "  ..\n");
+		if (s->selected_idx == 0 && view->active)
+			wattr_off(view->window, A_REVERSE, NULL);
+		++s->ndisplayed;
+		if (--limit <= 0)
+			return rc;
+		n = 1;
+	} else {
+		n = 0;
+		te = s->first_entry_onscreen;
+	}
+
+	nentries = s->tree->nentries;
+	for (idx = 0; idx < nentries; ++idx)
+		if (hashlen < fsl_strlen(s->tree->entries[idx].uuid))
+			hashlen = fsl_strlen(s->tree->entries[idx].uuid);
+	/* Iterate and write tree nodes postfixed with path type identifier. */
+	for (idx = te->idx; idx < nentries; ++idx) {
+		char		*line = NULL, *idstr = NULL, *targetlnk = NULL;
+		const char	*modestr = "";
+		mode_t		 mode;
+
+		if (idx < 0 || idx >= s->tree->nentries)
+			return 0;
+		te = &s->tree->entries[idx];
+		mode = te->mode;
+
+		if (s->show_id) {
+			idstr = fsl_strdup(te->uuid);
+			/* Directories don't have UUIDs. */
+			if (idstr == NULL && !S_ISDIR(mode))
+				return fcli_err_set(FSL_RC_OOM,
+				    "%s::%s:%d fsl_strdup",
+				    __func__, __FILE__, __LINE__);
+			if (idstr == NULL || fsl_strlen(idstr) < hashlen) {
+				char buf[hashlen], pad = '.';
+				idstr = fsl_mprintf("%s%s", idstr ? idstr : "",
+				    (char *)memset(buf, pad, hashlen - fsl_strlen(idstr)));
+				if (idstr == NULL)
+					return fcli_err_set(FSL_RC_RANGE,
+					    "%s::%s:%d fsl_mprintf",
+					    __func__, __FILE__, __LINE__);
+				idstr[hashlen] = '\0';
+				/* idstr = fsl_mprintf("%*c", hashlen, ' '); */
+			}
+		}
+		if (S_ISLNK(mode)) {
+			fsl_size_t	ch;
+
+			rc = tree_entry_get_symlink_target(&targetlnk, te);
+			if (rc) {
+				fsl_free(idstr);
+				return rc;
+			}
+			for (ch = 0; ch < fsl_strlen(targetlnk); ++ch) {
+				if (!isprint((unsigned char)targetlnk[ch]))
+					targetlnk[ch] = '?';
+			}
+			modestr = "@";
+		}
+		else if (S_ISDIR(mode))
+			modestr = "/";
+		else if (mode & S_IXUSR)
+			modestr = "*";
+		if ((line = fsl_mprintf("%s  %s%s%s%s", idstr ? idstr : "",
+		    te->basename, modestr, targetlnk ? " -> ": "",
+		    targetlnk ? targetlnk : "")) == NULL) {
+			fsl_free(idstr);
+			fsl_free(targetlnk);
+			return fcli_err_set(FSL_RC_RANGE,
+			    "%s::%s:%d fsl_mprintf", __func__, __FILE__,
+			    __LINE__);
+		}
+		fsl_free(idstr);
+		fsl_free(targetlnk);
+		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0);
+		if (rc) {
+			fsl_free(line);
+			break;
+		}
+		if (n == s->selected_idx) {
+			if (view->active)
+				wattr_on(view->window, A_REVERSE, NULL);
+			s->selected_entry = te;
+		}
+		if (s->colour && (match = fsl_list_index_of(&s->colours, line,
+		    match_line)) != -1)
+			c = s->colours.list[match];
+		else
+			c = NULL;
+		if (c)
+			wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
+		waddwstr(view->window, wcstr);
+		if (c)
+			wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
+		if (wstrlen < view->ncols - 1)
+			waddch(view->window, '\n');
+		if (n == s->selected_idx && view->active)
+			wattr_off(view->window, A_REVERSE, NULL);
+		fsl_free(line);
+		fsl_free(wcstr);
+		wcstr = NULL;
+		++n;
+		++s->ndisplayed;
+		s->last_entry_onscreen = te;
+		if (--limit <= 0)
+			break;
+	}
+
+	return rc;
+}
+
+static int
+tree_entry_get_symlink_target(char **targetlnk, struct fnc_tree_entry *te)
+{
+	struct stat	 s;
+	fsl_buffer	 fb = fsl_buffer_empty;
+	char		*buf = NULL;
+	ssize_t		 nbytes, bufsz;
+	int		 rc = 0;
+
+	*targetlnk = NULL;
+
+	fsl_file_canonical_name2(fcli_cx()->ckout.dir, te->path, &fb, false);
+	if (lstat(fsl_buffer_cstr(&fb), &s) == -1) {
+		rc = fcli_err_set(FSL_RC_ACCESS, "%s::%s:%d lstat(%s)",
+		    __func__, __FILE__, __LINE__, te->path);
+		goto end;
+	}
+
+	bufsz = s.st_size ? (s.st_size + 1 /* NUL */) : PATH_MAX;
+	buf = fsl_malloc(bufsz);
+	if (buf == NULL) {
+		rc = fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_malloc",
+		    __func__, __FILE__, __LINE__);
+		goto end;
+	}
+
+	nbytes = readlink(fsl_buffer_cstr(&fb), buf, bufsz);
+	if (nbytes == -1) {
+		rc = fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_RANGE),
+		    "%s::%s:%d readlink", __func__, __FILE__, __LINE__);
+		goto end;
+	}
+	buf[nbytes] = '\0';	/* readlink() does _not_ NUL terminate */
+end:
+	fsl_buffer_clear(&fb);
+	if (rc)
+		fsl_free(buf);
+	*targetlnk = buf;
+	return rc;
+	/*
+	 * XXX Not sure if we should rely on fossil(1) populating symlinks
+	 * with the path of the target source file to obtain the target link.
+	 */
+	/* fsl_cx		*f = fcli_cx(); */
+	/* fsl_buffer	 blob = fsl_buffer_empty; */
+	/* fsl_id_t	 rid; */
+
+	/* if (!((te->mode & (S_IFDIR | S_IFLNK)) == S_IFLNK)) */
+	/* 	return fcli_err_set(FSL_RC_TYPE, */
+	/* 	    "%s::%s:%d file not symlink [%s]", */
+	/* 	    __func__, __FILE__, __LINE__, te->path); */
+	/* rc = fsl_sym_to_rid(f, te->uuid, FSL_SATYPE_ANY, &rid); */
+	/* if (!rc) */
+	/* 	rc = fsl_content_blob(f, rid, &blob); */
+	/* if (rc) */
+	/* 	return rc; */
+
+	/* *targetlnk = fsl_strdup(fsl_buffer_str(&blob)); */
+	/* fsl_buffer_clear(&blob); */
+}
+
+static int
+tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
+{
+	struct fnc_view			*timeline_view/*, *branch_view */;
+	struct fnc_tree_view_state	*s = &view->state.tree;
+	struct fnc_tree_entry		*te;
+	int				 n, start_col = 0, rc = 0;
+
+	switch (ch) {
+	case 'c':
+		if (ch == 'c')
+			s->colour = s->colour == false;
+		break;
+	case 'i':
+		s->show_id = !s->show_id;
+		break;
+	case 't':
+		if (!s->selected_entry)
+			break;
+		if (view_is_parent(view))
+			start_col = view_split_start_col(view->start_col);
+		rc = timeline_tree_entry(&timeline_view, start_col, s);
+		view->active = false;
+		timeline_view->active = true;
+		if (view_is_parent(view)) {
+			rc = view_close_child(view);
+			if (rc)
+				return rc;
+			view_set_child(view, timeline_view);
+			view->focus_child = true;
+		} else
+			*new_view = timeline_view;
+		break;
+	case 'g':
+		if (!fnc_home(view))
+			break;
+		/* FALL THROUGH */
+	case KEY_HOME:
+		s->selected_idx = 0;
+		if (s->tree == s->root)
+			s->first_entry_onscreen = &s->tree->entries[0];
+		else
+			s->first_entry_onscreen = NULL;
+		break;
+	case KEY_END:
+	case 'G':
+		s->selected_idx = 0;
+		te = &s->tree->entries[s->tree->nentries - 1];
+		for (n = 0; n < view->nlines - 3; ++n) {
+			if (te == NULL) {
+				if(s->tree != s->root) {
+					s->first_entry_onscreen = NULL;
+					++n;
+				}
+				break;
+			}
+			s->first_entry_onscreen = te;
+			te = get_tree_entry(s->tree, te->idx - 1);
+		}
+		if (n > 0)
+			s->selected_idx = n - 1;
+		break;
+	case KEY_UP:
+	case 'k':
+		if (s->selected_idx > 0) {
+			--s->selected_idx;
+			break;
+		}
+		tree_scroll_up(s, 1);
+		break;
+	case KEY_PPAGE:
+	case CTRL('b'):
+		if (s->tree == s->root) {
+			if (&s->tree->entries[0] == s->first_entry_onscreen)
+				s->selected_idx = 0;
+		} else {
+			if (s->first_entry_onscreen == NULL)
+				s->selected_idx = 0;
+		}
+		tree_scroll_up(s, MAX(0, view->nlines - 3));
+		break;
+	case KEY_DOWN:
+	case 'j':
+		if (s->selected_idx < s->ndisplayed - 1) {
+			++s->selected_idx;
+			break;
+		}
+		if (get_tree_entry(s->tree, s->last_entry_onscreen->idx + 1)
+		    == NULL)
+			break;	/* Reached last entry. */
+		tree_scroll_down(s, 1);
+		break;
+	case KEY_NPAGE:
+	case CTRL('f'):
+		if (get_tree_entry(s->tree, s->last_entry_onscreen->idx + 1)
+		    == NULL) {
+			/*
+			 * When the last entry on screen is the last node in the
+			 * tree move cursor to it instead of scrolling the view.
+			 */
+			if (s->selected_idx < s->ndisplayed - 1)
+				s->selected_idx = s->ndisplayed - 1;
+			break;
+		}
+		tree_scroll_down(s, view->nlines - 3);
+		break;
+	case KEY_BACKSPACE:
+	case KEY_ENTER:
+	case KEY_LEFT:
+	case KEY_RIGHT:
+	case '\r':
+	case 'h':
+	case 'l':
+		/*
+		 * h/backspace/arrow-left: return to parent dir irrespective
+		 * of selected entry type (unless already at root).
+		 * l/arrow-right: move into selected dir entry.
+		 */
+		if (ch != KEY_RIGHT && ch != 'l' && (s->selected_entry == NULL
+		    || ch == 'h' || ch == KEY_BACKSPACE || ch == KEY_LEFT)) {
+			struct fnc_parent_tree	*parent;
+			/* h/backspace/left-arrow pressed or ".." selected. */
+			if (s->tree == s->root)
+				break;
+			parent = TAILQ_FIRST(&s->parents);
+			TAILQ_REMOVE(&s->parents, parent,
+			    entry);
+			fnc_object_tree_close(s->tree);
+			s->tree = parent->tree;
+			s->first_entry_onscreen = parent->first_entry_onscreen;
+			s->selected_entry = parent->selected_entry;
+			s->selected_idx = parent->selected_idx;
+			fsl_free(parent);
+		} else if (s->selected_entry != NULL &&
+		    S_ISDIR(s->selected_entry->mode)) {
+			struct fnc_tree_object	*subtree = NULL;
+			rc = tree_builder(s->repo, &subtree,
+			    s->selected_entry->path);
+			if (rc)
+				break;
+			rc = visit_subtree(s, subtree);
+			if (rc) {
+				fnc_object_tree_close(subtree);
+				break;
+			}
+		}
+#if 0	/* NYI: If selected entry is versioned file, open blame view. */
+		} else if (S_ISREG(s->selected_entry->mode)) {
+			struct fnc_view *blame_view;
+			int start_col = view_is_parent(view) ?
+			    view_split_start_col(view->start_col) : 0;
+
+			rc = blame_tree_entry(&blame_view, start_col,
+			    s->selected_entry, &s->parents, s->commit_id,
+			    s->repo);
+			if (rc)
+				break;
+			view->active = false;
+			blame_view->active = true;
+			if (view_is_parent(view)) {
+				rc = view_close_child(view);
+				if (rc)
+					return rc;
+				view_set_child(view, blame_view);
+				view->focus_child = 1;
+			} else
+				*new_view = blame_view;
+		}
+#endif
+		break;
+	case KEY_RESIZE:
+		if (view->nlines >= 4 && s->selected_idx >= view->nlines - 3)
+			s->selected_idx = view->nlines - 4;
+		break;
+	default:
+		break;
+	}
+
+	return rc;
+}
+
+static int
+timeline_tree_entry(struct fnc_view **new_view, int start_col,
+    struct fnc_tree_view_state *s)
+{
+	struct fnc_view	*timeline_view;
+	char		*path;
+	int		 rc = 0;
+
+	*new_view = NULL;
+
+	timeline_view = view_open(0, 0, 0, start_col, FNC_VIEW_TIMELINE);
+	if (timeline_view == NULL)
+		return fcli_err_set(FSL_RC_ERROR, "%s::%s:%d view_open",
+		    __func__, __FILE__, __LINE__);
+
+	rc = tree_entry_path(&path, &s->parents, s->selected_entry);
+	if (rc)
+		return rc;
+
+	rc = open_timeline_view(timeline_view, s->rid, path);
+	if (rc)
+		view_close(timeline_view);
+	else
+		*new_view = timeline_view;
+
+	fsl_free(path);
+	return rc;
+}
+
+static void
+tree_scroll_up(struct fnc_tree_view_state *s, int maxscroll)
+{
+	struct fnc_tree_entry	*te;
+	int			 isroot, i = 0;
+
+	isroot = s->tree == s->root;
+
+	if (s->first_entry_onscreen == NULL)
+		return;
+
+	te = get_tree_entry(s->tree, s->first_entry_onscreen->idx - 1);
+	while (i++ < maxscroll) {
+		if (te == NULL) {
+			if (!isroot)
+				s->first_entry_onscreen = NULL;
+			break;
+		}
+		s->first_entry_onscreen = te;
+		te = get_tree_entry(s->tree, te->idx - 1);
+	}
+}
+
+static void
+tree_scroll_down(struct fnc_tree_view_state *s, int maxscroll)
+{
+	struct fnc_tree_entry	*next, *last;
+	int			 n = 0;
+
+	if (s->first_entry_onscreen)
+		next = get_tree_entry(s->tree,
+		    s->first_entry_onscreen->idx + 1);
+	else
+		next = &s->tree->entries[0];
+
+	last = s->last_entry_onscreen;
+	while (next && last && n++ < maxscroll) {
+		last = get_tree_entry(s->tree, last->idx + 1);
+		if (last) {
+			s->first_entry_onscreen = next;
+			next = get_tree_entry(s->tree, next->idx + 1);
+		}
+	}
+}
+
+static int
+visit_subtree(struct fnc_tree_view_state *s, struct fnc_tree_object *subtree)
+{
+	struct fnc_parent_tree	*parent;
+
+	parent = calloc(1, sizeof(*parent));
+	if (parent == NULL)
+		return fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_ERROR),
+		    "%s::%s:%d calloc", __func__, __FILE__, __LINE__);
+
+	parent->tree = s->tree;
+	parent->first_entry_onscreen = s->first_entry_onscreen;
+	parent->selected_entry = s->selected_entry;
+	parent->selected_idx = s->selected_idx;
+	TAILQ_INSERT_HEAD(&s->parents, parent, entry);
+	s->tree = subtree;
+	s->selected_idx = 0;
+	s->first_entry_onscreen = NULL;
+
+	return 0;
+}
+
+#if 0 /* NYI */
+static int
+blame_tree_entry(struct fnc_view **new_view, int start_col,
+    struct fnc_tree_entry *te, struct fnc_parent_trees *parents,
+    fsl_uuid_str *commit_id)
+{
+	struct fnc_view	*blame_view;
+	char		*path;
+	int		 rc = 0;
+
+	*new_view = NULL;
+
+	rc = tree_entry_path(&path, parents, te);
+	if (rc)
+		return rc;
+
+	blame_view = view_open(0, 0, 0, start_col, FNC_VIEW_BLAME);
+	if (blame_view == NULL) {
+		rc = fcli_err_set(FSL_RC_ERROR, "%s::%s:%d view_open"
+		    __func__, __FILE__, __LINE__);
+		goto end;
+	}
+
+	rc = open_blame_view(blame_view, path, commit_id, repo);
+	if (rc)
+		view_close(blame_view);
+	else
+		*new_view = blame_view;
+end:
+	fsl_free(path);
+	return rc;
+}
+#endif
+
+static int
+tree_search_init(struct fnc_view *view)
+{
+	struct fnc_tree_view_state *s = &view->state.tree;
+
+	s->matched_entry = NULL;
+	return 0;
+}
+
+static int
+tree_search_next(struct fnc_view *view)
+{
+	struct fnc_tree_view_state	*s = &view->state.tree;
+	struct fnc_tree_entry		*te = NULL;
+	int				 rc = 0;
+
+	if (view->searching == SEARCH_DONE) {
+		view->search_status = SEARCH_CONTINUE;
+		return rc;
+	}
+
+	if (s->matched_entry) {
+		if (view->searching == SEARCH_FORWARD) {
+			if (s->selected_entry)
+				te = &s->tree->entries[s->selected_entry->idx
+				    + 1];
+			else
+				te = &s->tree->entries[0];
+		} else {
+			if (s->selected_entry == NULL)
+				te = &s->tree->entries[s->tree->nentries - 1];
+			else
+				te = &s->tree->entries[s->selected_entry->idx
+				    - 1];
+		}
+	} else {
+		if (view->searching == SEARCH_FORWARD)
+			te = &s->tree->entries[0];
+		else
+			te = &s->tree->entries[s->tree->nentries - 1];
+	}
+
+	while (1) {
+		if (te == NULL) {
+			if (s->matched_entry == NULL) {
+				view->search_status = SEARCH_CONTINUE;
+				return rc;
+			}
+			if (view->searching == SEARCH_FORWARD)
+				te = &s->tree->entries[0];
+			else
+				te = &s->tree->entries[s->tree->nentries - 1];
+		}
+
+		if (match_tree_entry(te, &view->regex)) {
+			view->search_status = SEARCH_CONTINUE;
+			s->matched_entry = te;
+			break;
+		}
+
+		if (view->searching == SEARCH_FORWARD)
+			te = &s->tree->entries[te->idx + 1];
+		else
+			te = &s->tree->entries[te->idx - 1];
+	}
+
+	if (s->matched_entry) {
+		s->first_entry_onscreen = s->matched_entry;
+		s->selected_idx = 0;
+	}
+
+	return rc;
+}
+
+static int
+match_tree_entry(struct fnc_tree_entry *te, regex_t *regex)
+{
+	regmatch_t regmatch;
+
+	return regexec(regex, te->basename, 1, &regmatch, 0) == 0;
+}
+
+struct fnc_tree_entry *
+get_tree_entry(struct fnc_tree_object *tree, int i)
+{
+	if (i < 0 || i >= tree->nentries)
+		return NULL;
+
+	return &tree->entries[i];
+}
+
+static int
+close_tree_view(struct fnc_view *view)
+{
+	struct fnc_tree_view_state	*s = &view->state.tree;
+	struct fsl_list_state		 st = { FNC_COLOUR_OBJ };
+
+	fsl_list_clear(&s->colours, fsl_list_object_free, &st);
+
+	fsl_free(s->tree_label);
+	s->tree_label = NULL;
+	fsl_free(s->commit_id);
+	s->commit_id = NULL;
+	fsl_free(s->master_branch);
+	s->master_branch = NULL;
+
+	while (!TAILQ_EMPTY(&s->parents)) {
+		struct fnc_parent_tree *parent;
+		parent = TAILQ_FIRST(&s->parents);
+		TAILQ_REMOVE(&s->parents, parent, entry);
+		if (parent->tree != s->root)
+			fnc_object_tree_close(parent->tree);
+		fsl_free(parent);
+
+	}
+
+	if (s->tree != NULL && s->tree != s->root)
+		fnc_object_tree_close(s->tree);
+	if (s->root)
+		fnc_object_tree_close(s->root);
+	if (s->repo)
+		fnc_close_repository_tree(s->repo);
+
+	return 0;
+}
+
+static void
+fnc_object_tree_close(struct fnc_tree_object *tree)
+{
+	int	idx;
+
+	for (idx = 0; idx < tree->nentries; ++idx) {
+		fsl_free(tree->entries[idx].basename);
+		fsl_free(tree->entries[idx].path);
+		fsl_free(tree->entries[idx].uuid);
+	}
+
+	fsl_free(tree->entries);
+	fsl_free(tree);
+}
+
+static void
+fnc_close_repository_tree(struct fnc_repository_tree *repo)
+{
+	struct fnc_repo_tree_node *next, *tn;
+
+	tn = repo->head;
+	while (tn) {
+		next = tn->next;
+		fsl_free(tn);
+		tn = next;
+	}
+	fsl_free(repo);
+}
+
+static int
+view_close_child(struct fnc_view *view)
+{
+	int	rc = 0;
+
+	if (view->child == NULL)
+		return rc;
+
+	rc = view_close(view->child);
+	view->child = NULL;
+
+	return rc;
+}
+
+static void
+view_set_child(struct fnc_view *view, struct fnc_view *child)
+{
+	view->child = child;
+	child->parent = view;
+}
+
+static int
+set_colours(fsl_list *s, enum fnc_view_id vid)
+{
+	struct fnc_colour	 *colour;
+	const char		**regexp = NULL;
+	const char		 *regexp_tree[] = {"@$", "/$", "\\*$", "^$"};
+	const char		 *regexp_diff[] = {
+				    "^((checkin|wiki|ticket|technote) "
+				    "[0-9a-f]|hash [+-] |\\[[+~>-]] |"
+				    "[+-]{3} )",
+				    "^-", "^\\+", "^@@"
+				  };
+	int			  pairs_diff[][2] = {
+				    {FNC_DIFF_META, COLOR_GREEN},
+				    {FNC_DIFF_MINUS, COLOR_MAGENTA},
+				    {FNC_DIFF_PLUS, COLOR_CYAN},
+				    {FNC_DIFF_CHNK, COLOR_YELLOW}
+				  };
+	int			  pairs_tree[][2] = {
+				    {FNC_TREE_LINK, COLOR_MAGENTA},
+				    {FNC_TREE_DIR, COLOR_CYAN},
+				    {FNC_TREE_EXEC, COLOR_GREEN},
+				    {FNC_COMMIT, COLOR_GREEN}
+				  };
+	int			(*pairs)[2], rc = 0;
+	fsl_size_t		  idx, n;
+
+	if (vid == FNC_VIEW_DIFF) {
+		n = nitems(regexp_diff);
+		regexp = regexp_diff;
+		pairs = pairs_diff;
+	}
+	if (vid == FNC_VIEW_TREE) {
+		n = nitems(regexp_tree);
+		regexp = regexp_tree;
+		pairs = pairs_tree;
+	}
+
+	for (idx = 0; idx < n; ++idx) {
+		colour = fsl_malloc(sizeof(*colour));
+		if (colour == NULL)
+			return fcli_err_set(fsl_errno_to_rc(errno,
+			    FSL_RC_ERROR), "%s::%s:%d fsl_malloc",
+			    __func__, __FILE__, __LINE__);
+
+		rc = regcomp(&colour->regex, regexp[idx],
+		    REG_EXTENDED | REG_NEWLINE | REG_NOSUB);
+		if (rc) {
+			static char regerr[512];
+			regerror(rc, &colour->regex, regerr, sizeof(regerr));
+			fsl_free(colour);
+			return fcli_err_set(FSL_RC_ERROR,
+			    "%s::%s:%d regcomp(%s) -> %s", __func__, __FILE__,
+			    __LINE__, regexp[idx], regerr);
+		}
+
+		colour->scheme = pairs[idx][0];
+		init_pair(colour->scheme, pairs[idx][1], -1);
+		fsl_list_append(s, colour);
+	}
+
+	return rc;
+}
+
+struct fnc_colour *
+get_colour(fsl_list *colours, int scheme)
+{
+	struct fnc_colour	cs;
+	int			match = -1;
+
+	cs.scheme = scheme;
+	match = fsl_list_index_of(colours, &cs, match_colour);
+
+	if (match != -1)
+		return colours->list[match];
+
+	return NULL;
+}
+
+static int
+match_colour(const void *target, const void *key)
+{
+	struct fnc_colour *c = (struct fnc_colour *)key;
+	struct fnc_colour *t = (struct fnc_colour *)target;
+
+	return c->scheme == t->scheme;
+}
+
+/*
+ * Emulate vim(1) gg: User has 1 sec to follow first 'g' keypress with another.
+ */
+static bool
+fnc_home(struct fnc_view *view)
+{
+	bool	home = true;
+
+	halfdelay(10);	/* Block for 1 second, then return ERR. */
+	if (wgetch(view->window) != 'g')
+		home = false;
+	cbreak();	/* Return to blocking mode on user input. */
+
+	return home;
 }
 
 static int
@@ -4565,4 +6272,46 @@ fnc_strsep(char **ptr, const char *sep)
 
 	return s;
 }
+
+#ifdef __linux__
+static size_t
+fnc_strlcat(char *restrict dst, const char *restrict src, size_t dstsz)
+{
+	size_t	offset;
+	int	dstlen, srclen, idx = 0;
+
+	offset = dstlen = fsl_strlen(dst);
+	srclen = fsl_strlen(src);
+
+	while ((*(dst + offset++) = *(src + idx++)) != '\0')
+		if (offset == dstsz - 1)
+			break;
+
+	*(dst + offset) = '\0';
+
+	return dstlen + srclen;
+}
+
+static size_t
+fnc_strlcpy(char *restrict dst, const char *restrict src, size_t dstsz)
+{
+	size_t offset = 0;
+
+	if (dstsz < 1)
+		goto end;
+
+	while ((*(dst + offset) = *(src + offset)) != '\0')
+		if (++offset == dstsz) {
+			--offset;
+			break;
+		}
+
+end:
+	*(dst + offset) = '\0';
+	while (*(src + offset) != '\0')
+		++offset;	/* Return src length. */
+
+	return offset;
+}
+#endif
 

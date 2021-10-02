@@ -31,19 +31,23 @@
 .Op Fl z
 .Op Fl T Ar tag
 .Op Fl b Ar branch
-.Op Fl c Ar hash
+.Op Fl c Ar commit
 .Op Fl n Ar number
 .Op Fl t Ar type
 .Op Fl u Ar user
+.Op Ar path
 .Nm
 .Cm diff
 .Op Fl ciw
 .Op Fl x Ar number
-.Ar artifact1
-.Ar artifact2
+.Ar commit1
+.Ar commit2
+.Nm
+.Cm tree
+.Op Fl c Ar commit
 .Nm
 .Cm blame
-.Op Fl c Ar hash
+.Op Fl c Ar commit
 .Ar file
 .Sh DESCRIPTION
 .Nm
@@ -65,6 +69,8 @@ are specified,
 will default to displaying this view.
 .It Diff view
 Display changes introduced in the specified commit.
+.It Tree view
+Display tree reflecting the repository state as at the specified commit.
 .It Blame view
 Display historical attribution of each line in the specified file.
 .El
@@ -107,11 +113,18 @@ Commands available to
 are as follows:
 .Bl -tag -width 4v
 .It Cm timeline Oo Fl T | -tag Ar tag Oc Oo Fl b | -branch Ar branch Oc \
-Oo Fl c | -commit Ar hash Oc Oo Fl h | -help Oc Oo Fl n | -limit Ar n Oc \
-Oo Fl t | -type Ar type Oc Oo Fl u | -username Ar user Oc Oo Fl z | -utc Oc
+Oo Fl c | -commit Ar commit Oc Oo Fl h | -help Oc \
+Oo Fl n | -limit Ar n Oc  Oo Fl t | -type Ar type Oc \
+Oo Fl u | -username Ar user Oc Oo Fl z | -utc Oc  Op Ar path
 .Pp
-Display commit history of a repository.  This command must be executed
-from within or below the repository root; that is,
+Display commit history of a repository.  If
+.Ar path
+is specified, only commits that modified the file(s) at this path will populate
+the timeline.  The
+.Ar path
+may be absolute or relative to the repository root.  This command must be
+executed from within or below the top level directory of the repository; that
+is,
 .Nm
 assumes a local
 checkout is open in or above the current working directory.
@@ -130,16 +143,16 @@ By default,
 .Nm
 will indiscriminately display all commits irrespective of which T cards
 are attached to the commit manifest.
-.It Fl b , branch Ar branch
+.It Fl b , -branch Ar branch
 Display commits that are members of the specified
 .Ar branch .
 The expected argument is the symbolic name of a branch. By default,
 .Nm
 will display all commits irrespective of the branch on which they
 reside.
-.It Fl c , commit Ar hash
-Open the timeline from the commit identified by
-.Ar hash .
+.It Fl c , -commit Ar commit
+Open the timeline from the check-in identified by
+.Ar commit .
 The expected argument is either the name of a branch, which will resolve
 to the latest commit on the given branch, or (a unique abbreviated
 prefix of) a valid commit UUID SHA1 or SHA3 hash. When this option is
@@ -225,22 +238,22 @@ Find the previous commit that matches the current search term.  The
 search will continue until either a match is found or the latest commit
 on the timeline is consumed.
 .El
-.It Cm diff Oo Fl c | -no-colour Oc Oo Fl h | -help Oc Oo Fl i | -invert \
+.It Cm diff Oo Fl C | -no-colour Oc Oo Fl h | -help Oc Oo Fl i | -invert \
 Oc Oo Fl w | -whitespace Oc Oo Fl x | -context Ar n Oc \
-Ar artifact1 Ar artifact2
-Display the differences between two repository artifacts.  Both
-.Ar artifact1
+Ar commit1 Ar commit2
+Display the differences between two commits.  Both
+.Ar commit1
 and
-.Ar artifact2
+.Ar commit2
 must be of the same type, which is expected to be either (a unique
-abbreviated prefix of) a file or commit artifact UUID SHA1 or SHA3 hash,
+abbreviated prefix of) a commit artifact UUID SHA1 or SHA3 hash,
 a symbolic branch name, or an ISO 8601 formatted date.
 .Pp
 Options for
 .Cm fnc diff
 are as follows:
 .Bl -tag -width Ds
-.It Fl c , -no-colour
+.It Fl C , -no-colour
 Disable coloured diff output, which is enabled by default on supported
 terminals. If this option is not used, colour can be toggled with the
 .Sy c
@@ -308,7 +321,87 @@ Find the next line that matches the current search term.
 .It Cm N
 Find the previous line that matches the current search term.
 .El
-.It Cm blame Oo Fl c | -commit Ar hash Oc Ar file
+.It Cm tree Oo Fl C | -no-colour Oc Oo Fl c | -commit Ar commit Oc
+Display hierarchical tree of a repository.  With no options passed, the tree
+will reflect the state of the latest commit on trunk.
+.Pp
+Tree nodes are lexicographically ordered and may be postfixed with an identifier
+corresponding to the mode of the file object on disk as returned by
+.Xr lstat 2 :
+.Bl -column YXZ description
+.It / Ta directory
+.It * Ta executable
+.It @ Ta symbolic link
+.El
+.Pp
+Nodes representing symbolic links are also annotated with the path of the
+source file.
+.Pp
+Options for
+.Cm fnc tree
+are as follows:
+.Bl -tag -width Ds
+.It Fl C , -no-colour
+Disable coloured output, which is enabled by default on supported terminals.
+If this option is not used, colour can be toggled with the
+.Sy c
+tree view key binding as documented below.
+.It Fl c , -commit Ar commit
+The displayed tree will reflect the state of the repository as at the check-in
+identified by
+.Ar commit .
+The expected argument is either the name of a branch, which will resolve
+to the latest commit on the given branch, or (a unique abbreviated
+prefix of) a valid commit UUID SHA1 or SHA3 hash.  Note that this option also
+accepts
+.Lk https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki \
+"Fossil's Special Tags".
+.El
+.Pp
+Key bindings for
+.Cm fnc tree
+are as follows:
+.Bl -tag -width Ds
+.It Cm Enter, Arrow-right, l
+Enter the currently selected directory.  (Currently a no-op on file nodes.)
+.It Cm Backspace, Arrow-left, h
+Move up a level to the parent directory.  This is a no-op when in the root tree.
+.It Cm Arrow-down, j
+Move selection cursor one node down the tree.
+.It Cm Arrow-up, k
+Move selection cursor one node up the tree.
+.It Cm Page-down, Ctrl+f
+Move selection cursor one page down the tree.
+.It Cm Page-up, Ctrl+b
+Move selection cursor one page up the tree.
+.It Cm Home, gg
+Move selection cursor to the first node in the tree.
+.It Cm End, G
+Move selection cursor to the last node in the tree.
+.It Cm c
+Toggle coloured output.
+.Nm
+will default to displaying the tree in colour.
+.It Cm t
+Open
+.Cm timeline
+view for the currently selected tree node.  This will display the timeline of
+all commits that involve the versioned file(s) corresponding to the selected
+node.
+.It Cm i
+Show SHA hash UUID for all file nodes displayed in the tree.
+.It Cm /
+Prompt to enter a search term to begin searching the tree for nodes matching the
+entered pattern.  The search term is an extended regular expression, as
+documented in
+.Xr re_format 7 ,
+and is matched against the path of each tree node.
+.It Cm n
+Find the next tree node that matches the current search pattern.
+.It Cm N
+Find the previous tree node that matches the current search pattern.
+.El
+.It Cm blame Oo Fl c | -commit Ar commit Oc Ar file
 Show commit attribution history for each line of the specified
 .Ar file .
 .Pp
@@ -324,9 +417,9 @@ Options for
 .Cm fnc blame
 are as follows:
 .Bl -tag -width Ds
-.It Fl c , -commit Ar hash
-Open the timeline from the commit identified by
-.Ar hash .
+.It Fl c , -commit Ar commit
+Open the timeline from the check-in identified by
+.Ar commit .
 The expected argument is either the name of a branch, which will resolve
 to the latest commit on the given branch, or (a unique abbreviated
 prefix of) a valid commit UUID SHA1 or SHA3 hash.
