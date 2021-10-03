@@ -81,6 +81,7 @@
 
 /* Application macros. */
 #define PRINT_VERSION	STRINGIFY(FNC_VERSION)
+#define DIFF_DEF_CTXT	5		/* Default diff context lines. */
 #define DIFF_MAX_CTXT	64		/* Max diff context lines. */
 #define SPIN_INTERVAL	200		/* Status line progress indicator. */
 #define SPINNER		"\\|/-\0"
@@ -133,6 +134,7 @@ static int		cmd_blame(fcli_command const *);
 static struct fnc_setup {
 	/* Global options. */
 	const char	*cmdarg;	/* Retain argv[1] for use/err report. */
+	const char	*sym;		/* Open view from this symbolic name. */
 	int		 err;		/* Indicate fnc error state. */
 	bool		 hflag;		/* Flag if --help is requested. */
 	bool		 vflag;		/* Flag if --version is requested. */
@@ -146,10 +148,6 @@ static struct fnc_setup {
 		const char	 *zlimit;
 		int limit;
 	} nrecords;			/* Number of commits to load. */
-	union {
-		const char	 *sym;
-		fsl_id_t	  rid;
-	} start_commit;			/* Open timeline from this commit. */
 	const char	*filter_tag;	/* Only load commits with <tag>. */
 	const char	*filter_branch;	/* Only load commits from <branch>. */
 	const char	*filter_user;	/* Only load commits from <user>. */
@@ -177,12 +175,12 @@ static struct fnc_setup {
 	fcli_cliflag	  cliflags_blame[2];		/* Blame options. */
 } fnc_init = {
 	NULL,		/* cmdarg copy of argv[1] to aid usage/error report. */
+	NULL,		/* sym(bolic name) of commit to open defaults to tip. */
 	0,		/* err fnc error state. */
 	false,		/* hflag if --help is requested. */
 	false,		/* vflag if --version is requested. */
 	NULL,		/* filter_types defaults to indiscriminate. */
 	{0},		/* nrecords defaults to all commits. */
-	{0},		/* start_commit defaults to latest leaf. */
 	NULL,		/* filter_tag defaults to indiscriminate. */
 	NULL,		/* filter_branch defaults to indiscriminate. */
 	NULL,		/* filter_user defaults to indiscriminate. */
@@ -228,7 +226,7 @@ static struct fnc_setup {
             "Only display commits with T cards containing <tag>."),
 	    FCLI_FLAG("b", "branch", "<branch>", &fnc_init.filter_branch,
             "Only display commits that reside on the given <branch>."),
-	    FCLI_FLAG("c", "commit", "<commit>", &fnc_init.start_commit.sym,
+	    FCLI_FLAG("c", "commit", "<commit>", &fnc_init.sym,
             "Open the timeline from <commit>. Common symbols are:\n"
             "\tSHA{1,3} hash\n"
             "\tSHA{1,3} unique prefix\n"
@@ -289,7 +287,7 @@ static struct fnc_setup {
             "Disable coloured output, which is enabled by default on supported"
             "\n    terminals. Colour can also be toggled with the 'c' key "
             "binding when\n    this option is not used."),
-	    FCLI_FLAG("c", "commit", "<commit>", &fnc_init.start_commit.sym,
+	    FCLI_FLAG("c", "commit", "<commit>", &fnc_init.sym,
             "Display tree that reflects repository state as at <commit>.\n"
             "    Common symbols are:"
             "\n\tSHA{1,3} hash\n"
@@ -663,7 +661,8 @@ static int		 path_skip_common_ancestor(char **, const char *,
 			    size_t, const char *, size_t);
 static bool		 fnc_path_is_root_dir(const char *);
 /* static bool		 fnc_path_is_cwd(const char *); */
-static int		 open_tree_view(struct fnc_view *, const char *);
+static int		 open_tree_view(struct fnc_view *, const char *,
+			    fsl_id_t);
 static int		 create_repository_tree(struct fnc_repository_tree **,
 			    fsl_uuid_str *, fsl_id_t);
 static int		 tree_builder(struct fnc_repository_tree *,
@@ -817,15 +816,12 @@ cmd_timeline(fcli_command const *argv)
 			    "invalid char in <n>: -n|--limit=%s [%s]", s, ptr);
 	}
 
-	if (fnc_init.start_commit.sym != NULL) {
-		rc = fsl_sym_to_rid(f, fnc_init.start_commit.sym,
-		    FSL_SATYPE_CHECKIN, &rid);
+	if (fnc_init.sym != NULL) {
+		rc = fsl_sym_to_rid(f, fnc_init.sym, FSL_SATYPE_CHECKIN, &rid);
 		if (rc || rid < 0)
 			return fcli_err_set(FSL_RC_TYPE,
 			    "artifact [%s] not resolvable to a commit",
-			    fnc_init.start_commit.sym);
-		else
-			fnc_init.start_commit.rid = rid;
+			    fnc_init.sym);
 	}
 
 	rc = map_repo_path(&path);
@@ -876,16 +872,16 @@ map_repo_path(char **requested_path)
 	}
 
 	/*
-	 * Check if not in repository root or if supplied path is relative
-	 * to determine virtual root path for canonicalising.
+	 * Use the cwd as the virtual root to canonicalise the supplied path if
+	 * it is either: (a) relative; or (b) the root of the current checkout.
+	 * Otherwise, use the root of the current checkout.
 	 */
 	rc = fsl_cx_getcwd(f, &buf);
 	ckoutdir = fsl_strdup(f->ckout.dir);
-	ckoutdir[f->ckout.dirLen - 1] = '\0';
-	if (!rc)
-		root = fsl_strcmp(ckoutdir, fsl_buffer_cstr(&buf)) == 0;
-	else
+	ckoutdir[f->ckout.dirLen - 1] = '\0';	/* Trim trailing slash. */
+	if (rc)
 		goto end;
+	root = fsl_strcmp(ckoutdir, fsl_buffer_cstr(&buf)) == 0;
 	fsl_buffer_reuse(&buf);
 	rc = fsl_ckout_filename_check(f, (canonpath[0] == '.' || !root) ?
 	    true : false, canonpath, &buf);
@@ -919,7 +915,10 @@ map_repo_path(char **requested_path)
 			    __func__, __FILE__, __LINE__, path);
 			goto end;
 		}
-		/* If path is ckout dir, clear it for future checks. */
+		/*
+		 * Now we have an absolute path, check again if it's the ckout
+		 * dir; if so, clear it to signal an open_timeline_view() check.
+		 */
 		len = fsl_strlen(path);
 		if (!fsl_strcmp(path, f->ckout.dir)) {
 			fsl_free(path);
@@ -932,9 +931,11 @@ map_repo_path(char **requested_path)
 			}
 		} else if (len > f->ckout.dirLen && path_is_child(path,
 		    f->ckout.dir, f->ckout.dirLen)) {
-			/* Matched a path on-disk within the repository. */
 			char *child;
-			/* Strip common prefix with repository path. */
+			/*
+			 * Matched on-disk path within the repository; strip
+			 * common prefix with repository root path.
+			 */
 			rc = path_skip_common_ancestor(&child, f->ckout.dir,
 			    f->ckout.dirLen, path, len);
 			if (rc)
@@ -943,7 +944,7 @@ map_repo_path(char **requested_path)
 			path = child;
 		} else {
 			/*
-			 * Matched a path on-disk outside the repository; treat
+			 * Matched on-disk path outside the repository; treat
 			 * as relative to repo root. (Though this should fail.)
 			 */
 			fsl_free(path);
@@ -953,7 +954,7 @@ map_repo_path(char **requested_path)
 	}
 
 	/* Make path absolute from repository root. */
-	if (path[0] != '/') {
+	if (path[0] != '/' && (path[0] != '.' && path[1] != '/')) {
 		char *abspath;
 		if ((abspath = fsl_mprintf("/%s", path)) == NULL) {
 			rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d fsl_mprintf",
@@ -967,7 +968,6 @@ map_repo_path(char **requested_path)
 	/* Trim trailing slash if it exists. */
 	if (path[fsl_strlen(path) - 1] == '/')
 		path[fsl_strlen(path) - 1] = '\0';
-
 
 end:
 	fsl_buffer_clear(&buf);
@@ -3091,8 +3091,8 @@ init_diff_commit(struct fnc_view **new_view, int start_col,
 
 	diff_view = view_open(0, 0, 0, start_col, FNC_VIEW_DIFF);
 	if (diff_view == NULL)
-		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d view_open", __func__,
-		    __FILE__, __LINE__);
+		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d view_open",
+		    __func__, __FILE__, __LINE__);
 
 	rc = open_diff_view(diff_view, commit, 5, fnc_init.ws,
 	    fnc_init.invert, !fnc_init.quiet, timeline_view);
@@ -4840,7 +4840,7 @@ cmd_diff(fcli_command const *argv)
 	struct fnc_commit_artifact	*commit = NULL;
 	const char			*artifact1, *artifact2, *ptr, *s;
 	fsl_id_t			 prid = -1, rid = -1;
-	int				 context = 5, rc = 0;
+	int				 context = DIFF_DEF_CTXT, rc = 0;
 
 	rc = fcli_process_flags(argv->flags);
 	if (rc || (rc = fcli_has_unused_flags(false)))
@@ -4949,6 +4949,7 @@ cmd_tree(fcli_command const *argv)
 	fsl_cx		*f = fcli_cx();
 	struct fnc_view	*view;
 	char		*path = NULL;
+	fsl_id_t	 rid;
 	int		 rc = 0;
 
 	rc = fcli_process_flags(argv->flags);
@@ -4958,17 +4959,16 @@ cmd_tree(fcli_command const *argv)
 	rc = map_repo_path(&path);
 	if (rc)
 		goto end;
-	if (fnc_init.start_commit.sym)
-		rc = fsl_sym_to_rid(f, fnc_init.start_commit.sym,
-		    FSL_SATYPE_CHECKIN, &fnc_init.start_commit.rid);
+	if (fnc_init.sym)
+		rc = fsl_sym_to_rid(f, fnc_init.sym, FSL_SATYPE_CHECKIN, &rid);
 	else
-		fsl_ckout_version_info(f, &fnc_init.start_commit.rid, NULL);
+		fsl_ckout_version_info(f, &rid, NULL);
 
 	if (rc) {
 		switch (rc) {
 		case FSL_RC_AMBIGUOUS:
 			fcli_err_set(rc, "prefix too ambiguous [%s]",
-			    fnc_init.start_commit.sym);
+			    fnc_init.sym);
 			goto end;
 		case FSL_RC_NOT_A_REPO:
 			fcli_err_set(rc, "%s tree needs a local checkout",
@@ -4976,7 +4976,7 @@ cmd_tree(fcli_command const *argv)
 			goto end;
 		case FSL_RC_NOT_FOUND:
 			fcli_err_set(rc, "invalid symbolic checkin name [%s]",
-			    fnc_init.start_commit.sym);
+			    fnc_init.sym);
 			goto end;
 		case FSL_RC_MISUSE:
 			/* FALL THROUGH */
@@ -4985,7 +4985,7 @@ cmd_tree(fcli_command const *argv)
 		}
 	}
 
-	if (!fsl_rid_is_a_checkin(f, fnc_init.start_commit.rid)) {
+	if (!fsl_rid_is_a_checkin(f, rid)) {
 		fcli_err_set(FSL_RC_TYPE, "%s tree can only open a check-in",
 		    fcli_progname());
 		goto end;
@@ -5001,7 +5001,7 @@ cmd_tree(fcli_command const *argv)
 		goto end;
 	}
 
-	rc = open_tree_view(view, path);
+	rc = open_tree_view(view, path, rid);
 	if (!rc)
 		rc = view_loop(view);
 end:
@@ -5010,7 +5010,7 @@ end:
 }
 
 static int
-open_tree_view(struct fnc_view *view, const char *path)
+open_tree_view(struct fnc_view *view, const char *path, fsl_id_t rid)
 {
 	fsl_cx				*f = fcli_cx();
 	struct fnc_tree_view_state	*s = &view->state.tree;
@@ -5019,8 +5019,8 @@ open_tree_view(struct fnc_view *view, const char *path)
 	TAILQ_INIT(&s->parents);
 	s->show_id = false;
 	s->colour = !fnc_init.nocolour && has_colors();
-	s->rid = fnc_init.start_commit.rid;
-	s->commit_id = fsl_rid_to_uuid(f, fnc_init.start_commit.rid);
+	s->rid = rid;
+	s->commit_id = fsl_rid_to_uuid(f, rid);
 	if (s->commit_id == NULL)
 		return fcli_err_set(FSL_RC_AMBIGUOUS,
 		    "%s::%s:%d fsl_rid_to_uuid", __func__, __FILE__, __LINE__);
@@ -5067,8 +5067,9 @@ end:
 }
 
 /*
- * This routine constructs the repository tree; from this tree, all displayed
- * (sub)trees are derived.
+ * This routine constructs the repository tree, repo, which is a DLL; from this
+ * tree, all displayed (sub)trees are derived. File paths are extracted from F
+ * cards of the checkin identified by id referenced in the repo database by rid.
  */
 static int
 create_repository_tree(struct fnc_repository_tree **repo, fsl_uuid_str *id,
@@ -5086,12 +5087,11 @@ create_repository_tree(struct fnc_repository_tree **repo, fsl_uuid_str *id,
 		    __func__, __FILE__, __LINE__);
 	memset(ptr, 0, sizeof(struct fnc_repository_tree));
 
-	rc = fsl_deck_load_rid(fcli_cx(), &d, fnc_init.start_commit.rid,
-	    FSL_SATYPE_CHECKIN);
+	rc = fsl_deck_load_rid(fcli_cx(), &d, rid, FSL_SATYPE_CHECKIN);
 	if (rc)
 		return fcli_err_set(FSL_RC_ERROR,
 		    "%s::%s:%d fsl_deck_load_rid [%d]", __func__, __FILE__,
-		    __LINE__, fnc_init.start_commit.rid);
+		    __LINE__, rid);
 	rc = fsl_deck_F_rewind(&d);
 	if (!rc)
 		rc = fsl_deck_F_next(&d, &cf);
@@ -5131,8 +5131,10 @@ end:
 }
 
 /*
- * This routine constructs the (sub)trees that are displayed. Each directory
- * and its contents form a subtree.
+ * This routine constructs the (sub)trees that are displayed. The directory dir
+ * and its contents form a subtree, which is an array of tree entries copied
+ * from DLL nodes in repo and stored in tree. This routine is called for each
+ * directory that is displayed as a tree.
  */
 static int
 tree_builder(struct fnc_repository_tree *repo, struct fnc_tree_object **tree,
@@ -5149,7 +5151,7 @@ tree_builder(struct fnc_repository_tree *repo, struct fnc_tree_object **tree,
 		    __func__, __FILE__, __LINE__);
 	memset(*tree, 0, sizeof(**tree));
 
-	/* Count how many elements will comprise the tree. */
+	/* Count how many elements will comprise the tree to be allocated. */
 	for(tn = repo->head; tn; tn = tn->next) {
 		if ((!tn->parent_dir && fsl_strcmp(dir, "/")) ||
 		    (tn->parent_dir && fsl_strcmp(dir, tn->parent_dir->path)))
@@ -5214,7 +5216,14 @@ delete_tree_node(struct fnc_tree_entry **head, struct fnc_tree_entry *del)
 #endif
 
 /*
- * This routine inserts nodes into the doubly-linked repository tree.
+ * This routine inserts nodes into the doubly-linked repository tree. Each
+ * path component of path (i.e., tokens delimited by '/') becomes a node in
+ * tree. The final path component of each segment is the node's .basename, and
+ * its full repository relative path its .path. All files in a given directory
+ * will comprise the directory node's .children list, and each file node's
+ * .sibling list; said directory will be each file node's .parent_dir. The
+ * elements of each requested tree will be identified by the node's .parent_dir;
+ * that is, each node with the same parent_dir will be an entry in the same tree
  *   tree    The repository tree into which nodes are inserted
  *   path    The repository relative pathname of the versioned file
  *   uuid    The SHA hash of the file
@@ -5243,7 +5252,7 @@ link_tree_node(struct fnc_repository_tree *tree, const char *path,
 		struct fnc_repo_tree_node	*tn;
 		int				 nodesz, slash = i;
 
-		/* Find slash to demarcate final path component. */
+		/* Find slash to demarcate each path component. */
 		while (path[i] && path[i] != '/')
 			i++;
 		nodesz = sizeof(*tn) + i + 1;
@@ -5342,7 +5351,9 @@ show_tree_view(struct fnc_view *view)
 }
 
 /*
- * Construct absolute repository path of current tree to display in the header.
+ * Construct absolute repository path of the currently selected tree entry to
+ * display in the tree view header, or pass to open_timeline_view() to construct
+ * a timeline of all commits modifying path.
  */
 static int
 tree_entry_path(char **path, struct fnc_parent_trees *parents,
@@ -5403,9 +5414,9 @@ end:
  *  /absolute/repository/tree/path/
  *
  *   ..
- *   regularfile
  *   dir/
  *   executable*
+ *   regularfile
  *   symlink@ -> /path/to/source/file
  *
  * If the 'i' key binding is entered, prefix each versioned file with its
@@ -5465,7 +5476,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 	if (--limit <= 0)
 		return rc;
 
-	/* Write parent dir entry if the top of this tree is in view. */
+	/* Write parent dir entry (i.e., "..") if top of the tree is in view. */
 	if (s->first_entry_onscreen == NULL) {
 		te = &s->tree->entries[0];
 		if (s->selected_idx == 0) {
@@ -5486,7 +5497,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 	}
 
 	nentries = s->tree->nentries;
-	for (idx = 0; idx < nentries; ++idx)
+	for (idx = 0; idx < nentries; ++idx)	/* Find max hash length. */
 		if (hashlen < fsl_strlen(s->tree->entries[idx].uuid))
 			hashlen = fsl_strlen(s->tree->entries[idx].uuid);
 	/* Iterate and write tree nodes postfixed with path type identifier. */
@@ -5502,15 +5513,17 @@ draw_tree(struct fnc_view *view, const char *treepath)
 
 		if (s->show_id) {
 			idstr = fsl_strdup(te->uuid);
-			/* Directories don't have UUIDs. */
+			/* Directories don't have UUIDs; pad with "..." dots. */
 			if (idstr == NULL && !S_ISDIR(mode))
 				return fcli_err_set(FSL_RC_OOM,
 				    "%s::%s:%d fsl_strdup",
 				    __func__, __FILE__, __LINE__);
+			/* If needed, pad SHA1 hash to align w/ SHA3 hashes. */
 			if (idstr == NULL || fsl_strlen(idstr) < hashlen) {
 				char buf[hashlen], pad = '.';
 				idstr = fsl_mprintf("%s%s", idstr ? idstr : "",
-				    (char *)memset(buf, pad, hashlen - fsl_strlen(idstr)));
+				    (char *)memset(buf, pad,
+				    hashlen - fsl_strlen(idstr)));
 				if (idstr == NULL)
 					return fcli_err_set(FSL_RC_RANGE,
 					    "%s::%s:%d fsl_mprintf",
@@ -5842,6 +5855,7 @@ timeline_tree_entry(struct fnc_view **new_view, int start_col,
 		return fcli_err_set(FSL_RC_ERROR, "%s::%s:%d view_open",
 		    __func__, __FILE__, __LINE__);
 
+	/* Construct repository relative path for timeline query. */
 	rc = tree_entry_path(&path, &s->parents, s->selected_entry);
 	if (rc)
 		return rc;
