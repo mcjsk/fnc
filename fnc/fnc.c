@@ -1765,6 +1765,7 @@ draw_commits(struct fnc_view *view)
 	struct fnc_tl_view_state	*s = &view->state.timeline;
 	struct fnc_tl_thread_cx		*tcx = &s->thread_cx;
 	struct commit_entry		*entry = s->selected_commit;
+	const char			*search_str = NULL;
 	char				*headln = NULL, *idxstr = NULL;
 	char				*branch = NULL, *type = NULL;
 	char				*uuid = NULL;
@@ -1789,8 +1790,6 @@ draw_commits(struct fnc_view *view)
 			goto end;
 		}
 	} else {
-		const char	*search_str = NULL;
-
 		if (view->searching) {
 			if (view->search_status == SEARCH_COMPLETE)
 				search_str = "no more matches";
@@ -1810,12 +1809,20 @@ draw_commits(struct fnc_view *view)
 			goto end;
 		}
 	}
-	ncols_needed = fsl_strlen(type) + fsl_strlen(idxstr) + FSL_STRLEN_K256 +
-	    (fsl_strcmp(type, "wiki") ? 1 : 0);
+	/*
+	 * Compute cols needed to fit all components of the headline to truncate
+	 * the hash component if needed. wiki, tag, and ticket artifacts don't
+	 * have a branch component, checkins and some technotes do, so add a col
+	 * for the space separator. Same applies if search_str is being shown.
+	 */
+	ncols_needed = fsl_strlen(type) + fsl_strlen(idxstr) + FSL_STRLEN_K256
+	    + (!search_str && (!fsl_strcmp(type, "wiki") ||
+	    !fsl_strcmp(type, "tag")  || !fsl_strcmp(type, "ticket") ||
+	    (!branch && !fsl_strcmp(type, "technote"))) ? 0 : 1);
 	/* If a path has been requested, display it in the headline. */
 	if (s->path[1]) {
 		if ((headln = fsl_mprintf("%s%c%.*s %s%s", type ? type : "",
-		    type ? ' ' : SPINNER[tcx->spin_idx], uuid && view->ncols <
+		    type ? ' ' : SPINNER[tcx->spin_idx], view->ncols <
 		    ncols_needed ? view->ncols - (ncols_needed -
 		    FSL_STRLEN_K256) : FSL_STRLEN_K256, uuid ? uuid :
 		    "........................................",
@@ -1826,7 +1833,7 @@ draw_commits(struct fnc_view *view)
 			goto end;
 		}
 	} else if ((headln = fsl_mprintf("%s%c%.*s%s", type ? type : "", type ?
-	    ' ' : SPINNER[tcx->spin_idx], uuid && view->ncols < ncols_needed ?
+	    ' ' : SPINNER[tcx->spin_idx], view->ncols < ncols_needed ?
 	    view->ncols - (ncols_needed - FSL_STRLEN_K256) : FSL_STRLEN_K256,
 	    uuid ? uuid : "........................................", idxstr))
 	    == NULL) {
