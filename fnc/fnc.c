@@ -135,6 +135,7 @@ static struct fnc_setup {
 	/* Global options. */
 	const char	*cmdarg;	/* Retain argv[1] for use/err report. */
 	const char	*sym;		/* Open view from this symbolic name. */
+	const char	*path;		/* Optional path for timeline & tree. */
 	int		 err;		/* Indicate fnc error state. */
 	bool		 hflag;		/* Flag if --help is requested. */
 	bool		 vflag;		/* Flag if --version is requested. */
@@ -161,9 +162,6 @@ static struct fnc_setup {
 	bool		 quiet;		/* Disable verbose diff output. */
 	bool		 invert;	/* Toggle inverted diff output. */
 
-	/* Blame options. */
-	const char	*path;		/* Show blame of REQUIRED <path> arg. */
-
 	/* Command line flags and help. */
 	fcli_help_info	  fnc_help;			/* Global help. */
 	fcli_cliflag	  cliflags_global[3];		/* Global options. */
@@ -176,6 +174,7 @@ static struct fnc_setup {
 } fnc_init = {
 	NULL,		/* cmdarg copy of argv[1] to aid usage/error report. */
 	NULL,		/* sym(bolic name) of commit to open defaults to tip. */
+	NULL,		/* path for tree to open or timeline to find commits. */
 	0,		/* err fnc error state. */
 	false,		/* hflag if --help is requested. */
 	false,		/* vflag if --version is requested. */
@@ -191,7 +190,6 @@ static struct fnc_setup {
 	false,		/* nocolour defaults to off (i.e., use diff colours). */
 	false,		/* quiet defaults to off (i.e., verbose diff is on). */
 	false,		/* invert diff defaults to off. */
-	NULL,		/* path blame command required argument. */
 
 	{ /* fnc_help global app help details. */
 	    "A read-only ncurses browser for Fossil repositories in the "
@@ -729,6 +727,7 @@ main(int argc, const char **argv)
 	fcli_command	*cmd = NULL;
 	fsl_cx		*f = NULL;
 	fsl_error	 e = fsl_error_empty;	/* DEBUG */
+	char		*path = NULL;
 	int		 rc = 0;
 
 	fnc_init.filter_types =
@@ -759,8 +758,20 @@ main(int argc, const char **argv)
 
 	if (argc == 1)
 		cmd = &fnc_init.cmd_args[FNC_VIEW_TIMELINE];
-	else if (((rc = fcli_dispatch_commands(fnc_init.cmd_args, false)
-	    == FSL_RC_NOT_FOUND)) || (rc = fcli_has_unused_args(false))) {
+	else if ((rc = fcli_dispatch_commands(fnc_init.cmd_args, false)
+	    == FSL_RC_NOT_FOUND) && argc == 2) {
+		/*
+		 * Check if user has entered 'fnc path/in/repo' and assume
+		 * 'fnc timeline path/in/repo' was meant.
+		 */
+		rc = map_repo_path(&path);
+		if (rc || !path)
+			goto end;
+		cmd = &fnc_init.cmd_args[FNC_VIEW_TIMELINE];
+		fnc_init.path = path;
+		fcli_err_reset(); /* For cmd_timeline::fcli_process_flags(). */
+	}
+	else if (rc || (rc = fcli_has_unused_args(false))) {
 		fnc_init.err = rc;
 		usage();
 	} else if (rc)
@@ -775,6 +786,7 @@ main(int argc, const char **argv)
 	if (cmd != NULL)
 		rc = cmd->f(cmd);
 end:
+	fsl_free(path);
 	endwin();
 	putchar('\n');
 	if (rc) {
@@ -829,7 +841,10 @@ cmd_timeline(fcli_command const *argv)
 			    fnc_init.sym);
 	}
 
-	rc = map_repo_path(&path);
+	if (fnc_init.path)
+		path = fsl_strdup(fnc_init.path);
+	else
+		rc = map_repo_path(&path);
 	if (!rc)
 		rc = init_curses();
 	if (rc)
@@ -848,6 +863,12 @@ end:
 	return rc;
 }
 
+/*
+ * Look for an in-repository path in **argv. If found, canonicalise it as an
+ * absolute path relative to the repository root (e.g., /ckoutdir/found/path),
+ * and assign to a dynamically allocated string in *requested_path, which the
+ * caller must dispose of with fsl_free or free(3).
+ */
 static int
 map_repo_path(char **requested_path)
 {
