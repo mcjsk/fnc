@@ -596,8 +596,8 @@ static int		 write_commit_line(struct fnc_view *,
 			    struct fnc_commit_artifact *, int);
 static int		 view_input(struct fnc_view **, int *,
 			    struct fnc_view *, struct view_tailhead *);
-static void		 help(void);
-static void		 padpopup(WINDOW *, const char **, const char *);
+static void		 help(struct fnc_view *);
+static void		 padpopup(struct fnc_view *, const char **, const char *);
 static void		 centerprint(WINDOW *, int, int, int, const char *,
 			    chtype);
 static int		 tl_input_handler(struct fnc_view **, struct fnc_view *,
@@ -2211,7 +2211,7 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 	case KEY_F(1):
 	case 'H':
 	case '?':
-		help();
+		help(view);
 		break;
 	case 'q':
 		rc = view->input(new, view, ch);
@@ -2274,53 +2274,78 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 }
 
 static void
-help()
+help(struct fnc_view *view)
 {
 	static const char	*progname = NULL;
 	static const char	*help[] = {
 	    "",
 	    "Global",
-	    "  H,?,F1        Open in-app help",
-	    "  f             Toggle fullscreen",
-	    "  Tab           Switch focus between open views",
-	    "  Q             Quit the program",
-	    "  q             Quit the active view",
+	    "  H,?,F1           Open in-app help",
+	    "  f                Toggle fullscreen",
+	    "  Tab              Switch focus between open views",
+	    "  Q                Quit the program",
+	    "  q                Quit the active view",
 	    "",
 	    "Timeline",
-	    "  k,<Up>,<,,    Move selection cursor up one commit",
-	    "  j,<Down>,>,.  Move selection cursor down one commit",
-	    "  C-b,PgUp      Scroll up one page",
-	    "  C-f,PgDn      Scroll down one page",
-	    "  gg,Home       Jump to first line in the current view",
-	    "  G,End         Jump to last line in the current view",
-	    "  Enter,Space   Open a diff view of the selected commit",
-	    "  /             Open prompt to enter timeline search",
-	    "  n             Find next commit matching the current search term",
-	    "  N             Find previous commit matching the current search "
+	    "  k,<Up>,<,,       Move selection cursor up one commit",
+	    "  j,<Down>,>,.     Move selection cursor down one commit",
+	    "  C-b,PgUp         Scroll up one page",
+	    "  C-f,PgDn         Scroll down one page",
+	    "  gg,Home          Jump to first line in the current view",
+	    "  G,End            Jump to last line in the current view",
+	    "  Enter,Space      Open a diff view of the selected commit",
+	    "  /                Open prompt to enter timeline search",
+	    "  n                Find next commit matching the current search "
 	    "term",
+	    "  N                Find previous commit matching the current "
+	    "search term",
 	    "",
 	    "Diff",
-	    "  k,<Up>        Scroll up one line of diff output",
-	    "  j,<Down>      Scroll down one line of diff output",
-	    "  C-b,PgUp      Scroll up one page of diff output",
-	    "  C-f,PgDn      Scroll down one page of diff output",
-	    "  gg,Home       Scroll to the top of the diff view",
-	    "  G,End         Scroll to the end of the diff view",
-	    "  c             Toggle coloured diff output",
-	    "  i             Toggle inversion of diff output",
-	    "  v             Toggle verbosity of diff output",
-	    "  w             Toggle ignore whitespace-only changes in diff",
-	    "  -,_           Decrease the number of context lines",
-	    "  +,=           Increase the number of context lines",
-	    "  C-k,K,<,,     Display diff of next commit in the timeline",
-	    "  C-j,J,>,.     Display diff of previous commit in the timeline",
-	    "  /             Open prompt to enter diff search",
-	    "  n             Find next line matching the current search term",
-	    "  N             Find previous line matching the current search "
+	    "  k,<Up>           Scroll up one line of diff output",
+	    "  j,<Down>         Scroll down one line of diff output",
+	    "  C-b,PgUp         Scroll up one page of diff output",
+	    "  C-f,PgDn         Scroll down one page of diff output",
+	    "  gg,Home          Scroll to the top of the diff view",
+	    "  G,End            Scroll to the end of the diff view",
+	    "  c                Toggle coloured diff output",
+	    "  i                Toggle inversion of diff output",
+	    "  v                Toggle verbosity of diff output",
+	    "  w                Toggle ignore whitespace-only changes in diff",
+	    "  -,_              Decrease the number of context lines",
+	    "  +,=              Increase the number of context lines",
+	    "  C-k,K,<,,        Display diff of next commit in the timeline",
+	    "  C-j,J,>,.        Display diff of previous commit in the "
+	    "timeline",
+	    "  /                Open prompt to enter diff search",
+	    "  n                Find next line matching the current search "
 	    "term",
+	    "  N                Find previous line matching the current search"
+	    " term",
+	    "",
+	    "Tree",
+	    "  k,<Up>           Move selection cursor up one entry",
+	    "  j,<Down>         Move selection cursor down one entry",
+	    "  C-b,PgUp         Scroll up one page",
+	    "  C-f,PgDn         Scroll down one page",
+	    "  gg,Home          Jump to first entry in the tree",
+	    "  G,End            Jump to last entry in the tree",
+	    "  l,Enter,<Right>  Move into the selected directory",
+	    "  h,<BS>,<Left>    Return to the parent directory",
+	    "  c                Toggle coloured tree output",
+	    "  i                Toggle display of file artifact SHA hashes",
+	    "  t                Display timeline of all commits modifying the "
+	    "selected entry",
+	    "  /                Open prompt to enter tree search",
+	    "  n                Find next tree entry matching the current "
+	    "search term",
+	    "  N                Find previous tree entry matching the current "
+	    "search term",
+	    "",
+	    "  See fnc(1) for complete list of options and key bindings.",
 	    0};
 	 static const char	*help0[] =
 	 {
+	    "",
 	    "Global",
 	    "  ❬H❭❬?❭❬F1❭      Open in-app help",
 	    "  ❬f❭             Toggle fullscreen",
@@ -2362,12 +2387,33 @@ help()
 	    "  ❬n❭             Find next line matching the current search term",
 	    "  ❬N❭             Find previous line matching the current search "
 	    "term",
+	    "",
+	    "Tree",
+	    "  ❬↑❭❬k❭          Move selection cursor up one entry",
+	    "  ❬↓❭❬j❭          Move selection cursor down one entry",
+	    "  ❬C-b❭❬PgUp❭     Scroll up one page",
+	    "  ❬C-f❭❬PgDn❭     Scroll down one page",
+	    "  ❬gg❭❬Home❭      Jump to first entry in the tree",
+	    "  ❬G❭❬End❭        Jump to last entry in the tree",
+	    "  ❬→❭❬l❭❬Enter❭   Move into the selected directory",
+	    "  ❬←❭❬h❭❬⌫❭       Return to the parent directory",
+	    "  ❬c❭             Toggle coloured tree output",
+	    "  ❬i❭             Toggle display of file artifact SHA hashes",
+	    "  ❬t❭             Display timeline of all commits modifying the "
+	    "selected entry",
+	    "  ❬/❭             Open prompt to enter tree search",
+	    "  ❬n❭             Find next tree entry matching the current search"
+	    " term",
+	    "  ❬N❭             Find previous tree entry matching the current "
+	    "search term",
+	    "",
+	    "  See fnc(1) for complete list of options and key bindings.",
 	    0
 	 };
 	const char		*codeset = nl_langinfo(CODESET);
 
 	progname = fsl_mprintf("%s %s Help\n", fcli_progname(), PRINT_VERSION);
-	padpopup(stdscr, !strcmp(codeset, "UTF-8") ? help0 : help, progname);
+	padpopup(view, !strcmp(codeset, "UTF-8") ? help0 : help, progname);
 }
 
 /*
@@ -2375,17 +2421,17 @@ help()
  * title. The pad is contained within a window that is offset four columns in
  * and two lines down from the parent window.
  */
-void
-padpopup(WINDOW *parent, const char **txt, const char *title)
+static void
+padpopup(struct fnc_view *view, const char **txt, const char *title)
 {
-	WINDOW	*help, *content, *fnc_win = NULL;
+	WINDOW	*help, *content;
 	int	 ch, cury, end, idx, len, py, px, wy, wx, x0, y0;
 
 	x0 = 4;		/* Number of columns to border help window. */
 	y0 = 2;		/* Number of lines to border help window. */
 	cury = 0;
-	wx = getmaxx(parent) - ((x0 + 1) * 2);  /* Width of help window. */
-	wy = getmaxy(parent) - ((y0 + 1) * 2);  /* Height of help window. */
+	wx = getmaxx(view->window) - ((x0 + 1) * 2); /* Width of help window. */
+	wy = getmaxy(view->window) - ((y0 + 1) * 2); /* Height of help window */
 	ch = ERR;
 
 	/*
@@ -2410,7 +2456,6 @@ padpopup(WINDOW *parent, const char **txt, const char *title)
 	}
 
 	doupdate();
-	fnc_win = dupwin(curscr);
 	keypad(content, TRUE);
 
 	/* Write text content to pad. */
@@ -2452,10 +2497,15 @@ padpopup(WINDOW *parent, const char **txt, const char *title)
 						cury = end;
 				}
 				break;
+			case 'g':
+				if (!fnc_home(view))
+					break;
+				/* FALL THROUGH */
 			case KEY_HOME:
 				cury = 0;
 				break;
 			case KEY_END:
+			case 'G':
 				cury = end;
 				break;
 			case ERR:
@@ -2477,10 +2527,9 @@ padpopup(WINDOW *parent, const char **txt, const char *title)
 	delwin(content);
 
 	/* Restore fnc window content. */
-	touchwin(fnc_win);
-	wnoutrefresh(fnc_win);
+	touchwin(view->window);
+	wnoutrefresh(view->window);
 	doupdate();
-	delwin(fnc_win);
 }
 
 void
