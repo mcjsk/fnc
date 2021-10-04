@@ -45,6 +45,7 @@
 .Nm
 .Cm tree
 .Op Fl c Ar commit
+.Op Ar path
 .Nm
 .Cm blame
 .Op Fl c Ar commit
@@ -321,9 +322,11 @@ Find the next line that matches the current search term.
 .It Cm N
 Find the previous line that matches the current search term.
 .El
-.It Cm tree Oo Fl C | -no-colour Oc Oo Fl c | -commit Ar commit Oc
-Display hierarchical tree of a repository.  With no options passed, the tree
-will reflect the state of the latest commit on trunk.
+.It Cm tree Oo Fl C | -no-colour Oc Oo Fl c | -commit Ar commit Oc Op Ar path
+Display hierarchical tree of a repository.  If a
+.Ar path
+is specified, display tree nodes of this path.  With no options passed, the
+tree will reflect the state of the latest commit on trunk.
 .Pp
 Tree nodes are lexicographically ordered and may be postfixed with an identifier
 corresponding to the mode of the file object on disk as returned by

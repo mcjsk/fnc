@@ -414,7 +414,7 @@ struct fnc_repo_tree_node {
 	struct fnc_repo_tree_node	*lastchild;  /* Last child in list. */
 	char				*basename;   /* Final path component. */
 	char				*path;	     /* Full pathname of node */
-	char				*uuid;	     /* File artifact hash. */
+	fsl_uuid_str			 uuid;	     /* File artifact hash. */
 	mode_t				 mode;	     /* File mode. */
 	double				 mtime;	     /* Mod time of file. */
 	uint_fast16_t			 pathlen;    /* Length of path. */
@@ -435,7 +435,7 @@ struct fnc_tree_object {
 struct fnc_tree_entry {
 	char			*basename; /* Final component of path. */
 	char			*path;	   /* Full pathname of tree entry. */
-	char			*uuid;	   /* File artifact hash. */
+	fsl_uuid_str		 uuid;	   /* File artifact hash. */
 	mode_t			 mode;	   /* File mode. */
 	double			 mtime;	   /* Modification time of file. */
 	int			 idx;	   /* Index of this tree entry. */
@@ -663,6 +663,9 @@ static bool		 fnc_path_is_root_dir(const char *);
 /* static bool		 fnc_path_is_cwd(const char *); */
 static int		 open_tree_view(struct fnc_view *, const char *,
 			    fsl_id_t);
+static int		 walk_tree_path(struct fnc_tree_view_state *,
+			    struct fnc_repository_tree *,
+			    struct fnc_tree_object **, const char *);
 static int		 create_repository_tree(struct fnc_repository_tree **,
 			    fsl_uuid_str *, fsl_id_t);
 static int		 tree_builder(struct fnc_repository_tree *,
@@ -717,6 +720,8 @@ static bool		 fnc_home(struct fnc_view *);
 static struct fnc_colour	*get_colour(fsl_list *, int);
 static struct fnc_tree_entry	*get_tree_entry(struct fnc_tree_object *,
 				    int);
+static struct fnc_tree_entry	*find_tree_entry(struct fnc_tree_object *,
+				    const char *, size_t);
 
 int
 main(int argc, const char **argv)
@@ -994,10 +999,17 @@ path_is_child(const char *child, const char *parent, size_t parentlen)
 	return true;
 }
 
+/*
+ * As a special case, due to fsl_ckout_filename_check() resolving the current
+ * checkout directory to ".", this function returns true for ".". For this
+ * reason, when path is intended to be the current working directory for any
+ * directory other than the repository root, callers must ensure path is either
+ * absolute or relative to the respository root--not ".".
+ */
 static bool
 fnc_path_is_root_dir(const char *path)
 {
-	while (*path == '/')
+	while (*path == '/' || *path == '.')
 		++path;
 	return (*path == '\0');
 }
@@ -5034,14 +5046,21 @@ open_tree_view(struct fnc_view *view, const char *path, fsl_id_t rid)
 		return fcli_err_set(FSL_RC_ERROR,
 		    "%s::%s:%d create_repository_tree [%s]",
 		    __func__, __FILE__, __LINE__, s->commit_id);
+
 	/*
 	 * Open the initial root level of the repository tree now. Subtrees
 	 * opened during traversal are built and destroyed on demand.
 	 */
-	rc = tree_builder(s->repo, &s->root, path);
+	rc = tree_builder(s->repo, &s->root, "/");
 	if (rc)
 		goto end;
 	s->tree = s->root;
+	/*
+	 * If user has supplied a path arg (i.e., fnc tree path/in/repo),
+	 * walk the path and open corresponding (sub)tree objects now.
+	 */
+	if (!fnc_path_is_root_dir(path))
+		rc = walk_tree_path(s, s->repo, &s->root, path);
 
 	if ((s->tree_label = fsl_mprintf("checkin %s", s->commit_id)) == NULL) {
 		rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d fsl_mprintf",
@@ -5063,6 +5082,84 @@ open_tree_view(struct fnc_view *view, const char *path, fsl_id_t rid)
 end:
 	if (rc)
 		close_tree_view(view);
+	return rc;
+}
+
+/*
+ * Decompose the supplied path into its constituent components, then build,
+ * open and visit each subtree segment on the way to the requested entry.
+ */
+static int
+walk_tree_path(struct fnc_tree_view_state *s, struct fnc_repository_tree *repo,
+    struct fnc_tree_object **root, const char *path)
+{
+	struct fnc_tree_object	*tree = NULL;
+	const char		*p;
+	char			*slash, *subpath = NULL;
+	int			 rc = 0;
+
+	/* Find each slash and open preceding directory segment as a tree. */
+	p = path;
+	while (*p) {
+		struct fnc_tree_entry	*te;
+		char			*te_name;
+
+		while (p[0] == '/')
+			p++;
+
+		slash = strchr(p, '/');
+		if (slash == NULL)
+			te_name = fsl_strdup(p);
+		else
+			te_name = fsl_strndup(p, slash - p);
+		if (te_name == NULL) {
+			rc = fcli_err_set(FSL_RC_ERROR, "%s::%s:%d fsl_strdup",
+			    __func__, __FILE__, __LINE__);
+			break;
+		}
+
+		te = find_tree_entry(s->tree, te_name, fsl_strlen(te_name));
+		if (te == NULL) {
+			rc = fcli_err_set(FSL_RC_NOT_FOUND,
+			    "%s::%s:%d find_tree_entry(%s)",
+			    __func__, __FILE__, __LINE__, te_name);
+			fsl_free(te_name);
+			break;
+		}
+		fsl_free(te_name);
+
+		s->first_entry_onscreen = s->selected_entry = te;
+		if (!S_ISDIR(s->selected_entry->mode))
+			break;	/* If a file, jump to this entry. */
+
+		slash = strchr(p, '/');
+		if (slash)
+			subpath = fsl_strndup(path, slash - path);
+		else
+			subpath = fsl_strdup(path);
+		if (subpath == NULL) {
+			rc = fcli_err_set(FSL_RC_ERROR, "%s::%s:%d fsl_strdup",
+			    __func__, __FILE__, __LINE__);
+			break;
+		}
+
+		rc = tree_builder(repo, &tree, subpath + 1 /* Leading slash */);
+		if (rc)
+			break;
+		rc = visit_subtree(s, tree);
+		if (rc) {
+			fnc_object_tree_close(tree);
+			break;
+		}
+
+		if (slash == NULL)
+			break;
+		fsl_free(subpath);
+		subpath = NULL;
+		p = slash;
+	}
+
+	fsl_free(subpath);
 	return rc;
 }
 
@@ -6060,6 +6157,26 @@ get_tree_entry(struct fnc_tree_object *tree, int i)
 		return NULL;
 
 	return &tree->entries[i];
+}
+
+/* Find entry in tree with basename name. */
+static struct fnc_tree_entry *
+find_tree_entry(struct fnc_tree_object *tree, const char *name, size_t len)
+{
+	int	idx;
+
+	/* Entries are sorted in strcmp() order. */
+	for (idx = 0; idx < tree->nentries; ++idx) {
+		struct fnc_tree_entry *te = &tree->entries[idx];
+		int cmp = strncmp(te->basename, name, len);
+		if (cmp < 0)
+			continue;
+		if (cmp > 0)
+			break;
+		if (te->basename[len] == '\0')
+			return te;
+	}
+	return NULL;
 }
 
 static int
