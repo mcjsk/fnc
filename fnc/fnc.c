@@ -1,3 +1,4 @@
+/* -*- Mode: C; tab-width: 4; indent-tabs-mode: t; c-basic-offset: 4 -*- */ 
 /*
  * Copyright (c) 2021 Mark Jamsek <mark@jamsek.com>
  * Copyright (c) 2013-2021 Stephan Beal <https://wanderinghorse.net>
@@ -886,13 +887,14 @@ end:
 static int
 map_repo_path(char **requested_path)
 {
-	fsl_cx		*f = fcli_cx();
+	fsl_cx		* const f = fcli_cx();
 	fsl_buffer	 buf = fsl_buffer_empty;
 	char		*canonpath = NULL, *ckoutdir = NULL, *path = NULL;
 	size_t		 len;
 	int		 rc = 0;
 	bool		 root;
-
+	fsl_size_t	ckoutDirLen = 0;
+	char const *	zCkoutDir = 0;
 	*requested_path = NULL;
 
 	/* If no path argument is supplied, default to repository root. */
@@ -914,11 +916,16 @@ map_repo_path(char **requested_path)
 	 * it is either: (a) relative; or (b) the root of the current checkout.
 	 * Otherwise, use the root of the current checkout.
 	 */
+
+	zCkoutDir = fsl_cx_ckout_dir_name(f, &ckoutDirLen);
+	if(!zCkoutDir){
+		rc = RC(FSL_RC_NOT_A_CKOUT,"%s", "Checkout is currently required.");
+		goto end;
+	}
 	rc = fsl_cx_getcwd(f, &buf);
-	ckoutdir = fsl_strdup(f->ckout.dir);
-	ckoutdir[f->ckout.dirLen - 1] = '\0';	/* Trim trailing slash. */
 	if (rc)
 		goto end;
+	ckoutdir = fsl_mprintf("%.*s", (int)ckoutDirLen-1, zCkoutDir);
 	root = fsl_strcmp(ckoutdir, fsl_buffer_cstr(&buf)) == 0;
 	fsl_buffer_reuse(&buf);
 	rc = fsl_ckout_filename_check(f, (canonpath[0] == '.' || !root) ?
