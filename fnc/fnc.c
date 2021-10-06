@@ -78,6 +78,7 @@
 #define nitems(a)	(sizeof((a)) / sizeof((a)[0]))
 #define STRINGIFYOUT(s)	#s
 #define STRINGIFY(s)	STRINGIFYOUT(s)
+#define FILE_POSITION	__FILE__ ":" STRINGIFY(__LINE__)
 
 /* Application macros. */
 #define PRINT_VERSION	STRINGIFY(FNC_VERSION)
@@ -86,8 +87,14 @@
 #define SPIN_INTERVAL	200		/* Status line progress indicator. */
 #define SPINNER		"\\|/-\0"
 #define NULL_DEVICE	"/dev/null"
-#define NULL_DEVICELEN (sizeof(NULL_DEVICE) - 1)
+#define NULL_DEVICELEN	(sizeof(NULL_DEVICE) - 1)
 #define KEY_ESCAPE	27
+#if DEBUG
+#define RC(r, fmt, ...)	fcli_err_set(r, "%s::%s " fmt,			\
+			    __func__, FILE_POSITION, __VA_ARGS__)
+#else
+#define RC(r, fmt, ...) fcli_err_set(r, fmt, __VA_ARGS__)
+#endif /* DEBUG */
 
 /* Portability macros. */
 #ifndef __OpenBSD__
@@ -751,6 +758,7 @@ main(int argc, const char **argv)
 		goto end;
 	} else if (fnc_init.hflag)
 		usage();
+		/* NOT REACHED */
 
 	rc = fcli_fingerprint_check(true);
 	if (rc)
@@ -761,25 +769,32 @@ main(int argc, const char **argv)
 	else if ((rc = fcli_dispatch_commands(fnc_init.cmd_args, false)
 	    == FSL_RC_NOT_FOUND) && argc == 2) {
 		/*
-		 * Check if user has entered 'fnc path/in/repo' and assume
-		 * 'fnc timeline path/in/repo' was meant.
+		 * Check if user entered 'fnc path/in/repo' and if a valid path
+		 * is found, assume 'fnc timeline path/in/repo' was meant.
 		 */
 		rc = map_repo_path(&path);
-		if (rc || !path)
+		if (rc == FSL_RC_NOT_FOUND || !path) {
+			rc = RC(rc, "'%s' is not a valid command or path",
+			    argv[1]);
+			fnc_init.err = rc;
+			usage();
+			/* NOT REACHED */
+		} else if (rc)
 			goto end;
 		cmd = &fnc_init.cmd_args[FNC_VIEW_TIMELINE];
 		fnc_init.path = path;
 		fcli_err_reset(); /* For cmd_timeline::fcli_process_flags(). */
 	}
-	else if (rc || (rc = fcli_has_unused_args(false))) {
+
+	if ((rc = fcli_has_unused_args(false))) {
 		fnc_init.err = rc;
 		usage();
-	} else if (rc)
-		goto end;
+		/* NOT REACHED */
+	}
 
 	f = fcli_cx();
 	if (!fsl_cx_db_repo(f)) {
-		rc = fsl_cx_err_set(f, FSL_RC_MISUSE, "repo database required");
+		rc = RC(FSL_RC_MISUSE, "%s", "repository database required");
 		goto end;
 	}
 
@@ -823,20 +838,20 @@ cmd_timeline(fcli_command const *argv)
 
 		fnc_init.nrecords.limit = strtonum(s, INT_MIN, INT_MAX, &ptr);
 		if (errno == ERANGE)
-			return fsl_cx_err_set(f, FSL_RC_RANGE,
+			return RC(FSL_RC_RANGE,
 			    "<n> out of range: -n|--limit=%s [%s]", s, ptr);
 		else if (errno != 0 || errno == EINVAL)
-			return fsl_cx_err_set(f, FSL_RC_MISUSE,
+			return RC(FSL_RC_MISUSE,
 			    "<n> not a number: -n|--limit=%s [%s]", s, ptr);
 		else if (ptr && *ptr != '\0')
-			return fsl_cx_err_set(f, FSL_RC_MISUSE,
+			return RC(FSL_RC_MISUSE,
 			    "invalid char in <n>: -n|--limit=%s [%s]", s, ptr);
 	}
 
 	if (fnc_init.sym != NULL) {
 		rc = fsl_sym_to_rid(f, fnc_init.sym, FSL_SATYPE_CHECKIN, &rid);
 		if (rc || rid < 0)
-			return fcli_err_set(FSL_RC_TYPE,
+			return RC(FSL_RC_TYPE,
 			    "artifact [%s] not resolvable to a commit",
 			    fnc_init.sym);
 	}
@@ -851,8 +866,7 @@ cmd_timeline(fcli_command const *argv)
 		goto end;
 	v = view_open(0, 0, 0, 0, FNC_VIEW_TIMELINE);
 	if (v == NULL) {
-		fcli_err_set(FSL_RC_ERROR, "%s::%s:%d view_open",
-		    __func__, __FILE__, __LINE__);
+		RC(FSL_RC_ERROR, "%s", "view_open");
 		goto end;
 	}
 	rc = open_timeline_view(v, rid, path);
@@ -885,15 +899,13 @@ map_repo_path(char **requested_path)
 	if (!fcli_next_arg(false)) {
 		*requested_path = fsl_strdup("/");
 		if (*requested_path == NULL)
-			return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
-			    __func__, __FILE__, __LINE__);
+			return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 		return rc;
 	}
 
 	canonpath = fsl_strdup(fcli_next_arg(true));
 	if (canonpath == NULL) {
-		rc = fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
-			    __func__, __FILE__, __LINE__);
+		rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 		goto end;
 	}
 
@@ -919,8 +931,7 @@ map_repo_path(char **requested_path)
 	if (canonpath[0] == '\0') {
 		path = fsl_strdup(canonpath);
 		if (path == NULL) {
-			rc = fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
-			    __func__, __FILE__, __LINE__);
+			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 			goto end;
 		}
 	} else {
@@ -931,14 +942,12 @@ map_repo_path(char **requested_path)
 			goto end;
 		path = fsl_strdup(fsl_buffer_str(&buf));
 		if (path == NULL) {
-			rc = fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
-			    __func__, __FILE__, __LINE__);
+			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 			goto end;
 		}
 		if (access(path, F_OK) != 0) {
-			rc = fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_ACCESS),
-			    "%s::%s:%d file doesn't exist or inaccessible [%s]",
-			    __func__, __FILE__, __LINE__, path);
+			rc = RC(fsl_errno_to_rc(errno, FSL_RC_ACCESS),
+			    "path does not exist or inaccessible [%s]", path);
 			goto end;
 		}
 		/*
@@ -950,9 +959,7 @@ map_repo_path(char **requested_path)
 			fsl_free(path);
 			path = fsl_strdup("");
 			if (path == NULL) {
-				rc = fcli_err_set(FSL_RC_OOM,
-				    "%s::%s:%d fsl_strdup", __func__, __FILE__,
-				    __LINE__);
+				rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 				goto end;
 			}
 		} else if (len > f->ckout.dirLen && path_is_child(path,
@@ -983,8 +990,7 @@ map_repo_path(char **requested_path)
 	if (path[0] != '/' && (path[0] != '.' && path[1] != '/')) {
 		char *abspath;
 		if ((abspath = fsl_mprintf("/%s", path)) == NULL) {
-			rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d fsl_mprintf",
-			    __func__, __FILE__, __LINE__);
+			rc = RC(FSL_RC_ERROR, "%s", "fsl_mprintf");
 			goto end;
 		}
 		fsl_free(path);
@@ -1045,25 +1051,20 @@ path_skip_common_ancestor(char **child, const char *parent_abspath,
 	*child = NULL;
 
 	if (parentlen >= len)
-		return fcli_err_set(FSL_RC_TYPE, "%s::%s:%d invalid path",
-		    __func__, __FILE__, __LINE__);
+		return RC(FSL_RC_RANGE, "invalid path [%s]", abspath);
 	if (fsl_strncmp(parent_abspath, abspath, parentlen) != 0)
-		return fcli_err_set(FSL_RC_TYPE, "%s::%s:%d invalid path",
-		    __func__, __FILE__, __LINE__);
+		return RC(FSL_RC_TYPE, "invalid path [%s]", abspath);
 	if (!fnc_path_is_root_dir(parent_abspath) &&
 	    abspath[parentlen - 1 /* Trailing slash */] != '/')
-		return fcli_err_set(FSL_RC_TYPE, "%s::%s:%d invalid path",
-		    __func__, __FILE__, __LINE__);
+		return RC(FSL_RC_TYPE, "invalid path [%s]", abspath);
 	while (abspath[parentlen] == '/')
 		++abspath;
 	bufsz = len - parentlen + 1;
 	*child = fsl_malloc(bufsz);
 	if (*child == NULL)
-		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_malloc",
-		    __func__, __FILE__, __LINE__);
+		return RC(FSL_RC_ERROR, "%s", "fsl_malloc");
 	if (strlcpy(*child, abspath + parentlen, bufsz) >= bufsz) {
-		rc = fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_RANGE),
-		    "%s::%s:%d strlcpy", __func__, __FILE__, __LINE__);
+		rc = RC(FSL_RC_RANGE, "%s", "strlcpy");
 		fsl_free(*child);
 		*child = NULL;
 	}
@@ -1099,16 +1100,16 @@ init_curses(void)
 
 	if (sigaction(SIGPIPE, &(struct sigaction){{sigpipe_handler}}, NULL)
 	    == -1)
-		return fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_ERROR),
-		    "%s::%s:%d sigaction", __func__, __FILE__, __LINE__);
+		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR),
+		    "%s", "sigaction(SIGPIPE)");
 	if (sigaction(SIGWINCH, &(struct sigaction){{sigwinch_handler}}, NULL)
 	    == -1)
-		return fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_ERROR),
-		    "%s::%s:%d sigaction", __func__, __FILE__, __LINE__);
+		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR),
+		    "%s", "sigaction(SIGWINCH)");
 	if (sigaction(SIGCONT, &(struct sigaction){{sigcont_handler}}, NULL)
 	    == -1)
-		return fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_ERROR),
-		    "%s::%s:%d sigaction", __func__, __FILE__, __LINE__);
+		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR),
+		    "%s", "sigaction(SIGCONT)");
 
 	return 0;
 }
@@ -1159,8 +1160,7 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 		fsl_free(s->path);
 		s->path = fsl_strdup(path);
 		if (s->path == NULL)
-			return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
-			    __func__, __FILE__, __LINE__);
+			return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 	}
 
 	/*
@@ -1171,9 +1171,7 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 	/* if (path[1]) { */
 	/*	rc = fsl_compute_ancestors(db, rid, 0, 0); */
 	/*	if (rc) */
-	/*		return fcli_err_set(FSL_RC_DB, */
-	/*		    "%s::%s:%d fsl_compute_ancestors", */
-	/*		    __func__, __FILE__, __LINE__); */
+	/*		return RC(FSL_RC_DB, "%s", "fsl_compute_ancestors"); */
 	/* } */
 	s->thread_cx.q = NULL;
 	/* s->selected_idx = 0; */	/* Unnecessary? */
@@ -1188,13 +1186,13 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 		fsl_ckout_version_info(f, NULL, &s->curr_ckout_uuid);
 
 	if ((rc = pthread_cond_init(&s->thread_cx.commit_consumer, NULL))) {
-		fsl_cx_err_set(f, fsl_errno_to_rc(errno, FSL_RC_ERROR),
-		    "pthread_cond_init consumer");
+		RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+		    "%s", "pthread_cond_init");
 		goto end;
 	}
 	if ((rc = pthread_cond_init(&s->thread_cx.commit_producer, NULL))) {
-		fsl_cx_err_set(f, fsl_errno_to_rc(errno, FSL_RC_ERROR),
-		    "pthread_cond_init producer");
+		RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+		    "%s", "pthread_cond_init");
 		goto end;
 	}
 
@@ -1235,8 +1233,7 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
                              " WHERE tagid=%"FSL_ID_T_PFMT
                              " AND tagtype > 0 AND rid=blob.rid)", idtag);
 		else {
-			rc = fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
-			    "Invalid branch name [%s]",
+			rc = RC(FSL_RC_NOT_FOUND, "Invalid branch name [%s]",
 			    fnc_init.filter_branch);
 			goto end;
 		}
@@ -1256,8 +1253,8 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
                              " WHERE tagid=%"FSL_ID_T_PFMT
                              " AND tagtype > 0 AND rid=blob.rid)", idtag);
 		else {
-			rc = fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
-			    "Invalid tag [%s]", fnc_init.filter_tag);
+			rc = RC(FSL_RC_NOT_FOUND, "Invalid tag [%s]",
+			    fnc_init.filter_tag);
 			goto end;
 		}
 	}
@@ -1341,12 +1338,11 @@ view_loop(struct fnc_view *view)
 {
 	struct view_tailhead	 views;
 	struct fnc_view		*new_view;
-	int			 done = 0, rc = 0;
+	int			 done = 0, err = 0, rc = 0;
 
 	if ((rc = pthread_mutex_lock(&fnc_mutex)))
-		return fcli_err_set(fsl_errno_to_rc(rc, FSL_RC_ERROR),
-		    "%s::%s:%d pthread_mutex_lock", __func__, __FILE__,
-		    __LINE__);
+		return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+		    "%s", "pthread_mutex_lock");
 
 	TAILQ_INIT(&views);
 	TAILQ_INSERT_HEAD(&views, view, entries);
@@ -1456,13 +1452,9 @@ end:
 		view_close(view);
 	}
 
-	if (!rc) {
-		if ((rc = pthread_mutex_unlock(&fnc_mutex)))
-			rc = fcli_err_set(fsl_errno_to_rc(rc, FSL_RC_ERROR),
-			    "%s::%s:%d pthread_mutex_unlock", __func__,
-			    __FILE__, __LINE__);
-	} else
-		pthread_mutex_unlock(&fnc_mutex);
+	if ((err = pthread_mutex_unlock(&fnc_mutex)) && !rc)
+		rc = RC(fsl_errno_to_rc(err, FSL_RC_ACCESS),
+		    "%s", "pthread_mutex_unlock");
 
 	return rc;
 }
@@ -1477,9 +1469,8 @@ show_timeline_view(struct fnc_view *view)
 		rc = pthread_create(&s->thread_id, NULL, tl_producer_thread,
 		    &s->thread_cx);
 		if (rc)
-			return fcli_err_set(fsl_errno_to_rc(rc, FSL_RC_ERROR),
-			    "%s::%s:%d pthread_create", __func__, __FILE__,
-			    __LINE__);
+			return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+			    "%s", "pthread_create");
 		if (s->thread_cx.ncommits_needed > 0) {
 			rc = signal_tl_thread(view, 1);
 			if (rc)
@@ -1520,9 +1511,8 @@ tl_producer_thread(void *state)
 		}
 
 		if ((rc = pthread_mutex_lock(&fnc_mutex))) {
-			rc = fcli_err_set(fsl_errno_to_rc(rc, FSL_RC_ERROR),
-			    "%s::%s:%d pthread_mutex_lock", __func__, __FILE__,
-			    __LINE__);
+			rc = RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+			    "%s", "pthread_mutex_lock");
 			break;
 		} else if (*cx->first_commit_onscreen == NULL) {
 			*cx->first_commit_onscreen =
@@ -1532,9 +1522,8 @@ tl_producer_thread(void *state)
 			done = true;
 
 		if ((rc = pthread_cond_signal(&cx->commit_producer))) {
-			rc = fcli_err_set(fsl_errno_to_rc(rc, FSL_RC_ERROR),
-			    "%s::%s:%d pthread_cond_signal", __func__, __FILE__,
-			    __LINE__);
+			rc = RC(fsl_errno_to_rc(rc, FSL_RC_MISUSE),
+			    "%s", "pthread_cond_signal");
 			pthread_mutex_unlock(&fnc_mutex);
 			break;
 		}
@@ -1542,17 +1531,17 @@ tl_producer_thread(void *state)
 		if (done)
 			cx->ncommits_needed = 0;
 		else if (cx->ncommits_needed == 0) {
-			if (pthread_cond_wait(&cx->commit_consumer, &fnc_mutex))
-				rc = fcli_err_set(FSL_RC_ERROR,
-				    "pthread_cond_wait");
+			if ((rc = pthread_cond_wait(&cx->commit_consumer,
+			    &fnc_mutex)))
+				rc = RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+				    "%s", "pthread_cond_wait");
 			if (*cx->quit)
 				done = true;
 		}
 
 		if ((rc = pthread_mutex_unlock(&fnc_mutex)))
-			rc = fcli_err_set(fsl_errno_to_rc(rc, FSL_RC_ERROR),
-			    "%s::%s:%d pthread_mutex_unlock", __func__,
-			    __FILE__, __LINE__);
+			rc = RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+			    "%s", "pthread_mutex_unlock");
 	}
 
 	cx->timeline_end = true;
@@ -1562,31 +1551,28 @@ tl_producer_thread(void *state)
 static int
 block_main_thread_signals(void)
 {
-	fsl_cx		*f = NULL;
 	sigset_t	 set;
 
-	f = fcli_cx();
-
 	if (sigemptyset(&set) == -1)
-		return fsl_cx_err_set(f, fsl_errno_to_rc(errno, FSL_RC_ERROR),
-		    "sigemptyset() fail");
+		return RC(fsl_errno_to_rc(errno, FSL_RC_MISUSE), "%s",
+		    "sigemptyset");
 
 	/* Bespoke signal handlers for SIGWINCH and SIGCONT. */
 	if (sigaddset(&set, SIGWINCH) == -1)
-		return fsl_cx_err_set(f, fsl_errno_to_rc(errno, FSL_RC_ERROR),
-		    "sigaddset() fail");
+		return RC(fsl_errno_to_rc(errno, FSL_RC_MISUSE), "%s",
+		    "sigaddset");
 	if (sigaddset(&set, SIGCONT) == -1)
-		return fsl_cx_err_set(f, fsl_errno_to_rc(errno, FSL_RC_ERROR),
-		    "sigaddset() fail");
+		return RC(fsl_errno_to_rc(errno, FSL_RC_MISUSE), "%s",
+		    "sigaddset");
 
 	/* ncurses handles SIGTSTP. */
 	if (sigaddset(&set, SIGTSTP) == -1)
-		return fsl_cx_err_set(f, fsl_errno_to_rc(errno, FSL_RC_ERROR),
-		    "sigaddset() fail");
+		return RC(fsl_errno_to_rc(errno, FSL_RC_MISUSE), "%s",
+		    "sigaddset");
 
 	if (pthread_sigmask(SIG_BLOCK, &set, NULL))
-		return fsl_cx_err_set(f, fsl_errno_to_rc(errno, FSL_RC_ERROR),
-		    "pthread_sigmask() fail");
+		return RC(fsl_errno_to_rc(errno, FSL_RC_MISUSE), "%s",
+		    "pthread_sigmask");
 
 	return 0;
 }
@@ -1606,8 +1592,7 @@ build_commits(struct fnc_tl_thread_cx *cx)
 
 		rc = commit_builder(&commit, 0, cx->q);
 		if (rc)
-			return fcli_err_set(rc, "%s::%s:%d commit_builder",
-			    __func__, __FILE__, __LINE__);
+			return RC(rc, "%s", "commit_builder");
 		/*
 		 * TODO: Find out why, without this, fnc reads and displays
 		 * the first (i.e., latest) commit twice. This hack checks to
@@ -1624,17 +1609,15 @@ build_commits(struct fnc_tl_thread_cx *cx)
 
 		entry = fsl_malloc(sizeof(*entry));
 		if (entry == NULL)
-			return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_malloc",
-			    __func__, __FILE__, __LINE__);
+			return RC(FSL_RC_ERROR, "%s", "fsl_malloc");
 
 		entry->commit = commit;
 		fsl_stmt_cached_yield(cx->q);
 
 		rc = pthread_mutex_lock(&fnc_mutex);
 		if (rc)
-			return fcli_err_set(fsl_errno_to_rc(rc, FSL_RC_ERROR),
-			    "%s::%s:%d pthread_mutex_lock", __func__, __FILE__,
-			    __LINE__);
+			return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+			    "%s", "pthread_mutex_lock");
 
 		entry->idx = cx->commits->ncommits;
 		TAILQ_INSERT_TAIL(&cx->commits->head, entry, entries);
@@ -1648,9 +1631,8 @@ build_commits(struct fnc_tl_thread_cx *cx)
 
 		rc = pthread_mutex_unlock(&fnc_mutex);
 		if (rc)
-			return fcli_err_set(fsl_errno_to_rc(rc, FSL_RC_ERROR),
-			    "%s::%s:%d pthread_mutex_unlock", __func__,
-			    __FILE__, __LINE__);
+			return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+			    "%s", "pthread_mutex_unlock");
 
 	} while ((rc = fsl_stmt_step(cx->q)) == FSL_RC_STEP_ROW
 	    && *cx->searching == SEARCH_FORWARD
@@ -1720,18 +1702,15 @@ commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
 	if (!rc)
 		rc = fsl_buffer_append(&buf, comment, -1);
 	if (rc)
-		return fcli_err_set(rc, "%s::%s:%d fsl_buffer_append", __func__,
-		    __FILE__, __LINE__);
+		return RC(rc, "%s", "fsl_buffer_append");
 
 	commit = calloc(1, sizeof(*commit));
 	if (commit == NULL)
-		return fcli_err_set(rc, "%s::%s:%d calloc", __func__, __FILE__,
-		    __LINE__);
+		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR), "%s", "calloc");
 
 
 	if (!rid && (rc = fsl_stmt_get_id(q, 3, &rid)))
-		return fcli_err_set(rc, "%s::%s:%d fsl_stmt_get_id", __func__,
-		    __FILE__, __LINE__);
+		return RC(rc, "%s", "fsl_stmt_get_id");
 	/* Is there a more efficient way to get the parent? */
 	commit->puuid = fsl_db_g_text(db, NULL,
 	    "SELECT uuid FROM plink, blob WHERE plink.cid=%d "
@@ -1761,9 +1740,8 @@ signal_tl_thread(struct fnc_view *view, int wait)
 
 		/* Wake timeline thread. */
 		if ((rc = pthread_cond_signal(&cx->commit_consumer)))
-			return fcli_err_set(fsl_errno_to_rc(rc, FSL_RC_ERROR),
-			    "%s::%s:%d pthread_cond_signal", __func__,
-			    __FILE__, __LINE__);
+			return RC(fsl_errno_to_rc(rc, FSL_RC_MISUSE),
+			    "%s", "pthread_cond_signal");
 
 		/*
 		 * Mutex will be released while view_loop().view_input() waits
@@ -1779,9 +1757,8 @@ signal_tl_thread(struct fnc_view *view, int wait)
 
 		/* Wait while the next commit is being loaded. */
 		if ((rc = pthread_cond_wait(&cx->commit_producer, &fnc_mutex)))
-			return fcli_err_set(fsl_errno_to_rc(rc, FSL_RC_ERROR),
-			    "%s::%s:%d pthread_cond_wait", __func__, __FILE__,
-			    __LINE__);
+			return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+			    "%s", "pthread_cond_wait");
 
 		/* Show status update in timeline view. */
 		show_timeline_view(view);
@@ -1818,8 +1795,7 @@ draw_commits(struct fnc_view *view)
 		    entry ? entry->idx + 1 : 0, s->commits.ncommits,
 		    (view->searching && !view->search_status) ?
 		    "searching..." : "loading...")) == NULL) {
-			rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d fsl_mprintf",
-			    __func__, __FILE__, __LINE__);
+			rc = RC(FSL_RC_RANGE, "%s", "fsl_mprintf");
 			goto end;
 		}
 	} else {
@@ -1837,8 +1813,7 @@ draw_commits(struct fnc_view *view)
 		    entry ? entry->idx + 1 : 0, s->commits.ncommits,
 		    search_str ? search_str : (branch ? branch : "")))
 		    == NULL) {
-			rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d fsl_mprintf",
-			    __func__, __FILE__, __LINE__);
+			rc = RC(FSL_RC_RANGE, "%s", "fsl_mprintf");
 			goto end;
 		}
 	}
@@ -1860,8 +1835,7 @@ draw_commits(struct fnc_view *view)
 		    FSL_STRLEN_K256) : FSL_STRLEN_K256, uuid ? uuid :
 		    "........................................",
 		    s->path, idxstr)) == NULL) {
-			rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d fsl_mprintf",
-			    __func__, __FILE__, __LINE__);
+			rc = RC(FSL_RC_RANGE, "%s", "fsl_mprintf");
 			headln = NULL;
 			goto end;
 		}
@@ -1870,8 +1844,7 @@ draw_commits(struct fnc_view *view)
 	    view->ncols - (ncols_needed - FSL_STRLEN_K256) : FSL_STRLEN_K256,
 	    uuid ? uuid : "........................................", idxstr))
 	    == NULL) {
-		rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d fsl_mprintf",
-		    __func__, __FILE__, __LINE__);
+		rc = RC(FSL_RC_RANGE, "%s", "fsl_mprintf");
 		headln = NULL;
 		goto end;
 	}
@@ -1906,8 +1879,8 @@ draw_commits(struct fnc_view *view)
 			break;
 		user = fsl_strdup(entry->commit->user);
 		if (user == NULL) {
-			rc = fsl_errno_to_rc(errno, FSL_RC_OOM);
-			return rc;
+			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+			goto end;
 		}
 		if (strpbrk(user, "<@>") != NULL)
 			parse_emailaddr_username(&user);
@@ -2013,8 +1986,7 @@ formatln(wchar_t **ptr, int *wstrlen, const char *mbstr, int column_limit,
 			cols += width;
 			i++;
 		} else {
-			rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d wcwidth",
-			    __func__, __FILE__, __LINE__);
+			rc = RC(FSL_RC_RANGE, "%s", "wcwidth");
 			goto end;
 		}
 	}
@@ -2042,22 +2014,21 @@ multibyte_to_wchar(const char *src, wchar_t **dst, size_t *dstlen)
 	*dstlen = mbstowcs(NULL, src, 0);
 	if (*dstlen == (size_t)-1) {
 		if (errno == EILSEQ)
-			return fcli_err_set(FSL_RC_RANGE,
-			    "invalid multibyte character");
-		else
-			return fcli_err_set(FSL_RC_MISUSE, "mbstowcs");
+			return RC(FSL_RC_RANGE,
+			    "invalid multibyte character [%s]", src);
+		return RC(FSL_RC_MISUSE, "mbstowcs(%s)", src);
 	}
 
 
 	*dst = NULL;
 	*dst = fsl_malloc(sizeof(wchar_t) * (*dstlen + 1));
 	if (*dst == NULL) {
-		rc = fcli_err_set(FSL_RC_OOM, "malloc");
+		rc = RC(FSL_RC_ERROR, "%s", "malloc");
 		goto end;
 	}
 
 	if (mbstowcs(*dst, src, *dstlen) != *dstlen)
-		rc = fcli_err_set(FSL_RC_SIZE_MISMATCH, "mbstowcs mismatch");
+		rc = RC(FSL_RC_SIZE_MISMATCH, "mbstowcs(%s)", src);
 
 end:
 	if (rc) {
@@ -2134,8 +2105,7 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	comment0 = fsl_strdup(commit->comment);
 	comment = comment0;
 	if (comment == NULL)
-		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
-		    __func__, __FILE__, __LINE__);
+		return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 	while (*comment == '\n')
 		++comment;
 	eol = strchr(comment, '\n');
@@ -2177,13 +2147,12 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 
 	if (view->searching && view->search_status == SEARCH_WAITING) {
 		if ((rc = pthread_mutex_unlock(&fnc_mutex)))
-			return fcli_err_set(rc,
-			    "%s::%s:%d pthread_mutex_unlock", __func__,
-			    __FILE__, __LINE__);
+			return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+			    "%s", "pthread_mutex_unlock");
 		sched_yield();
 		if ((rc = pthread_mutex_lock(&fnc_mutex)))
-			return fcli_err_set(rc, "%s::%s:%d pthread_mutex_lock",
-			    __func__, __FILE__, __LINE__);
+			return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+			    "%s", "pthread_mutex_lock");
 		rc = view->search_next(view);
 		return rc;
 	}
@@ -2191,12 +2160,12 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 	nodelay(stdscr, FALSE);
 	/* Allow thread to make progress while waiting for input. */
 	if ((rc = pthread_mutex_unlock(&fnc_mutex)))
-		return fcli_err_set(rc, "%s::%s:%d pthread_mutex_unlock",
-		    __func__, __FILE__, __LINE__);
+		return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+		    "%s", "pthread_mutex_unlock");
 	ch = wgetch(view->window);
 	if ((rc = pthread_mutex_lock(&fnc_mutex)))
-		return fcli_err_set(rc, "%s::%s:%d pthread_mutex_lock",
-		    __func__, __FILE__, __LINE__);
+		return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+		    "%s", "pthread_mutex_lock");
 
 	if (rec_sigwinch || rec_sigcont) {
 		fnc_resizeterm();
@@ -2785,8 +2754,7 @@ make_splitscreen(struct fnc_view *view)
 		return rc;
 
 	if (mvwin(view->window, view->start_ln, view->start_col) == ERR)
-		return fcli_err_set(FSL_RC_ERROR, "%s::%s:%d mvwin", __func__,
-		    __FILE__, __LINE__);
+		return RC(FSL_RC_ERROR, "%s", "mvwin");
 
 	return rc;
 }
@@ -2806,8 +2774,7 @@ make_fullscreen(struct fnc_view *view)
 		return rc;
 
 	if (mvwin(view->window, view->start_ln, view->start_col) == ERR)
-		return fcli_err_set(FSL_RC_ERROR, "%s::%s:%d mvwin", __func__,
-		    __FILE__, __LINE__);
+		return RC(FSL_RC_ERROR, "%s", "mvwin");
 
 	return rc;
 }
@@ -2906,14 +2873,12 @@ tl_search_next(struct fnc_view *view)
 	if (s->search_commit) {
 		int	ch;
 		if ((rc = pthread_mutex_unlock(&fnc_mutex)))
-			return fcli_err_set(rc,
-			    "%s::%s:%d pthread_mutex_unlock", __func__,
-			    __FILE__, __LINE__);
+			return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+			    "%s", "pthread_mutex_unlock");
 		ch = wgetch(view->window);
 		if ((rc = pthread_mutex_lock(&fnc_mutex)))
-			return fcli_err_set(rc,
-			    "%s::%s:%d pthread_mutex_lock", __func__, __FILE__,
-			    __LINE__);
+			return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+			    "%s", "pthread_mutex_lock");
 		if (ch == KEY_BACKSPACE) {
 			view->search_status = SEARCH_CONTINUE;
 			return rc;
@@ -3070,31 +3035,29 @@ join_tl_thread(struct fnc_tl_view_state *s)
 		s->quit = 1;
 
 		if ((rc = pthread_cond_signal(&s->thread_cx.commit_consumer)))
-			return fcli_err_set(rc, "%s::%s:%d pthread_cond_signal",
-			    __func__, __FILE__, __LINE__);
+			return RC(fsl_errno_to_rc(rc, FSL_RC_MISUSE),
+			    "%s", "pthread_cond_signal");
 		if ((rc = pthread_mutex_unlock(&fnc_mutex)))
-			return fcli_err_set(rc,
-			    "%s::%s:%d pthread_mutex_unlock", __func__,
-			    __FILE__, __LINE__);
+			return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+			    "%s", "pthread_mutex_unlock");
 		if ((rc = pthread_join(s->thread_id, &err)) ||
 		    err == PTHREAD_CANCELED)
-			return fcli_err_set(rc ? rc : (intptr_t)err,
-			    "%s::%s:%d pthread_join", __func__, __FILE__,
-			    __LINE__);
+			return RC(fsl_errno_to_rc(rc, FSL_RC_MISUSE),
+			    "%s", "pthread_join");
 		if ((rc = pthread_mutex_lock(&fnc_mutex)))
-			return fcli_err_set(rc, "%s::%s:%d pthread_mutex_lock",
-			    __func__, __FILE__, __LINE__);
+			return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+			    "%s", "pthread_mutex_lock");
 
 		s->thread_id = 0;
 	}
 
 	if ((rc = pthread_cond_destroy(&s->thread_cx.commit_consumer)))
-		fcli_err_set(rc, "%s::%s:%d pthread_cond_destroy", __func__,
-		    __FILE__, __LINE__);
+		RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+		    "%s", "pthread_cond_destroy");
 
 	if ((rc = pthread_cond_destroy(&s->thread_cx.commit_producer)))
-		fcli_err_set(rc, "%s::%s:%d pthread_cond_destroy", __func__,
-		    __FILE__, __LINE__);
+		RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+		    "%s", "pthread_cond_destroy");
 
 	return rc;
 }
@@ -3157,7 +3120,7 @@ fsl_list_object_free(void *elem, void *state)
 		break;
 	}
 	default:
-		return fcli_err_set(FSL_RC_MISSING_INFO,
+		return RC(FSL_RC_MISSING_INFO,
 		    "fsl_list_state.obj missing or invalid: %d", st->obj);
 	}
 
@@ -3173,8 +3136,7 @@ init_diff_commit(struct fnc_view **new_view, int start_col,
 
 	diff_view = view_open(0, 0, 0, start_col, FNC_VIEW_DIFF);
 	if (diff_view == NULL)
-		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d view_open",
-		    __func__, __FILE__, __LINE__);
+		return RC(FSL_RC_ERROR, "%s", "view_open");
 
 	rc = open_diff_view(diff_view, commit, 5, fnc_init.ws,
 	    fnc_init.invert, !fnc_init.quiet, timeline_view);
@@ -3251,19 +3213,16 @@ create_diff(struct fnc_diff_view_state *s)
 	free(s->line_offsets);
 	s->line_offsets = fsl_malloc(sizeof(off_t));
 	if (s->line_offsets == NULL)
-		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_malloc",
-		    __func__, __FILE__, __LINE__);
+		return RC(FSL_RC_ERROR, "%s", "fsl_malloc");
 	s->nlines = 0;
 
 	fout = tmpfile();
 	if (fout == NULL) {
-		rc = fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_IO),
-		    "%s::%s:%d tmpfile", __func__, __FILE__, __LINE__);
+		rc = RC(fsl_errno_to_rc(errno, FSL_RC_IO), "%s", "tmpfile");
 		goto end;
 	}
 	if (s->f && fclose(s->f) == EOF) {
-		rc = fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_IO),
-		    "%s::%s:%d fclose", __func__, __FILE__, __LINE__);
+		rc = RC(fsl_errno_to_rc(errno, FSL_RC_IO), "%s", "fclose");
 		goto end;
 	}
 	s->f = fout;
@@ -3275,9 +3234,7 @@ create_diff(struct fnc_diff_view_state *s)
 	if (!fsl_strcmp(s->selected_commit->type, "checkin")) {
 		rc = create_changeset(s->selected_commit);
 		if (rc) {
-			rc = fcli_err_set(FSL_RC_DB,
-			    "%s::%s:%d create_changeset", __func__, __FILE__,
-			    __LINE__);
+			rc = RC(FSL_RC_DB, "%s", "create_changeset");
 			goto end;
 		}
 	} else
@@ -3333,8 +3290,7 @@ end:
 	free(st0);
 	fsl_buffer_clear(&s->buf);
 	if (s->f && fflush(s->f) != 0 && rc == 0)
-		rc = fcli_err_set(FSL_RC_IO, "%s::%s:%d fflush", __func__,
-		    __FILE__, __LINE__);
+		rc = RC(FSL_RC_IO, "%s", "fflush");
 	return rc;
 }
 
@@ -3358,9 +3314,7 @@ create_changeset(struct fnc_commit_artifact *commit)
 	    "OR mlink.fnid NOT IN (SELECT pfnid FROM mlink WHERE mid=%d)) "
 	    "ORDER BY name", commit->rid, commit->rid);
 	if (rc)
-		return fcli_err_set(FSL_RC_DB,
-		    "%s::%s:%d fsl_db_prepare_cached", __func__, __FILE__,
-		    __LINE__);
+		return RC(FSL_RC_DB, "%s", "fsl_db_prepare_cached");
 
 	while ((rc = fsl_stmt_step(st)) == FSL_RC_STEP_ROW) {
 		struct fsl_file_artifact *fdiff = NULL;
@@ -3447,7 +3401,7 @@ write_commit_meta(struct fnc_diff_view_state *s)
 	st0 = fsl_strdup(s->selected_commit->comment);
 	st = st0;
 	if (st == NULL) {
-		fcli_err_set(FSL_RC_OOM, "fsl_strdup");
+		RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 		goto end;
 	}
 	while ((line = fnc_strsep(&st, "\n")) != NULL) {
@@ -3563,8 +3517,7 @@ add_line_offset(off_t **line_offsets, size_t *nlines, off_t off)
 
 	p = fsl_realloc(*line_offsets, (*nlines + 1) * sizeof(off_t));
 	if (p == NULL)
-		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_realloc",
-		    __func__, __FILE__, __LINE__);
+		return RC(FSL_RC_ERROR, "%s", "fsl_realloc");
 	*line_offsets = p;
 	(*line_offsets)[*nlines] = off;
 	(*nlines)++;
@@ -3699,7 +3652,7 @@ diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
 	/* rc = fsl_vfile_changes_scan(f, cid, */
 	/*     FSL_VFILE_CKSIG_ENOTFILE & FSL_VFILE_CKSIG_KEEP_OTHERS); */
 	/* if (rc) */
-	/*	return fcli_err_set(rc, "fsl_vfile_changes_scan"); */
+	/*	return RC(rc, "%s", "fsl_vfile_changes_scan"); */
 
 	/*
 	 * If a previous version is supplied, load its vfile state to query
@@ -3796,7 +3749,7 @@ diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
 				if (cf && !fsl_strcmp(cf->name, path)) {
 					xminus = fsl_strdup(cf->uuid);
 					if (xminus == NULL) {
-						fcli_err_set(FSL_RC_OOM,
+						RC(FSL_RC_ERROR, "%s",
 						    "fsl_strdup");
 						goto yield;
 					}
@@ -3987,8 +3940,7 @@ diff_file(fsl_buffer *buf, fsl_buffer *bminus, const char *zminus,
 		}
 		break;
 	default:
-		fcli_err_set(FSL_RC_SIZE_MISMATCH,
-		    "invalid artifact uuid [%s], xminus");
+		RC(FSL_RC_SIZE_MISMATCH, "invalid artifact uuid [%s]", xminus);
 		goto end;
 	}
 	if (rc)
@@ -4035,8 +3987,7 @@ diff_non_checkin(fsl_buffer *buf, struct fnc_commit_artifact *commit,
 	fsl_deck *d = NULL;
 	d = fsl_deck_malloc();
 	if (d == NULL)
-		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_deck_malloc",
-		    __func__, __FILE__, __LINE__);
+		return RC(FSL_RC_ERROR, "%s", "fsl_deck_malloc");
 
 	fsl_deck_init(f, d, FSL_SATYPE_ANY);
 	if ((rc = fsl_deck_load_rid(f, d, commit->rid, FSL_SATYPE_ANY)))
@@ -4176,7 +4127,7 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
 		rc = fsl_diff_text_to_buffer(&fbuf1, &fbuf2, buf, context, sbs,
 		    diff_flags);
 	if (rc)
-		fcli_err_set(rc, "Error %s: fsl_diff_text_to_buffer\n"
+		RC(rc, "%s: fsl_diff_text_to_buffer\n"
 		    " -> %s [%s]\n -> %s [%s]", fsl_rc_cstr(rc),
 		    a ? a->name : NULL_DEVICE, a ? a->uuid : NULL_DEVICE,
 		    b ? b->name : NULL_DEVICE, b ? b->uuid : NULL_DEVICE);
@@ -4203,8 +4154,9 @@ fsl_ckout_file_content(fsl_cx *f, char const *path, fsl_buffer *dest)
 	if (!rc) {
 		assert(fname.used);
 		if (fname.mem[fname.used - 1] == '/')
-			rc = fcli_err_set(FSL_RC_MISUSE,
-			    "Filename may not have a trailing slash.");
+			rc = RC(FSL_RC_MISUSE,
+			    "Filename may not have a trailing slash [%s]",
+			    fsl_buffer_cstr(&fname));
 		else {
 			dest->used = 0;
 			rc = fsl_buffer_fill_from_filename(dest,
@@ -4225,8 +4177,7 @@ show_diff(struct fnc_view *view)
 	if ((headln = fsl_mprintf("diff %.40s %.40s",
 	    s->selected_commit->puuid ? s->selected_commit->puuid : "/dev/null",
 	    s->selected_commit->uuid)) == NULL)
-		return fcli_err_set(FSL_RC_RANGE, "%s::%s:%d fsl_mprintf",
-		    __func__, __FILE__, __LINE__);
+		return RC(FSL_RC_RANGE, "%s", "fsl_mprintf");
 
 	return write_diff(view, headln);
 }
@@ -4250,17 +4201,14 @@ write_diff(struct fnc_view *view, char *headln)
 
 	line_offset = s->line_offsets[s->first_line_onscreen - 1];
 	if (fseeko(s->f, line_offset, SEEK_SET))
-		return fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_ERROR),
-		    "%s::%s:%d fseeko", __func__, __FILE__, __LINE__);
+		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR), "%s", "fseeko");
 
 	werase(view->window);
 
 	if (headln) {
 		if ((line = fsl_mprintf("[%d/%d] %s", (s->first_line_onscreen -
 		    1 + s->current_line), nlines, headln)) == NULL)
-			return fcli_err_set(FSL_RC_RANGE,
-			    "%s::%s:%d fsl_mprintf", __func__, __FILE__,
-			    __LINE__);
+			return RC(FSL_RC_RANGE, "%s", "fsl_mprintf");
 		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0);
 		fsl_free(line);
 		fsl_free(headln);
@@ -4292,8 +4240,8 @@ write_diff(struct fnc_view *view, char *headln)
 				break;
 			}
 			fsl_free(line);
-			fcli_err_set(fsl_errno_to_rc(ferror(s->f), FSL_RC_IO),
-			    "%s::%s:%d getline", __func__, __FILE__, __LINE__);
+			RC(ferror(s->f) ? fsl_errno_to_rc(errno, FSL_RC_IO) :
+			    FSL_RC_IO, "%s", "getline");
 			return rc;
 		}
 
@@ -4398,8 +4346,7 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 	/* Copy the line up to the matching substring & write it to screen. */
 	s = fsl_strndup(line, regmatch->rm_so);
 	if (s == NULL)
-		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strndup",
-		    __func__, __FILE__, __LINE__);
+		return RC(FSL_RC_ERROR, "%s", "fsl_strndup");
 
 	rc = formatln(&wcstr, &wstrlen, s, ncols_avail, start_column);
 	if (rc) {
@@ -4417,8 +4364,7 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 		s = fsl_strndup(line + regmatch->rm_so,
 		    regmatch->rm_eo - regmatch->rm_so);
 		if (s == NULL) {
-			rc = fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strndup",
-			    __func__, __FILE__, __LINE__);
+			rc = RC(FSL_RC_ERROR, "%s", "fsl_strndup");
 			free(s);
 			return rc;
 		}
@@ -4503,9 +4449,9 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 				if (feof(s->f))
 					s->eof = true;
 				else
-					rc = fcli_err_set(fsl_errno_to_rc(errno,
-					    FSL_RC_IO), "%s::%s:%d getline",
-					    __func__, __FILE__, __LINE__);
+					RC(ferror(s->f) ?
+					    fsl_errno_to_rc(errno, FSL_RC_IO) :
+					    FSL_RC_IO, "%s", "getline");
 				break;
 			}
 		}
@@ -4676,8 +4622,8 @@ diff_search_next(struct fnc_view *view)
 		offset = s->line_offsets[start_ln - 1];
 		if (fseeko(s->f, offset, SEEK_SET) != 0) {
 			free(line);
-			return fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_IO),
-			    "%s::%s:%d fseeko", __func__, __FILE__, __LINE__);
+			return RC(fsl_errno_to_rc(errno, FSL_RC_IO),
+			    "%s", "fseeko");
 		}
 		linelen = getline(&line, &linesz, s->f);
 		if (linelen != -1 && regexec(&view->regex, line, 1,
@@ -4709,8 +4655,7 @@ close_diff_view(struct fnc_view *view)
 	int				 rc = 0;
 
 	if (s->f && fclose(s->f) == EOF)
-		rc = fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_IO),
-		    "%s::%s:%d fclose", __func__, __FILE__, __LINE__);
+		rc = RC(fsl_errno_to_rc(errno, FSL_RC_IO), "%s", "fclose");
 	free(s->line_offsets);
 	fsl_list_clear(&s->colours, fsl_list_object_free, &st);
 	s->line_offsets = NULL;
@@ -4750,11 +4695,9 @@ view_resize(struct fnc_view *view)
 		ncols = view->ncols + (COLS - view->cols);
 
 	if (wresize(view->window, nlines, ncols) == ERR)
-		return fcli_err_set(FSL_RC_ERROR, "%s::%s:%d wresize", __func__,
-		    __FILE__, __LINE__);
+		return RC(FSL_RC_ERROR, "%s", "wresize");
 	if (replace_panel(view->panel, view->window) == ERR)
-		return fcli_err_set(FSL_RC_ERROR, "%s::%s:%d replace_panel",
-		    __func__, __FILE__, __LINE__);
+		return RC(FSL_RC_ERROR, "%s", "replace_panel");
 	wclear(view->window);
 
 	view->nlines = nlines;
@@ -4900,7 +4843,7 @@ static void
 usage_tree(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " %s tree [-C|--no-colour] [-h|--help] [-c commit]\n"
+	    " %s tree [-C|--no-colour] [-h|--help] [-c commit] [path]\n"
 	    "  e.g.: %s tree -c d34dc0d3\n\n" ,
 	    fcli_progname(), fcli_progname());
 }
@@ -4942,7 +4885,7 @@ cmd_diff(fcli_command const *argv)
 		if (fcli_next_arg(false))
 			artifact1 = fcli_next_arg(true);
 		if ((rc = fsl_ckout_changes_scan(f)))
-			return fcli_err_set(rc, "fsl_ckout_changes_scan");
+			return RC(rc, "%s", "fsl_ckout_changes_scan");
 		if (!fsl_strcmp(artifact1, "current") &&
 		    !fsl_ckout_has_changes(f)) {
 			fsl_fprintf(stdout, "No local changes.\n");
@@ -4950,21 +4893,21 @@ cmd_diff(fcli_command const *argv)
 		}
 	} else { /* fcli_* APIs should prevent getting here but just in case. */
 		usage_diff();
-		return fcli_err_set(FSL_RC_MISUSE, "\ninvalid args");
+		return RC(FSL_RC_MISUSE, "invalid args: %s", fcli.argv);
 	}
 
 	/* Find the corresponding rids for the versions we have; checkout = 0 */
 	rc = fsl_sym_to_rid(f, artifact1, FSL_SATYPE_ANY, &prid);
 	if (rc || prid < 0)
-		return fcli_err_set(rc, "invalid artifact [%s]", artifact1);
+		return RC(rc, "invalid artifact [%s]", artifact1);
 	if (rid != 0)
 		rc = fsl_sym_to_rid(f, artifact2, FSL_SATYPE_ANY, &rid);
 	if (rc || rid < 0)
-		return fcli_err_set(rc, "invalid artifact [%s]", artifact2);
+		return RC(rc, "invalid artifact [%s]", artifact2);
 
 	commit = calloc(1, sizeof(*commit));
 	if (commit == NULL)
-		return fcli_err_set(FSL_RC_OOM, "calloc fail");
+		return RC(FSL_RC_ERROR, "%s", "calloc fail");
 	if (rid == 0)
 		fsl_ckout_version_info(f, NULL, (fsl_uuid_cstr *)commit->uuid);
 	else
@@ -4977,17 +4920,17 @@ cmd_diff(fcli_command const *argv)
 	 * If either of the supplied versions are not checkin artifacts,
 	 * let the user know which operands aren't valid.
 	 */
-	if ((fsl_rid_is_a_checkin(f, rid) || rid == 0) &&
-	    fsl_rid_is_a_checkin(f, prid))
-		commit->type = fsl_strdup("checkin");
-	else
-		return fcli_err_set(FSL_RC_TYPE,
-		    "artifact(s) [%s] not resolvable to a checkin",
+	if ((!fsl_rid_is_a_checkin(f, rid) && rid != 0) ||
+	    !fsl_rid_is_a_checkin(f, prid))
+		return RC(FSL_RC_TYPE,
+		    "artifact(s) [%s] not resolvable to checkin(s)",
 		    (!fsl_rid_is_a_checkin(f, rid) && rid != 0) &&
 		    !fsl_rid_is_a_checkin(f, prid) ?
 		    fsl_mprintf("%s / %s", artifact1, artifact2) :
 		    (!fsl_rid_is_a_checkin(f, rid) && rid != 0) ?
 		    artifact2 : artifact1);
+
+	commit->type = fsl_strdup("checkin");
 
 	rc = init_curses();
 	if (rc)
@@ -4997,13 +4940,13 @@ cmd_diff(fcli_command const *argv)
 		s = fnc_init.context;
 		context = strtonum(s, INT_MIN, INT_MAX, &ptr);
 		if (errno == ERANGE)
-			rc = fcli_err_set(FSL_RC_RANGE,
+			rc = RC(FSL_RC_RANGE,
 			    "out of range: -x|--context=%s [%s]", s, ptr);
 		else if (errno != 0 || errno == EINVAL)
-			rc = fcli_err_set(FSL_RC_MISUSE,
+			rc = RC(FSL_RC_MISUSE,
 			    "not a number: -x|--context=%s [%s]", s, ptr);
 		else if (ptr && *ptr != '\0')
-			rc = fcli_err_set(FSL_RC_MISUSE,
+			rc = RC(FSL_RC_MISUSE,
 			    "invalid char: -x|--context=%s [%s]", s, ptr);
 		if (rc)
 			goto end;
@@ -5012,7 +4955,7 @@ cmd_diff(fcli_command const *argv)
 
 	view = view_open(0, 0, 0, 0, FNC_VIEW_DIFF);
 	if (view == NULL) {
-		rc = fcli_err_set(FSL_RC_OOM, "view_open");
+		rc = RC(FSL_RC_ERROR, "%s", "view_open");
 		goto end;
 	}
 
@@ -5049,15 +4992,15 @@ cmd_tree(fcli_command const *argv)
 	if (rc) {
 		switch (rc) {
 		case FSL_RC_AMBIGUOUS:
-			fcli_err_set(rc, "prefix too ambiguous [%s]",
+			RC(rc, "prefix too ambiguous [%s]",
 			    fnc_init.sym);
 			goto end;
 		case FSL_RC_NOT_A_REPO:
-			fcli_err_set(rc, "%s tree needs a local checkout",
+			RC(rc, "%s tree needs a local checkout",
 			    fcli_progname());
 			goto end;
 		case FSL_RC_NOT_FOUND:
-			fcli_err_set(rc, "invalid symbolic checkin name [%s]",
+			RC(rc, "invalid symbolic checkin name [%s]",
 			    fnc_init.sym);
 			goto end;
 		case FSL_RC_MISUSE:
@@ -5068,7 +5011,7 @@ cmd_tree(fcli_command const *argv)
 	}
 
 	if (!fsl_rid_is_a_checkin(f, rid)) {
-		fcli_err_set(FSL_RC_TYPE, "%s tree can only open a check-in",
+		RC(FSL_RC_TYPE, "%s tree can only open a check-in",
 		    fcli_progname());
 		goto end;
 	}
@@ -5079,7 +5022,7 @@ cmd_tree(fcli_command const *argv)
 
 	view = view_open(0, 0, 0, 0, FNC_VIEW_TREE);
 	if (view == NULL) {
-		fcli_err_set(FSL_RC_OOM, "view_open");
+		RC(FSL_RC_ERROR, "%s", "view_open");
 		goto end;
 	}
 
@@ -5104,8 +5047,7 @@ open_tree_view(struct fnc_view *view, const char *path, fsl_id_t rid)
 	s->rid = rid;
 	s->commit_id = fsl_rid_to_uuid(f, rid);
 	if (s->commit_id == NULL)
-		return fcli_err_set(FSL_RC_AMBIGUOUS,
-		    "%s::%s:%d fsl_rid_to_uuid", __func__, __FILE__, __LINE__);
+		return RC(FSL_RC_AMBIGUOUS, "%s", "fsl_rid_to_uuid");
 
 	/*
 	 * Construct tree of entire repository from which all (sub)tress will
@@ -5113,9 +5055,7 @@ open_tree_view(struct fnc_view *view, const char *path, fsl_id_t rid)
 	 */
 	rc = create_repository_tree(&s->repo, &s->commit_id, s->rid);
 	if (rc)
-		return fcli_err_set(FSL_RC_ERROR,
-		    "%s::%s:%d create_repository_tree [%s]",
-		    __func__, __FILE__, __LINE__, s->commit_id);
+		goto end;
 
 	/*
 	 * Open the initial root level of the repository tree now. Subtrees
@@ -5133,8 +5073,7 @@ open_tree_view(struct fnc_view *view, const char *path, fsl_id_t rid)
 		rc = walk_tree_path(s, s->repo, &s->root, path);
 
 	if ((s->tree_label = fsl_mprintf("checkin %s", s->commit_id)) == NULL) {
-		rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d fsl_mprintf",
-		    __func__, __FILE__, __LINE__);
+		rc = RC(FSL_RC_RANGE, "%s", "fsl_mprintf");
 		goto end;
 	}
 
@@ -5183,16 +5122,14 @@ walk_tree_path(struct fnc_tree_view_state *s, struct fnc_repository_tree *repo,
 		else
 			te_name = fsl_strndup(p, slash - p);
 		if (te_name == NULL) {
-			rc = fcli_err_set(FSL_RC_ERROR, "%s::%s:%d fsl_strdup",
-			    __func__, __FILE__, __LINE__);
+			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 			break;
 		}
 
 		te = find_tree_entry(s->tree, te_name, fsl_strlen(te_name));
 		if (te == NULL) {
-			rc = fcli_err_set(FSL_RC_NOT_FOUND,
-			    "%s::%s:%d find_tree_entry(%s)",
-			    __func__, __FILE__, __LINE__, te_name);
+			rc = RC(FSL_RC_NOT_FOUND, "find_tree_entry(%s)",
+			    te_name);
 			fsl_free(te_name);
 			break;
 		}
@@ -5208,8 +5145,7 @@ walk_tree_path(struct fnc_tree_view_state *s, struct fnc_repository_tree *repo,
 		else
 			subpath = fsl_strdup(path);
 		if (subpath == NULL) {
-			rc = fcli_err_set(FSL_RC_ERROR, "%s::%s:%d fsl_strdup",
-			    __func__, __FILE__, __LINE__);
+			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 			break;
 		}
 
@@ -5250,15 +5186,12 @@ create_repository_tree(struct fnc_repository_tree **repo, fsl_uuid_str *id,
 
 	ptr = fsl_malloc(sizeof(struct fnc_repository_tree));
 	if (ptr == NULL)
-		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_malloc",
-		    __func__, __FILE__, __LINE__);
+		return RC(FSL_RC_ERROR, "%s", "fsl_malloc");
 	memset(ptr, 0, sizeof(struct fnc_repository_tree));
 
 	rc = fsl_deck_load_rid(fcli_cx(), &d, rid, FSL_SATYPE_CHECKIN);
 	if (rc)
-		return fcli_err_set(FSL_RC_ERROR,
-		    "%s::%s:%d fsl_deck_load_rid [%d]", __func__, __FILE__,
-		    __LINE__, rid);
+		return RC(rc, "fsl_deck_load_rid(%d) [%s]", rid, id);
 	rc = fsl_deck_F_rewind(&d);
 	if (!rc)
 		rc = fsl_deck_F_next(&d, &cf);
@@ -5271,14 +5204,12 @@ create_repository_tree(struct fnc_repository_tree **repo, fsl_uuid_str *id,
 
 		filename = fsl_strdup(cf->name);
 		if (filename == NULL) {
-			rc = fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
-			    __func__, __FILE__, __LINE__);
+			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 			goto end;
 		}
 		uuid = fsl_strdup(cf->uuid);
 		if (uuid == NULL) {
-			rc = fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
-			    __func__, __FILE__, __LINE__);
+			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 			goto end;
 		}
 		rc = fsl_mtime_of_F_card(f, rid, cf, &mtime);
@@ -5314,8 +5245,7 @@ tree_builder(struct fnc_repository_tree *repo, struct fnc_tree_object **tree,
 	*tree = NULL;
 	*tree = fsl_malloc(sizeof(**tree));
 	if (*tree == NULL)
-		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_malloc",
-		    __func__, __FILE__, __LINE__);
+		return RC(FSL_RC_ERROR, "%s", "fsl_malloc");
 	memset(*tree, 0, sizeof(**tree));
 
 	/* Count how many elements will comprise the tree to be allocated. */
@@ -5327,8 +5257,7 @@ tree_builder(struct fnc_repository_tree *repo, struct fnc_tree_object **tree,
 	}
 	(*tree)->entries = calloc(i, sizeof(struct fnc_tree_entry));
 	if ((*tree)->entries == NULL)
-		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d calloc",
-		    __func__, __FILE__, __LINE__);
+		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR), "%s", "calloc");
 	/* Construct the tree to be displayed. */
 	for(tn = repo->head, i = 0; tn; tn = tn->next) {
 		if ((!tn->parent_dir && fsl_strcmp(dir, "/")) ||
@@ -5339,16 +5268,13 @@ tree_builder(struct fnc_repository_tree *repo, struct fnc_tree_object **tree,
 		te->mtime = tn->mtime;
 		te->basename = fsl_strdup(tn->basename);
 		if (te->basename == NULL)
-			return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
-			    __func__, __FILE__, __LINE__);
+			return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 		te->path = fsl_strdup(tn->path);
 		if (te->path == NULL)
-			return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
-			    __func__, __FILE__, __LINE__);
+			return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 		te->uuid = fsl_strdup(tn->uuid);
 		if (te->uuid == NULL && !S_ISDIR(te->mode))
-			return fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_strdup",
-			    __func__, __FILE__, __LINE__);
+			return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 		te->idx = i++;
 	}
 	(*tree)->nentries = i;
@@ -5432,8 +5358,7 @@ link_tree_node(struct fnc_repository_tree *tree, const char *path,
 			nodesz += FSL_STRLEN_K256 + 1; /* NUL */
 		tn = fsl_malloc(nodesz);
 		if (tn == NULL)
-			return fcli_err_set(FSL_RC_OOM, "%s::%s:%d",
-			    __func__, __FILE__, __LINE__);
+			return RC(FSL_RC_ERROR, "%s", "fsl_malloc");
 		memset(tn, 0, sizeof(*tn));
 
 		tn->path = (char *)&tn[1];
@@ -5478,10 +5403,13 @@ link_tree_node(struct fnc_repository_tree *tree, const char *path,
 		/* Stat path for tree display features. */
 		rc = fsl_file_canonical_name2(f->ckout.dir, tn->path, &buf,
 		    false);
-		if (!rc)
-			rc = lstat(fsl_buffer_cstr(&buf), &s);
 		if (rc)
 			goto end;
+		if (lstat(fsl_buffer_cstr(&buf), &s) == -1) {
+			rc = RC(fsl_errno_to_rc(errno, FSL_RC_ACCESS),
+			    "lstat(%s)", fsl_buffer_cstr(&buf));
+			goto end;
+		}
 		tn->mode = s.st_mode;
 		fsl_buffer_reuse(&buf);
 	}
@@ -5493,9 +5421,6 @@ link_tree_node(struct fnc_repository_tree *tree, const char *path,
 	}
 end:
 	fsl_buffer_clear(&buf);
-	if (rc == -1)
-		return fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_ACCESS),
-		    "%s::%s:%d", __func__, __FILE__, __LINE__);
 	return rc;
 }
 
@@ -5537,29 +5462,28 @@ tree_entry_path(char **path, struct fnc_parent_trees *parents,
 
 	*path = calloc(1, len);
 	if (path == NULL)
-		return fcli_err_set(FSL_RC_OOM, "%s::%s:%d calloc",
-		    __func__, __FILE__, __LINE__);
+		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR), "%s", "calloc");
 
 	(*path)[0] = '/';  /* Make it absolute from the repository root. */
 	pt = TAILQ_LAST(parents, fnc_parent_trees);
 	while (pt) {
 		const char *name = pt->selected_entry->basename;
 		if (strlcat(*path, name, len) >= len) {
-			rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d strlcat",
-			    __func__, __FILE__, __LINE__);
+			rc = RC(FSL_RC_RANGE, "strlcat(%s, %s, %d)",
+			    *path, name, len);
 			goto end;
 		}
 		if (strlcat(*path, "/", len) >= len) {
-			rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d strlcat",
-			    __func__, __FILE__, __LINE__);
+			rc = RC(FSL_RC_RANGE, "strlcat(%s, \"/\", %d)",
+			    *path, len);
 			goto end;
 		}
 		pt = TAILQ_PREV(pt, fnc_parent_trees, entry);
 	}
 	if (te) {
 		if (strlcat(*path, te->basename, len) >= len) {
-			rc = fcli_err_set(FSL_RC_RANGE, "%s::%s:%d strlcat",
-			    __func__, __FILE__, __LINE__);
+			rc = RC(FSL_RC_RANGE, "strlcat(%s, %s, %d)",
+			    *path, te->basename, len);
 			goto end;
 		}
 	}
@@ -5682,9 +5606,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 			idstr = fsl_strdup(te->uuid);
 			/* Directories don't have UUIDs; pad with "..." dots. */
 			if (idstr == NULL && !S_ISDIR(mode))
-				return fcli_err_set(FSL_RC_OOM,
-				    "%s::%s:%d fsl_strdup",
-				    __func__, __FILE__, __LINE__);
+				return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 			/* If needed, pad SHA1 hash to align w/ SHA3 hashes. */
 			if (idstr == NULL || fsl_strlen(idstr) < hashlen) {
 				char buf[hashlen], pad = '.';
@@ -5692,9 +5614,8 @@ draw_tree(struct fnc_view *view, const char *treepath)
 				    (char *)memset(buf, pad,
 				    hashlen - fsl_strlen(idstr)));
 				if (idstr == NULL)
-					return fcli_err_set(FSL_RC_RANGE,
-					    "%s::%s:%d fsl_mprintf",
-					    __func__, __FILE__, __LINE__);
+					return RC(FSL_RC_RANGE,
+					    "%s", "fsl_mprintf");
 				idstr[hashlen] = '\0';
 				/* idstr = fsl_mprintf("%*c", hashlen, ' '); */
 			}
@@ -5722,9 +5643,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 		    targetlnk ? targetlnk : "")) == NULL) {
 			fsl_free(idstr);
 			fsl_free(targetlnk);
-			return fcli_err_set(FSL_RC_RANGE,
-			    "%s::%s:%d fsl_mprintf", __func__, __FILE__,
-			    __LINE__);
+			return RC(FSL_RC_RANGE, "%s", "fsl_mprintf");
 		}
 		fsl_free(idstr);
 		fsl_free(targetlnk);
@@ -5778,23 +5697,22 @@ tree_entry_get_symlink_target(char **targetlnk, struct fnc_tree_entry *te)
 
 	fsl_file_canonical_name2(fcli_cx()->ckout.dir, te->path, &fb, false);
 	if (lstat(fsl_buffer_cstr(&fb), &s) == -1) {
-		rc = fcli_err_set(FSL_RC_ACCESS, "%s::%s:%d lstat(%s)",
-		    __func__, __FILE__, __LINE__, te->path);
+		rc = RC(fsl_errno_to_rc(errno, FSL_RC_ACCESS), "lstat(%s)",
+		    fsl_buffer_cstr(&fb));
 		goto end;
 	}
 
 	bufsz = s.st_size ? (s.st_size + 1 /* NUL */) : PATH_MAX;
 	buf = fsl_malloc(bufsz);
 	if (buf == NULL) {
-		rc = fcli_err_set(FSL_RC_OOM, "%s::%s:%d fsl_malloc",
-		    __func__, __FILE__, __LINE__);
+		rc = RC(FSL_RC_ERROR, "%s", "fsl_malloc");
 		goto end;
 	}
 
 	nbytes = readlink(fsl_buffer_cstr(&fb), buf, bufsz);
 	if (nbytes == -1) {
-		rc = fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_RANGE),
-		    "%s::%s:%d readlink", __func__, __FILE__, __LINE__);
+		rc = RC(fsl_errno_to_rc(errno, FSL_RC_IO), "readlink(%s)",
+		    fsl_buffer_cstr(&fb));
 		goto end;
 	}
 	buf[nbytes] = '\0';	/* readlink() does _not_ NUL terminate */
@@ -5813,9 +5731,7 @@ end:
 	/* fsl_id_t	 rid; */
 
 	/* if (!((te->mode & (S_IFDIR | S_IFLNK)) == S_IFLNK)) */
-	/* 	return fcli_err_set(FSL_RC_TYPE, */
-	/* 	    "%s::%s:%d file not symlink [%s]", */
-	/* 	    __func__, __FILE__, __LINE__, te->path); */
+	/* 	return RC(FSL_RC_TYPE, "file not symlink [%s]", te->path); */
 	/* rc = fsl_sym_to_rid(f, te->uuid, FSL_SATYPE_ANY, &rid); */
 	/* if (!rc) */
 	/* 	rc = fsl_content_blob(f, rid, &blob); */
@@ -6019,8 +5935,7 @@ timeline_tree_entry(struct fnc_view **new_view, int start_col,
 
 	timeline_view = view_open(0, 0, 0, start_col, FNC_VIEW_TIMELINE);
 	if (timeline_view == NULL)
-		return fcli_err_set(FSL_RC_ERROR, "%s::%s:%d view_open",
-		    __func__, __FILE__, __LINE__);
+		return RC(FSL_RC_ERROR, "%s", "view_open");
 
 	/* Construct repository relative path for timeline query. */
 	rc = tree_entry_path(&path, &s->parents, s->selected_entry);
@@ -6089,8 +6004,7 @@ visit_subtree(struct fnc_tree_view_state *s, struct fnc_tree_object *subtree)
 
 	parent = calloc(1, sizeof(*parent));
 	if (parent == NULL)
-		return fcli_err_set(fsl_errno_to_rc(errno, FSL_RC_ERROR),
-		    "%s::%s:%d calloc", __func__, __FILE__, __LINE__);
+		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR), "%s", "calloc");
 
 	parent->tree = s->tree;
 	parent->first_entry_onscreen = s->first_entry_onscreen;
@@ -6122,8 +6036,7 @@ blame_tree_entry(struct fnc_view **new_view, int start_col,
 
 	blame_view = view_open(0, 0, 0, start_col, FNC_VIEW_BLAME);
 	if (blame_view == NULL) {
-		rc = fcli_err_set(FSL_RC_ERROR, "%s::%s:%d view_open"
-		    __func__, __FILE__, __LINE__);
+		rc = RC(FSL_RC_ERROR, "%s", "view_open");
 		goto end;
 	}
 
@@ -6375,9 +6288,8 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 	for (idx = 0; idx < n; ++idx) {
 		colour = fsl_malloc(sizeof(*colour));
 		if (colour == NULL)
-			return fcli_err_set(fsl_errno_to_rc(errno,
-			    FSL_RC_ERROR), "%s::%s:%d fsl_malloc",
-			    __func__, __FILE__, __LINE__);
+			return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR),
+			    "%s", "fsl_malloc");
 
 		rc = regcomp(&colour->regex, regexp[idx],
 		    REG_EXTENDED | REG_NEWLINE | REG_NOSUB);
@@ -6385,9 +6297,8 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 			static char regerr[512];
 			regerror(rc, &colour->regex, regerr, sizeof(regerr));
 			fsl_free(colour);
-			return fcli_err_set(FSL_RC_ERROR,
-			    "%s::%s:%d regcomp(%s) -> %s", __func__, __FILE__,
-			    __LINE__, regexp[idx], regerr);
+			return RC(FSL_RC_ERROR, "regcomp(%s) -> %s",
+			    regexp[idx], regerr);
 		}
 
 		colour->scheme = pairs[idx][0];
