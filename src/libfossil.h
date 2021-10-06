@@ -3325,10 +3325,9 @@ FSL_EXPORT int fsl_htmlize_to_buffer(fsl_buffer *p, const char *zIn, fsl_int_t n
    Equivalent to fsl_htmlize_to_buffer() but returns the result as a
    new string which must eventually be fsl_free()d by the caller.
 
-   Returns NULL for invalidate arguments or allocation error.
+   Returns NULL for invalid arguments or allocation error.
 */
 FSL_EXPORT char *fsl_htmlize_str(const char *zIn, fsl_int_t n);
-
 
 /**
    If c is a character Fossil likes to HTML-escape, assigns *xlate
@@ -3348,7 +3347,7 @@ FSL_EXPORT fsl_size_t fsl_htmlize_xlate(int c, char const ** xlate);
    changed without also changing the corresponding code in
    diff.c.
 */
-enum fsl_diff_flag_t {
+enum fsl_diff_flag_e {
 /** Ignore end-of-line whitespace */
 FSL_DIFF_IGNORE_EOLWS = 0x01,
 /** Ignore end-of-line whitespace */
@@ -3380,8 +3379,7 @@ FSL_DIFF_STRIP_EOLCR =    0x1000,
 
    Maintenance reminder: this one currently has no counterpart in
    fossil(1), is not tracked in the same way, and need not map to an
-   internal flag value. That's a good thing, because we'll be out
-   of flags once Jan's done tinkering in fossil(1) ;).
+   internal flag value.
 */
 FSL_DIFF_ANSI_COLOR =     0x2000
 };
@@ -3429,6 +3427,8 @@ FSL_DIFF_ANSI_COLOR =     0x2000
 
    - Expose the raw diff-generation bits via the internal API
    to facilitate/enable the creation of custom diff formats.
+
+   @see fsl_diff_v2()
 */
 FSL_EXPORT int fsl_diff_text(fsl_buffer const *pA, fsl_buffer const *pB,
                              fsl_output_f out, void * outState,
@@ -3448,6 +3448,628 @@ FSL_EXPORT int fsl_diff_text(fsl_buffer const *pA, fsl_buffer const *pB,
 FSL_EXPORT int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
                                        fsl_buffer *pOut, short contextLines,
                                        short sbsWidth, int diffFlags );
+
+/**
+   Flags for use with the 2021-era text-diff generation APIs
+   (fsl_diff_builder and friends). This set of flags may still change
+   considerably.
+
+   Maintenance reminder: these values are holy and must not be
+   changed without also changing the corresponding code in
+   diff2.c.
+*/
+enum fsl_diff2_flag_e {
+/** Ignore end-of-line whitespace. Applies to
+    all diff builders. */
+FSL_DIFF2_IGNORE_EOLWS = 0x01,
+/** Ignore end-of-line whitespace. Applies to
+    all diff builders.  */
+FSL_DIFF2_IGNORE_ALLWS = 0x03,
+/** Suppress optimizations (debug). Applies to
+    all diff builders. */
+FSL_DIFF2_NOOPT =        0x0100,
+/** Invert the diff. Applies to all diff builders. */
+FSL_DIFF2_INVERT =       0x0200,
+/** Use context line count even if it's zero. Applies to all diff
+    builders. Normally a value of 0 is treated as the built-in
+    default. */
+FSL_DIFF2_CONTEXT_ZERO =  0x0400,
+/** Only calculate diff if it's not "too big." Applies to all diff
+    builders and will cause the public APIs which hit this to return
+    FSL_RC_RANGE.  */
+FSL_DIFF2_NOTTOOBIG =    0x0800,
+/** Strip trailing CR before diffing. Applies to all diff builders. */
+FSL_DIFF2_STRIP_EOLCR =    0x1000,
+/** More precise but slower side-by-side diff algorithm, for diffs
+    which use that. */
+FSL_DIFF2_SLOW_SBS =       0x2000,
+/**
+   Tells diff builders which support it to include line numbers in
+   their output.
+*/
+FSL_DIFF2_LINE_NUMBERS = 0x10000,
+/**
+   Tells diff builders which optionally support an "index" line
+   to NOT include it in their output.
+*/
+FSL_DIFF2_NOINDEX = 0x20000,
+
+/**
+   Tells the TCL diff builder that the complete output and each line
+   should be wrapped in {...}.
+*/
+FSL_DIFF2_TCL_BRACES = 0x40000
+};
+
+/**
+   UNDER CONSTRUCTION: part of an ongoing porting effort.
+
+   An instance of this class is used to convey certain state to
+   fsl_diff_builder objects. Some of this state is configuration
+   provided by the client and some is persistent state used during the
+   diff generation process.
+
+   Certain fsl_diff_builder implementations may require that some
+   ostensibly optional fields be filled out. Documenting that is TODO,
+   as the builders get developed.
+*/
+struct fsl_diff_opt {
+  /**
+     Flags from the fsl_diff2_flag_e enum.
+  */
+  uint32_t diffFlags;
+  /**
+     Number of lines of diff context (number of lines common to the
+     LHS and RHS of the diff). Library-wide default is 5.
+  */
+  unsigned short nContext;
+  /**
+     Column width for side-by-side, a.k.a. split, diffs.
+  */
+  short columnWidth;
+  /**
+     Number of files seen in the diff so far (incremented by routines
+     which delegate to fsl_diff_builder instances).
+  */
+  uint32_t fileCount;
+  /**
+     The filename of the object represented by the LHS of the
+     diff. This is intentended for, e.g., generating header-style
+     output. This
+     may be NULL.
+  */
+  const char * nameLHS;
+  /**
+     The hash of the object represented by the LHS of the diff. This
+     is intentended for, e.g., generating header-style output. This
+     may be NULL.
+  */
+  const char * hashLHS;
+  /**
+     The filename of the object represented by the LHS of the
+     diff. This is intentended for, e.g., generating header-style
+     output. If this is NULL but nameLHS is not then they are assumed
+     to have the same name.
+  */
+  const char * nameRHS;
+  /**
+     The hash of the object represented by the RHS of the diff. This
+     is intentended for, e.g., generating header-style output. This
+     may be NULL.
+  */
+  const char * hashRHS;
+  /**
+     Output destination. Any given builder might, depending on how it
+     actually constructs the diff, buffer output and delay calling
+     this until its finish() method is called.
+  */
+  fsl_output_f out;
+  /**
+     State for this->out(). Ownership is unspecified by this
+     interface: it is for use by this->out() but what is supposed to
+     happen to it after this object is done with it depends on
+     higher-level code.
+  */
+  void * outState;
+};
+
+/** Convenience typedef. */
+typedef struct fsl_diff_opt fsl_diff_opt;
+
+/** Initialized-with-defaults fsl_diff_opt structure, intended for
+    const-copy initialization. */
+#define fsl_diff_opt_empty_m {\
+  0/*diffFlags*/, 5/*nContext*/, 0/*columnWidth*/,\
+  0/*fileCount*/, NULL/*hashLHS*/, NULL/*hashRHS*/,\
+  NULL/*out*/, NULL/*outState*/ \
+}
+
+/** Initialized-with-defaults fsl_diff_opt structure, intended for
+    non-const copy initialization. */
+extern const fsl_diff_opt fsl_diff_opt_empty;
+
+/**
+   UNDER CONSTRUCTION: part of an ongoing porting effort.
+
+   Information about each line of a file being diffed.
+
+   This type is only in the public API for use by the fsl_diff_builder
+   interface. It is not otherwise intended for public use.
+*/
+struct fsl_dline {
+  /**  The text of the line. Owned by higher-level code. */
+  const char *z;
+  /** Hash of the line. Lower X bits are the length. */
+  unsigned int h;
+  /** Indent of the line. Only !=0 with certain options */
+  unsigned short indent;
+  /** number of bytes */
+  unsigned short n;
+  /** 1+(Index of next line with same the same hash) */
+  unsigned int iNext;
+  /**
+     an array of fsl_dline elements serves two purposes.  The fields
+     above are one per line of input text.  But each entry is also
+     a bucket in a hash table, as follows: */
+  unsigned int iHash;   /* 1+(first entry in the hash chain) */
+};
+
+/**
+   Convenience typedef.
+*/
+typedef struct fsl_dline fsl_dline;
+/** Initialized-with-defaults fsl_dline structure, intended for
+    const-copy initialization. */
+#define fsl_dline_empty_m {NULL,0U,0U,0U,0U,0U}
+/** Initialized-with-defaults fsl_dline structure, intended for
+    non-const copy initialization. */
+extern const fsl_dline fsl_dline_empty;
+
+/**
+   Maximum number of change spans for fsl_dline_change.
+*/
+#define fsl_dline_change_max_spans 8
+
+/**
+   This "mostly-internal" type describes zero or more (up to
+   fsl_dline_change_max_spans) areas of difference between two lines
+   of text. This type is only in the public API for use with concrete
+   fsl_diff_builder implementations.
+*/
+struct fsl_dline_change {
+  /** Number of change spans (number of used elements in this->a). */
+  unsigned char n;
+  /** Array of change spans, in left-to-right order */
+  struct fsl_dline_change_span {
+    /* Reminder: int instead of uint b/c some ported-in algos use
+       negatives. */
+    /** Byte offset to start of a change on the left */
+    int iStart1;
+    /** Length of the left change in bytes */
+    int iLen1;
+    /** Byte offset to start of a change on the right */
+    int iStart2;
+    /** Length of the change on the right in bytes */
+    int iLen2;
+    /** True if this change is known to have no useful subdivs */
+    int isMin;
+  } a[fsl_dline_change_max_spans];
+};
+
+/**
+   Convenience typedef.
+*/
+typedef struct fsl_dline_change fsl_dline_change;
+
+/** Initialized-with-defaults fsl_dline_change structure, intended for
+    const-copy initialization. */
+#define fsl_dline_change_empty_m { \
+  0, {                                                \
+    {0,0,0,0,0}, {0,0,0,0,0}, {0,0,0,0,0}, {0,0,0,0,0}, \
+    {0,0,0,0,0}, {0,0,0,0,0}, {0,0,0,0,0}, {0,0,0,0,0} \
+  } \
+}
+
+/** Initialized-with-defaults fsl_dline_change structure, intended for
+    non-const copy initialization. */
+extern const fsl_dline_change fsl_dline_change_empty;
+
+/**
+   Given two lines of a diff, this routine computes a set of changes
+   between those lines for display purposes and writes a description
+   of those changes into the 3rd argument. After returning, p->n
+   contains the number of elements in p->a which were populated by
+   this routine.
+
+   This function is only in the public API for use with
+   fsl_diff_builder objects. It is not a requirement for such objects
+   but can be used to provide more detailed diff changes than marking
+   whole lines as simply changed or not.
+*/
+FSL_EXPORT void fsl_dline_change_spans(const fsl_dline *pLeft,
+                                       const fsl_dline *pRight,
+                                       fsl_dline_change * const p);
+
+/**
+   Compares two fsl_dline instances using memcmp() semantics,
+   returning 0 if they are equivalent.
+
+   @see fsl_dline_cmp_ignore_ws()
+*/
+FSL_EXPORT int fsl_dline_cmp(const fsl_dline * const pA,
+                             const fsl_dline * const pB);
+
+/**
+   Counterpart of fsl_dline_cmp() but ignores all whitespace
+   when comparing for equivalence.
+*/
+FSL_EXPORT int fsl_dline_cmp_ignore_ws(const fsl_dline * const pA,
+                                       const fsl_dline * const pB);
+
+/**
+   Breaks the first n bytes of z into an array of fsl_dline records,
+   each of which refers back to z (so it must remain valid for their
+   lifetime). If n is negative, fsl_strlen() is used to calculate
+   z's length.
+
+   The final argument may be any flags from the fsl_diff2_flag_e
+   enum, but only the following flags are honored:
+
+   - FSL_DIFF2_STRIP_EOLCR
+   - FSL_DIFF2_IGNORE_EOLWS
+   - FSL_DIFF2_IGNORE_ALLWS
+
+   On success, returns 0, assigns *pnLine to the number of lines, and
+   sets *pOut to the array of fsl_dline objects, transfering ownership
+   to the caller, who must eventually pass it to fsl_free() to free
+   it.
+
+   On error, neither *pnLine nor *pOut are modified and returns one
+   of:
+
+   - FSL_RC_DIFF_BINARY if the input appears to be non-text.
+   - FSL_RC_OOM on allocation error.
+*/
+FSL_EXPORT int fsl_break_into_dlines(const char *z, fsl_int_t n,
+                                     uint32_t *pnLine,
+                                     fsl_dline **pOut, uint64_t diff2Flags);
+
+/** Convenience typedef. */
+typedef struct fsl_diff_builder fsl_diff_builder;
+
+/**
+   UNDER CONSTRUCTION: part of an ongoing porting effort to
+   include the 2021-09 fossil diff-rendering improvements.
+
+   A diff builder is an object responsible for formatting low-level
+   diff info another form, typically for human readability but also
+   for machine readability (patches).
+
+   The internal APIs which drive each instance of this class guaranty
+   that if any method of this class returns non-0 (an error code) then
+   no futher methods will be called except for finalize().
+
+   TODOs:
+
+   - The current API does not allow these objects to be re-used: each
+   one is responsible for a single diff run, and that's it. We "should"
+   add a reset() method to each. The workflow would look something like:
+
+   1. Client creates builder.
+   2. Pass it to the diff builder driver (this library).
+   3. builder->start()
+   4. ... various methods...
+   5. builder->finish()
+   6. Return to caller, who may then call builder->reset(), tweak
+      builder->cfg as needed for next set of inputs, and return to
+      step 2 for the next file.
+   7. builder->finalize()
+*/
+struct fsl_diff_builder {
+  /** Config info, owned by higher-level routines. Every diff builder
+      requires one of these. */
+  fsl_diff_opt * cfg;
+  /**
+     If not NULL, this is called once per diff to give the builder a
+     chance to perform any bootstrapping initialization or header
+     output. At the point this is called, this->cfg is assumed to have
+     been filled out properly. Diff builder implementations which
+     require dynamic resource allocation may perform it here or in
+     their factory routine(s).
+
+     This method should also reset any dynamic state of a builder so
+     that it may be reused for subsequent diffs. This enables the API
+     to use a single builder for a collection of logically grouped
+     files without having to destroy and reallocate the builder.
+
+     Must return 0 on success, non-0 on error. If it returns non-0,
+     the only other method of the instance which may be legally called
+     is finalize().
+  */
+  int (*start)(fsl_diff_builder* const);
+
+  /**
+     If this is not NULL, it is called one time at the start of each
+     chunk of diff for a given file and is passed the line number of
+     each half of the diff and the number of lines in that chunk for
+     that half (including insertions and deletions). This is primarily
+     intended for generating conventional unified diff chunk headers
+     in the form:
+
+     @code
+     @@ -A,B +C,D @@
+     @endcode
+
+     The inclusion of this method in an object might preclude certain
+     other diff formatting changes which might otherwise apply.
+     Notably, if the span between two diff chunks is smaller than the
+     context lines count, the diff builder driver prefers to merge
+     those two chunks together. That "readability optimization" is
+     skipped when this method is set because this method may otherwise
+     report that lines are being skipped which then subsequently get
+     output by the driver.
+
+     Must return 0 on success, non-0 on error.
+  */
+  int (*chunkHeader)(fsl_diff_builder* const,
+                     uint32_t A, uint32_t B,
+                     uint32_t C, uint32_t D);
+
+  /**
+     Tells the builder that n lines of common output are to be
+     skipped. How it represents this is up to the impl. If the 3rd
+     argument is true, this block represents the final part of the
+     diff. Must return 0 on success, non-0 on error.
+  */
+  int (*skip)(fsl_diff_builder* const, uint32_t n, bool isFinal);
+  /**
+     Tells the builder that the given line represents one line of
+     common output. Must return 0 on success, non-0 on error.
+  */
+  int (*common)(fsl_diff_builder* const, fsl_dline const * line);
+  /**
+     Tells the builder that the given line represents an "insert" into
+     the RHS. Must return 0 on success, non-0 on error.
+  */
+  int (*insertion)(fsl_diff_builder* const, fsl_dline const * line);
+  /**
+     Tells the builder that the given line represents a "deletion" - a
+     line removed from the LHS. Must return 0 on success, non-0 on
+     error.
+  */
+  int (*deletion)(fsl_diff_builder* const, fsl_dline const * line);
+  /**
+     Tells the builder that the given line represents a replacement
+     from the LHS to the RHS. Must return 0 on success, non-0 on
+     error.
+  */
+  int (*replacement)(fsl_diff_builder* const, fsl_dline const * lineLhs,
+                     fsl_dline const * lineRhs);
+  /**
+     Tells the builder that the given line represents an "edit" from
+     the LHS to the RHS. Must return 0 on success, non-0 on
+     error. Builds are free, syntax permitting, to usse the
+     fsl_dline_change_spans() API to elaborate on edits for display
+     purposes or to the treat this as a single pair of calls to
+     this->deletion() an dthis->insertion(). In the latter case they
+     simply need to pass lineLhs to this->deletion() and lineRhs to
+     this->insertion().
+  */
+  int (*edit)(fsl_diff_builder* const, fsl_dline const * lineLhs,
+              fsl_dline const * lineRhs);
+  /**
+     Must "finish" the diff process. Depending on the diff impl, this
+     might flush any pending output or may be a no-op. This is only
+     called if the rest of the diff was generated without producing an
+     error result.
+
+     This member may be NULL.
+
+     Any given implementation is free to collect its output in an
+     internal representation and delay flushing it until this routine
+     is called.
+
+     Must return 0 on success, non-0 on error (e.g. output flushing
+     fails).
+  */
+  int (*finish)(fsl_diff_builder* const);
+  /**
+     Must free any state owned by this builder, including the builder
+     object. It must not generate any output.
+
+     Must return 0 on success, non-0 on error (e.g. output flushing
+     fails), but must clean up its own state and the builder object in
+     either case.
+  */
+  void (*finalize)(fsl_diff_builder* const);
+  /** Impl-specific diff-generation state. If it is owned by this
+      instance then this->finalize() must clean it up. */
+  void * pimpl;
+  /** Impl-specific int for tracking basic output state, e.g.  of
+      opening/closing tags. This must not be modified by clients. */
+  unsigned int implFlags;
+  /* Trivia: a cursory examination of the diff builders in fossil(1)
+     suggests that we cannot move the management of
+     lnLHS/lnRHS from the concrete impls into the main API. */
+  /** Number of lines seen of the LHS content. It is up to
+      the concrete builder impl to update this if it's needed. */
+  uint32_t lnLHS;
+  /** Number of lines seen of the RHS content. It is up to
+      the concrete builder impl to update this if it's needed. */
+  uint32_t lnRHS;
+};
+
+/** Initialized-with-defaults fsl_diff_builder structure, intended for
+    const-copy initialization. */
+#define fsl_diff_builder_empty_m { \
+  NULL/*cfg*/,                                                        \
+  NULL/*start()*/,NULL/*chunkHeader()*/,NULL/*skip()*/, NULL/*common()*/, \
+  NULL/*insertion()*/,NULL/*deletion()*/, NULL/*replacement()*/, \
+  NULL/*edit()*/, NULL/*finish()*/, NULL/*finalize()*/,        \
+  NULL/*pimpl*/, 0U/*implFlags*/,\
+  0/*lnLHS*/,0/*lnRHS*/ \
+}
+
+/** Initialized-with-defaults fsl_diff_builder structure, intended for
+    non-const copy initialization. */
+extern const fsl_diff_builder fsl_diff_builder_empty;
+
+/**
+   Type IDs for use with fsl_diff_builder_factory().
+*/
+enum fsl_diff_builder_e {
+/**
+   A "dummy" diff builder intended only for testing the
+   fsl_diff_builder interface and related APIs. It does not produce
+   output which is generically useful.
+*/
+FSL_DIFF_BUILDER_DEBUG = 1,
+/**
+   Generates diffs in a compact low(ist)-level form originally
+   designed for use by diff renderers implemented in JavaScript.
+
+   This diff builder outputs a JSON object with the following
+   properties:
+
+   - hashLHS, hashRHS: the hashes of the LHS/RHS content.
+
+   - nameLHS, nameRHS: the filenames of the LHS/RHS. By convention, if
+     the RHS is NULL but the LHS is not, both sides have the same
+     name.
+
+   - diff: raw diff content, an array with the structure described
+     below.
+
+   Note that it is legal for the names and hashes to be "falsy" (null,
+   not set, or empty strings).
+
+   The JSON array consists of integer opcodes with each opcode
+   followed by zero or more arguments:
+
+   @code
+   Syntax        Mnemonic    Description
+
+   -----------   --------    --------------------------
+   0             END         This is the end of the diff.
+   1  INTEGER    SKIP        Skip N lines from both files.
+   2  STRING     COMMON      The line STRING is in both files.
+   3  STRING     INSERT      The line STRING is in only the right file.
+   4  STRING     DELETE      The line STRING is in only the left file.
+   5  SUBARRAY   EDIT        One line is different on left and right.
+   @endcode
+
+   The SUBARRAY is an array of 3*N+1 strings with N>=0.  The triples
+   represent common-text, left-text, and right-text.  The last string
+   in SUBARRAY is the common-suffix.  Any string can be empty if it
+   does not apply.
+*/
+FSL_DIFF_BUILDER_JSON1,
+
+/**
+   A diff builder which produces output compatible with the patch(1)
+   command. Its output is functionally identical to fossil(1)'s
+   default diff output except that by default includes an Index line
+   at the top of each file (use the FSL_DIFF2_NOINDEX flag in its
+   fsl_diff_opt::diffFlags to disable that).
+
+   This diff builder supports the FSL_DIFF2_LINE_NUMBERS flag.
+*/
+FSL_DIFF_BUILDER_UNIFIED_TEXT,
+
+/**
+   A diff builder which outputs a description of the diff in a
+   TCL-readable form. It requires external TCL code in order to
+   function.
+
+   TODO: a flag which includes the tcl/tk script as part of the
+   output. We first need to compile fossil's diff.tcl into the
+   library.
+*/
+FSL_DIFF_BUILDER_TCL,
+//! NYI
+FSL_DIFF_BUILDER_SBS_TEXT
+};
+typedef enum fsl_diff_builder_e fsl_diff_builder_e;
+
+/**
+   A factory for creating fsl_diff_builder instances of types which
+   are built in to the library. This does not preclude the creation of
+   client-side diff builders (e.g. ones which write to ncurses widgets
+   or similar special-case output).
+
+   On success, returns 0 and assigns *pOut to a new builder instance
+   which must eventually be freed by calling its pOut->finalize()
+   method. On error, returns non-0 and *pOut is not modified. Error
+   codes include FSL_RC_OOM (alloc failed) and FSL_RC_TYPE (unknown
+   type ID), FSL_RC_TYPE (type is not (or not yet) implemented).
+*/
+FSL_EXPORT int fsl_diff_builder_factory( fsl_diff_builder_e type,
+                                         fsl_diff_builder **pOut );
+
+/**
+   This counterpart of fsl_diff_text() defines its output format in
+   terms of a fsl_diff_builder instance which the caller must provide.
+   The caller is responsible for pointing pBuilder->cfg to a
+   configuration object suitable for the desired diff. In particular,
+   pBuilder->cfg->out and (if necessary) pBuilder->cfg->outState must
+   be set to non-NULL values.
+
+   This function generates a low-level diff of two versions of content,
+   contained in the given buffers, and passes that diff through the
+   given diff builder to format it.
+
+   Returns 0 on success. On error, it is not generally knowable whether
+   or not any diff output was generated.
+
+   The builder may produce any error codes it wishes, in which case
+   they are propagated back to the caller. Common error codes include:
+
+   - FSL_RC_OOM if an allocation fails.
+
+   - FSL_RC_RANGE if the diff is "too big" and
+   pBuilder->config->diffFlags contains the FSL_DIFF2_NOTTOOBIG flag.
+
+   - FSL_RC_DIFF_BINARY if the to-diff content appears to be binary,
+   noting that "appears to be" is heuristric-driven and subject to
+   false positives. Specifically, files with extremely long lines will
+   be recognized as binary (and are, in any case, generally less than
+   useful for most graphical diff purposes).
+
+   @see fsl_diff_builder_factory()
+   @see fsl_diff_text()
+   @see fsl_diff_raw_v2()
+*/
+FSL_EXPORT int fsl_diff_v2(fsl_buffer const * pv1,
+                           fsl_buffer const * pv2,
+                           fsl_diff_builder * const pBuilder);
+
+/**
+   Performs a diff, as for fsl_diff_v2(), but returns the results in
+   the form of an array of COPY, DELETE, INSERT triples terminated by
+   3 entries with the value 0.
+
+   Each triple in the list specifies how many *lines* of each half of
+   the diff (the first 2 arguments to this function) to COPY as-is
+   (common code), DELETE (exists in the LHS but not in the RHS), and
+   INSERT (exists in the RHS but not in the LHS). By breaking the
+   input into lines and following these values, a line-level text-mode
+   diff of the two blobs can be generated.
+
+   See fsl_diff_v2() for the details, all of which apply except for
+   the output:
+
+   - cfg->out is ignored.
+
+   - On success, *outRaw is assigned to the output array and ownership
+     of it is transfered to the caller, who must eventually pass it to
+     fsl_free() to free it.
+
+*/
+FSL_EXPORT int fsl_diff_v2_raw(fsl_buffer const * pv1,
+                               fsl_buffer const * pv2,
+                               fsl_diff_opt const * const cfg,
+                               int **outRaw );
+
 
 /**
    If zDate is an ISO8601-format string, optionally with a .NNN
@@ -4407,6 +5029,15 @@ FSL_EXPORT int fsl_buffer_merge3(fsl_buffer *pPivot, fsl_buffer *pV1, fsl_buffer
                                  fsl_buffer *pOut, unsigned int *conflictCount);
 
 /**
+   Appends the first n bytes of string z to buffer b in the form of
+   TCL-format string literal. If n<0 then fsl_strlen() is used to
+   determine the length. Returns 0 on success, FSL_RC_OOM on error.
+ */
+FSL_EXPORT int fsl_buffer_append_tcl_literal(fsl_buffer * const b,
+                                             char const * z, fsl_int_t n);
+
+
+/**
    Event IDs for use with fsl_confirm_callback_f implementations.
 
    The idea here is to send, via callback, events from the library to
@@ -4897,7 +5528,12 @@ FSL_DBROLE_CKOUT = 0x04,
    that it has complete control over their names and internal
    relationships.
 */
-FSL_DBROLE_MAIN = 0x08
+FSL_DBROLE_MAIN = 0x08,
+/**
+   Refers to the "temp" database. This is only used by a very few APIs
+   and is outright invalid for most.
+*/
+FSL_DBROLE_TEMP = 0x10
 };
 typedef enum fsl_dbrole_e fsl_dbrole_e;
 
@@ -5250,6 +5886,17 @@ FSL_RC_UNSUPPORTED,
 FSL_RC_MISSING_INFO,
 
 /**
+   Special case of FSL_RC_TYPE triggered in some diff APIs, indicating
+   that the API cannot diff what appears to be binary data.
+*/
+FSL_RC_DIFF_BINARY,
+/**
+   Triggered by some diff APIs to indicate that only whitespace
+   changes we found and the diff was requested to ignore whitespace.
+ */
+FSL_RC_DIFF_WS_ONLY,
+
+/**
    Must be the final entry in the enum. Used for creating client-side
    result codes which are guaranteed to live outside of this one's
    range.
@@ -5581,7 +6228,7 @@ FSL_EXPORT int fsl_cx_err_set_e( fsl_cx * f, fsl_error * err );
    This is intended for testing and debugging only, and not as an
    error reporting mechanism for a full-fledged application.
 */
-FSL_EXPORT int fsl_cx_err_report( fsl_cx * f, char addNewline );
+FSL_EXPORT int fsl_cx_err_report( fsl_cx * const f, bool addNewline );
 
 /**
    Unconditionally Moves db->error's state into f. If db is NULL then
@@ -5594,7 +6241,7 @@ FSL_EXPORT int fsl_cx_err_report( fsl_cx * f, char addNewline );
 
    @see fsl_cx_uplift_db_error2()
 */
-FSL_EXPORT int fsl_cx_uplift_db_error( fsl_cx * f, fsl_db * db );
+FSL_EXPORT int fsl_cx_uplift_db_error( fsl_cx * const f, fsl_db * db );
 
 /**
    If rc is not 0 and f has no error state but db does, this calls
@@ -5606,7 +6253,7 @@ FSL_EXPORT int fsl_cx_uplift_db_error( fsl_cx * f, fsl_db * db );
    Results are undefined if db is NULL and f has no main db
    connection.
 */
-FSL_EXPORT int fsl_cx_uplift_db_error2(fsl_cx *f, fsl_db * db, int rc);
+FSL_EXPORT int fsl_cx_uplift_db_error2(fsl_cx * const f, fsl_db * db, int rc);
 
 /**
    Outputs the first n bytes of src to f's configured output
@@ -6052,6 +6699,8 @@ FSL_EXPORT char const * fsl_cx_db_file_config(fsl_cx const * f,
    applies to db file implied by the specified role (2nd
    parameter). If no such role is opened, or the role is invalid,
    NULL is returned.
+
+   Note that the role of FSL_DBROLE_TEMP is invalid here.
 */
 FSL_EXPORT char const * fsl_cx_db_file_for_role(fsl_cx const * f,
                                                 fsl_dbrole_e r,
@@ -6080,6 +6729,8 @@ FSL_EXPORT char const * fsl_cx_db_file_for_role(fsl_cx const * f,
    tables/views would go into the "main" DB, which is actually a
    transient DB in this API, so it's important to use the correct DB
    name when creating such constructs.
+
+   Note that the role of FSL_DBROLE_TEMP is invalid here.
 */
 FSL_EXPORT char const * fsl_cx_db_name_for_role(fsl_cx const * f,
                                                 fsl_dbrole_e r,
@@ -6131,7 +6782,7 @@ FSL_EXPORT char const * fsl_cx_ckout_dir_name(fsl_cx const * f,
    @see fsl_cx_db_repo()
    @see fsl_cx_db_ckout()
 */
-FSL_EXPORT fsl_db * fsl_cx_db( fsl_cx * f );
+FSL_EXPORT fsl_db * fsl_cx_db( fsl_cx * const f );
 
 /**
    If f is not NULL and has had its repo opened via
@@ -6140,7 +6791,7 @@ FSL_EXPORT fsl_db * fsl_cx_db( fsl_cx * f );
 
    @see fsl_cx_db()
 */
-FSL_EXPORT fsl_db * fsl_cx_db_repo( fsl_cx * f );
+FSL_EXPORT fsl_db * fsl_cx_db_repo( fsl_cx * const f );
 
 /**
    If f is not NULL and has had a checkout opened via
@@ -6149,7 +6800,7 @@ FSL_EXPORT fsl_db * fsl_cx_db_repo( fsl_cx * f );
 
    @see fsl_cx_db()
 */
-FSL_EXPORT fsl_db * fsl_cx_db_ckout( fsl_cx * f );
+FSL_EXPORT fsl_db * fsl_cx_db_ckout( fsl_cx * const f );
 
 /**
    A helper which fetches f's repository db. If f has no repo db
@@ -6161,7 +6812,7 @@ FSL_EXPORT fsl_db * fsl_cx_db_ckout( fsl_cx * f );
    @see fsl_cx_db_repo()
    @see fsl_needs_ckout()
 */
-FSL_EXPORT fsl_db * fsl_needs_repo(fsl_cx * f);
+FSL_EXPORT fsl_db * fsl_needs_repo(fsl_cx * const f);
 
 /**
    The checkout-db counterpart of fsl_needs_repo().
@@ -6170,7 +6821,7 @@ FSL_EXPORT fsl_db * fsl_needs_repo(fsl_cx * f);
    @see fsl_needs_repo()
    @see fsl_cx_db_ckout()
 */
-FSL_EXPORT fsl_db * fsl_needs_ckout(fsl_cx * f);
+FSL_EXPORT fsl_db * fsl_needs_ckout(fsl_cx * const f);
 
 /**
    Opens the given database file as f's configuration database. If f
@@ -6210,7 +6861,7 @@ FSL_EXPORT int fsl_config_close( fsl_cx * f );
    @see fsl_config_open()
    @see fsl_config_close()
 */
-FSL_EXPORT fsl_db * fsl_cx_db_config( fsl_cx * f );
+FSL_EXPORT fsl_db * fsl_cx_db_config( fsl_cx * const f );
 
 /**
    Convenience form of fsl_db_prepare() which uses f's main db.
@@ -7821,22 +8472,23 @@ FSL_EXPORT bool fsl_db_existsv(fsl_db * db, char const * sql, va_list args );
    Returns FSL_RC_MISUSE without side effects if !db, !rv, !sql,
    or !*sql.
 */
-FSL_EXPORT int fsl_db_get_int32( fsl_db * db, int32_t * rv,
-                      char const * sql, ... );
+FSL_EXPORT int fsl_db_get_int32( fsl_db * const db, int32_t * rv,
+                                 char const * sql, ... );
 
 /**
    va_list counterpart of fsl_db_get_int32().
 */
-FSL_EXPORT int fsl_db_get_int32v( fsl_db * db, int32_t * rv,
-                       char const * sql, va_list args);
+FSL_EXPORT int fsl_db_get_int32v( fsl_db * const db, int32_t * rv,
+                                  char const * sql, va_list args);
 
 /**
    Convenience form of fsl_db_get_int32() which returns the value
    directly but provides no way of checking for errors. On error,
    or if no result is found, defaultValue is returned.
 */
-FSL_EXPORT int32_t fsl_db_g_int32( fsl_db * db, int32_t defaultValue,
-                            char const * sql, ... );
+FSL_EXPORT int32_t fsl_db_g_int32( fsl_db * const db,
+                                   int32_t defaultValue,
+                                   char const * sql, ... );
 
 /**
    The int64 counterpart of fsl_db_get_int32(). See that function
@@ -8386,19 +9038,23 @@ FSL_EXPORT int fsl_db_init( fsl_error * err, char const * zFilename,
    by a fsl_db instance which has an associated fsl_cx instance. On
    the first row, the column names are output.
 */
-FSL_EXPORT int fsl_stmt_each_f_dump( fsl_stmt * stmt, void * state );
+FSL_EXPORT int fsl_stmt_each_f_dump( fsl_stmt * const stmt, void * state );
 
 /**
    Returns true if the table name specified by the final argument
    exists in the fossil database specified by the 2nd argument on the
    db connection specified by the first argument, else returns false.
 
+   Trivia: this is one of the few libfossil APIs which makes use of
+   FSL_DBROLE_TEMP.
+
    Potential TODO: this is a bit of a wonky interface. Consider
    changing it to eliminate the role argument, which is only really
    needed if we have duplicate table names across attached dbs or if
    we internally mess up and write a table to the wrong db.
 */
-FSL_EXPORT bool fsl_db_table_exists(fsl_db * db, fsl_dbrole_e whichDb, const char *zTable);
+FSL_EXPORT bool fsl_db_table_exists(fsl_db * db, fsl_dbrole_e whichDb,
+                                    const char *zTable);
 
 /**
    The elipsis counterpart of fsl_stmt_bind_fmtv().
@@ -8442,7 +9098,7 @@ FSL_EXPORT int fsl_stmt_bind_fmt( fsl_stmt * st, char const * fmt, ... );
     such an argument's memory is invalidated before the statement is
     done with it.
 */
-FSL_EXPORT int fsl_stmt_bind_fmtv( fsl_stmt * st, char const * fmt,
+FSL_EXPORT int fsl_stmt_bind_fmtv( fsl_stmt * const st, char const * fmt,
                                    va_list args );
 
 /**
@@ -8468,7 +9124,7 @@ FSL_EXPORT int fsl_stmt_bind_fmtv( fsl_stmt * st, char const * fmt,
    is illegal if FSL_RC_STEP_ROW was not the result). This is also why
    it cannot reset the statement if that result is returned.
 */
-FSL_EXPORT int fsl_stmt_bind_stepv( fsl_stmt * st, char const * fmt,
+FSL_EXPORT int fsl_stmt_bind_stepv( fsl_stmt * const st, char const * fmt,
                                     va_list args );
 
 /**
@@ -8627,7 +9283,7 @@ FSL_EXPORT void fsl_md5_update(fsl_md5_cx *cx, void const * buf, fsl_size_t len)
    Finishes up the calculation of the md5 for the given context and
    writes a 16-byte digest value to the 2nd parameter.  Use
    fsl_md5_digest_to_base16() to convert the digest output value to
-   hexidecimal form.
+   hexadecimal form.
 
    @see fsl_md5_init()
    @see fsl_md5_update()
@@ -12266,8 +12922,10 @@ FSL_EXPORT bool fsl_repo_forbids_delta_manifests(fsl_cx * f);
 /**
    This is a variant of fsl_ckout_manifest_write() which writes data
    regarding the given manifest RID to the given blobs. If manifestRid
-   is 0 or less then the current checkout is assumed and FSL_RC_NOT_A_CKOUT
-   is returned if no checkout is opened.
+   is 0 or less then the current checkout is assumed and
+   FSL_RC_NOT_A_CKOUT is returned if no checkout is opened (or
+   FSL_RC_RANGE if an empty checkout is opened - a freshly-created
+   repository with no checkins).
 
    For each buffer argument which is not NULL, the corresponding
    checkin-related data are appended to it. All such blobs will end
@@ -12282,7 +12940,101 @@ FSL_EXPORT int fsl_repo_manifest_write(fsl_cx *f,
                                        fsl_buffer * const manifestUuid,
                                        fsl_buffer * const manifestTags );
 
+/**
+   UNDER CONSTRUCTION. Configuration for use with fsl_annotate().
+*/
+struct fsl_annotate_opt {
+  /**
+     The repository-root-relative NUL-terminated filename to annotate.
+  */
+  char const * filename;
+  /**
+     The checkin from which the file's version should be selected. A
+     value of 0 or less means the current checkout, if in a checkout,
+     and is otherwise an error.
+  */
+  fsl_id_t versionRid;
+  /**
+     The origin checkin version. A value of 0 or less means the "root of the
+     tree."
 
+     TODO: figure out and explain the difference between versionRid
+     and originRid.
+  */
+  fsl_id_t originRid;
+  /**
+     The maximum number of versions to search through.
+  */
+  unsigned int limit;
+  /**
+     - 0 = do not ignore any spaces.
+     - <0 = ignore trailing end-of-line spaces.
+     - >1 = ignore all spaces
+  */
+  int spacePolicy;
+  /**
+     If true, include the name of the user for which each
+     change is attributed (noting that merges show whoever
+     merged the change, which may differ from the original
+     committer. If false, show only version information.
+
+     This option is alternately known as "blame".
+  */
+  bool praise;
+  /**
+     Output file blob versions, instead of checkin versions.
+  */
+  bool fileVersions;
+  /**
+     The output channel for the resulting annotation.
+  */
+  fsl_output_f out;
+  /**
+     State for passing as the first argument to this->out().
+  */
+  void * outState;
+};
+/** Convenience typedef. */
+typedef struct fsl_annotate_opt fsl_annotate_opt;
+
+/** Initialized-with-defaults fsl_annotate_opt structure, intended for
+    const-copy initialization. */
+#define fsl_annotate_opt_empty_m {\
+  NULL/*filename*/, \
+  0/*versionRid*/,0/*originRid*/,    \
+  0U/*limit*/, 0/*spacePolicy*/, \
+  false/*praise*/, \
+  NULL/*out*/, NULL/*outState*/ \
+}
+
+/** Initialized-with-defaults fsl_annotate_opt structure, intended for
+    non-const copy initialization. */
+extern const fsl_annotate_opt fsl_annotate_opt_empty;
+
+/**
+   UNDER CONSTRUCTION, not yet implemented.
+
+   Runs an "annotation" of an SCM-controled file and sends the results
+   to opt->out().
+
+   Returns 0 on success. On error, returns one of:
+
+   - FSL_RC_OOM on OOM
+
+   - FSL_RC_NOT_A_CKOUT if opt->versionRid<=0 and f has no opened checkout.
+
+   - FSL_RC_NOT_FOUND if the given filename cannot be found in the
+     repository OR a given version ID does not resolve to a blob. (Sorry
+     about this ambiguity!)
+
+   - FSL_RC_PHANTOM if a phantom blob is encountered while trying to
+     annotate.
+
+   opt->out() may return arbitrary non-0 result codes, in which case
+   the returned code is propagated to the caller of this function.
+*/
+FSL_EXPORT int fsl_annotate( fsl_cx * const f,
+                             fsl_annotate_opt const * const opt );
 
 #if defined(__cplusplus)
 } /*extern "C"*/
@@ -15068,8 +15820,8 @@ FSL_EXPORT int fsl_vpath_length(fsl_vpath const * p);
 FSL_EXPORT void fsl_vpath_clear(fsl_vpath *path);
 
 /**
-   Find the mid-point of the path.  If the path contains fewer than
-   2 steps, returns 0. The returned node is owned by path may be
+   Find the mid-point of the path.  If the path contains fewer than 2
+   steps, returns 0. The returned node is owned by path and may be
    invalidated by any APIs which manipulate path.
 */
 FSL_EXPORT fsl_vpath_node * fsl_vpath_midpoint(fsl_vpath * path);
@@ -15105,9 +15857,44 @@ FSL_EXPORT fsl_vpath_node * fsl_vpath_midpoint(fsl_vpath * path);
    On error, f's error state may be updated with a description of the
    problem.
 */
-FSL_EXPORT int fsl_vpath_shortest( fsl_cx * f, fsl_vpath * path,
+FSL_EXPORT int fsl_vpath_shortest( fsl_cx * const f, fsl_vpath * const path,
                                    fsl_id_t iFrom, fsl_id_t iTo,
                                    bool directOnly, bool oneWayOnly );
+
+/**
+   This variant of fsl_vpath_shortest() stores the shortest direct
+   path from version iFrom to version iTo in the ANCESTOR temporary
+   table using f's current repo db handle. That table gets created, if
+   needed, else cleared by this call.
+
+   The ANCESTOR temp table has the following interface:
+
+   @code
+   rid INT UNIQUE
+   generation INTEGER PRIMARY KEY
+   @endcode
+
+   Where [rid] is a checkin version RID and [generation] is the
+   1-based number of steps from iFrom, including iFrom (so iFrom's own
+   generation is 1).
+
+   On error returns 0 and, if pSteps is not NULL, assigns *pSteps to
+   the number of entries added to the ancestor table. On error, pSteps
+   is never modifed, any number of various non-0 codes may be
+   returned, and f's error state will, if possible (not an OOM), be
+   updated to describe the problem.
+
+   This function's name is far too long and descriptive. We might want
+   to consider something shorter.
+
+   Maintenance reminder: this impl swaps the 2nd and 3rd parameters
+   compared to fossil(1)'s version!
+*/
+FSL_EXPORT int fsl_vpath_shortest_store_in_ancestor(fsl_cx * const f,
+                                                    fsl_id_t iFrom,
+                                                    fsl_id_t iTo,
+                                                    uint32_t *pSteps);
+
 
 /**
    Reconstructs path from path->pStart to path->pEnd, reversing its
@@ -17109,6 +17896,79 @@ FSL_EXPORT void fsl_deck_clean_cards(fsl_deck * d, char const * letters);
 */
 FSL_EXPORT int fsl_repo_fingerprint_search(fsl_cx *f, fsl_id_t rcvid, char ** zOut);
 
+/**
+   A context for running a raw diff.
+  
+   The aEdit[] array describes the raw diff.  Each triple of integers in
+   aEdit[] means:
+  
+     (1) COPY:   Number of lines aFrom and aTo have in common
+     (2) DELETE: Number of lines found only in aFrom
+     (3) INSERT: Number of lines found only in aTo
+  
+   The triples repeat until all lines of both aFrom and aTo are accounted
+   for.
+*/
+struct fsl_diff_cx {
+  /*TODO unsigned*/ int *aEdit;        /* Array of copy/delete/insert triples */
+  /*TODO unsigned*/ int nEdit;         /* Number of integers (3x num of triples) in aEdit[] */
+  /*TODO unsigned*/ int nEditAlloc;    /* Space allocated for aEdit[] */
+  fsl_dline *aFrom;      /* File on left side of the diff */
+  /*TODO unsigned*/ int nFrom;         /* Number of lines in aFrom[] */
+  fsl_dline *aTo;        /* File on right side of the diff */
+  /*TODO unsigned*/ int nTo;           /* Number of lines in aTo[] */
+  int (*cmpLine)(const fsl_dline * const, const fsl_dline *const); /* Function to be used for comparing */
+};
+/**
+   Convenience typeef.
+*/
+typedef struct fsl_diff_cx fsl_diff_cx;
+/** Initialized-with-defaults fsl_diff_cx structure, intended for
+    const-copy initialization. */
+#define fsl_diff_cx_empty_m {\
+  NULL,0,0,NULL,0,NULL,0,fsl_dline_cmp \
+}
+/** Initialized-with-defaults fsl_diff_cx structure, intended for
+    non-const copy initialization. */
+extern const fsl_diff_cx fsl_diff_cx_empty;
+
+
+
+/** @internal
+
+    Compute the differences between two files already loaded into
+    the fsl_diff_cx structure.
+   
+    A divide and conquer technique is used.  We look for a large
+    block of common text that is in the middle of both files.  Then
+    compute the difference on those parts of the file before and
+    after the common block.  This technique is fast, but it does
+    not necessarily generate the minimum difference set.  On the
+    other hand, we do not need a minimum difference set, only one
+    that makes sense to human readers, which this algorithm does.
+   
+    Any common text at the beginning and end of the two files is
+    removed before starting the divide-and-conquer algorithm.
+   
+    Returns 0 on succes, FSL_RC_OOM on an allocation error.
+*/
+int fsl__diff_all(fsl_diff_cx * const p);
+
+/** @internal
+ */
+void fsl__diff_optimize(fsl_diff_cx * const p);
+
+/** @internal
+ */
+void fsl__diff_cx_clean(fsl_diff_cx * const cx);
+
+/** @internal
+
+    Undocumented. For internal debugging only.
+ */
+void fsl__dump_triples(fsl_diff_cx const * const p,
+                       char const * zFile, int ln );
+
 #if defined(__cplusplus)
 } /*extern "C"*/
 #endif
@@ -18269,7 +19129,7 @@ struct fcli_cliflag {
     0/*flagShort*/,0/*flagLong*/,\
     FCLI_FLAG_TYPE_INVALID/*flagType*/,\
     NULL/*flagValue*/,\
-      NULL/*flagValueLabel*/,NULL/*callback*/,NULL/*helpText*/}
+    NULL/*flagValueLabel*/,NULL/*callback*/,NULL/*helpText*/}
 /** Non-const-copyable counterpart of fcli_cliflag_empty_m. */
 FSL_EXPORT const fcli_cliflag fcli_cliflag_empty;
 

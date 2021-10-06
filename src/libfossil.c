@@ -374,6 +374,8 @@ char const * fsl_rc_cstr(int rc){
     STR(DELTA_INVALID_SEPARATOR);
     STR(DELTA_INVALID_SIZE);
     STR(DELTA_INVALID_TERMINATOR);
+    STR(DIFF_BINARY);
+    STR(DIFF_WS_ONLY);
     STR(end);
     STR(ERROR);
     STR(IO);
@@ -1106,6 +1108,217 @@ bool fsl_is_reserved_fn(const char *zFilename, fsl_int_t nameLen){
 #undef isatty
 #endif
 /* end of file fsl.c */
+/* start of file annotate.c */
+/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
+/* vim: set ts=2 et sw=2 tw=80: */
+/*
+  Copyright 2013-2021 The Libfossil Authors, see LICENSES/BSD-2-Clause.txt
+
+  SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+  SPDX-FileCopyrightText: 2021 The Libfossil Authors
+  SPDX-ArtifactOfProjectName: Libfossil
+  SPDX-FileType: Code
+
+  Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
+*/
+/************************************************************************
+  This file implements the annoate/blame/praise-related APIs.
+*/
+#include <assert.h>
+
+/* Only for debugging */
+#include <stdio.h>
+#define MARKER(pfexp)                                               \
+  do{ printf("MARKER: %s:%d:%s():\t",__FILE__,__LINE__,__func__);   \
+    printf pfexp;                                                   \
+  } while(0)
+
+const fsl_annotate_opt fsl_annotate_opt_empty = fsl_annotate_opt_empty_m;
+#define TO_BE_STATIC
+
+/*
+** The status of an annotation operation is recorded by an instance
+** of the following structure.
+*/
+typedef struct Annotator Annotator;
+struct Annotator {
+  fsl_diff_cx c;       /* The diff-engine context */
+  struct AnnLine {  /* Lines of the original files... */
+    const char *z;       /* The text of the line */
+    short int n;         /* Number of bytes (omitting trailing \n) */
+    short int iVers;     /* Level at which tag was set */
+  } *aOrig;
+  int nOrig;        /* Number of elements in aOrig[] */
+  int nVers;        /* Number of versions analyzed */
+  int bMoreToDo;    /* True if the limit was reached */
+  fsl_id_t origId;       /* RID for the zOrigin version */
+  fsl_id_t showId;       /* RID for the version being analyzed */
+  struct AnnVers {
+    const char *zFUuid;   /* File being analyzed */
+    const char *zMUuid;   /* Check-in containing the file */
+    const char *zDate;    /* Date of the check-in */
+    const char *zBgColor; /* Suggested background color */
+    const char *zUser;    /* Name of user who did the check-in */
+    unsigned cnt;         /* Number of lines contributed by this check-in */
+  } *aVers;         /* For each check-in analyzed */
+  char **azVers;    /* Names of versions analyzed */
+};
+
+TO_BE_STATIC const Annotator Annotator_empty = {
+fsl_diff_cx_empty_m,
+NULL/*aOrig*/,
+0/*nOrig*/, 0/*nVers*/,
+0/*bMoreToDo*/,
+0/*origId*/,
+0/*showId*/,
+NULL/*aVerse*/,
+NULL/*azVers*/
+};
+
+TO_BE_STATIC void fsl__annotator_clean(Annotator * const a){
+  fsl__diff_cx_clean(&a->c);
+  //fsl_free(...);
+}
+
+static uint64_t fsl__annotate_opt_difflags(fsl_annotate_opt const * const opt){
+  uint64_t diffFlags = 0;
+  if(opt->spacePolicy>0) diffFlags |= FSL_DIFF2_IGNORE_ALLWS;
+  else if(opt->spacePolicy<0) diffFlags |= FSL_DIFF2_IGNORE_EOLWS;
+  return diffFlags;
+}
+
+/**
+   Initializes the annocation process by populating `a` from
+   pInput. `a` must have already been cleanly initialized via copying
+   from Annotator_empty.  Returns 0 on success, else:
+
+   - FSL_RC_RANGE if pInput is empty.
+   - FSL_RC_OOM on OOM.
+
+   Regardless of success or failure, `a` must eventually be passed
+   to fsl__annotator_clean() to free up any resources.
+*/
+TO_BE_STATIC int fsl__annotation_start(Annotator * const a, fsl_buffer * const pInput,
+                                       fsl_annotate_opt const * const opt){
+  int rc;
+  uint64_t const diffFlags = fsl__annotate_opt_difflags(opt);
+  if(opt->spacePolicy>0){
+    a->c.cmpLine = fsl_dline_cmp_ignore_ws;
+  }else{
+    assert(fsl_dline_cmp == a->c.cmpLine);
+  }
+  rc = fsl_break_into_dlines(fsl_buffer_cstr(pInput), (fsl_int_t)pInput->used,
+                             (uint32_t*)&a->c.nTo, &a->c.aTo, diffFlags);
+  if(rc) goto end;
+  if(!a->c.nTo){
+    rc = FSL_RC_RANGE;
+    goto end;
+  }
+  a->aOrig = fsl_malloc( (fsl_size_t)(sizeof(a->aOrig[0]) * a->c.nTo) );
+  if(!a->aOrig){
+    rc = FSL_RC_OOM;
+    goto end;
+  }
+  a->nOrig = a->c.nTo;
+  for(int i = 0; i < a->c.nTo; ++i){
+    a->aOrig[i].z = a->c.aTo[i].z;
+    a->aOrig[i].n = a->c.aTo[i].n;
+    a->aOrig[i].iVers = -1;
+  }
+  end:
+  return rc;
+}
+
+/**
+   The input pParent is the next most recent ancestor of the file
+   being annotated.  Do another step of the annotation. On success
+   return 0 and, if additional annotation is required, assign *doMore
+   to true.
+*/
+TO_BE_STATIC int fsl__annotation_step(
+  Annotator *a,
+  fsl_buffer const *pParent,
+  int iVers,
+  fsl_annotate_opt const * const opt,
+  bool * doMore
+){
+  int i, j, rc;
+  int lnTo;
+  uint64_t const diffFlags = fsl__annotate_opt_difflags(opt);
+
+  /* Prepare the parent file to be diffed */
+  rc = fsl_break_into_dlines(fsl_buffer_cstr(pParent),
+                             (fsl_int_t)pParent->used,
+                             (uint32_t*)&a->c.nFrom, &a->c.aFrom,
+                             diffFlags);
+  if(rc) goto end;
+  if( a->c.aFrom==0 ){
+    *doMore = true;
+    return 0;
+  }
+
+  /* Compute the differences going from pParent to the file being
+  ** annotated. */
+  rc = fsl__diff_all(&a->c);
+  if(rc) goto end;
+
+  /* Where new lines are inserted on this difference, record the
+  ** iVers as the source of the new line.
+  */
+  for(i=lnTo=0; i<a->c.nEdit; i+=3){
+    int const nCopy = a->c.aEdit[i];
+    int const nIns = a->c.aEdit[i+2];
+    lnTo += nCopy;
+    for(j=0; j<nIns; j++, lnTo++){
+      if( a->aOrig[lnTo].iVers<0 ){
+        a->aOrig[lnTo].iVers = iVers;
+      }
+    }
+  }
+
+  /* Clear out the diff results */
+  fsl_free(a->c.aEdit);
+  a->c.aEdit = 0;
+  a->c.nEdit = 0;
+  a->c.nEditAlloc = 0;
+
+  /* Clear out the from file */
+  fsl_free(a->c.aFrom);
+  a->c.aFrom = 0;
+
+  end:
+  return rc;
+}
+
+/* MISSING(?) fossil(1) converts the diff inputs into utf8 with no
+   BOM. Whether we really want to do that here or rely on the caller
+   to is up for debate. If we do it here, we have to make the inputs
+   non-const, which seems "wrong" for a library API. */
+#define blob_to_utf8_no_bom(A,B) (void)0
+
+
+int fsl_annotate( fsl_cx * const f, fsl_annotate_opt const * const opt ){
+  int rc;
+  if(!opt->out) return FSL_RC_MISUSE;
+  if(f||opt){/*unused*/}
+
+  rc = fsl_cx_err_set(f, FSL_RC_NYI, "%s() is not yet implemented.",
+                      __func__);
+  goto end;
+
+  /* TODO:
+
+     Port over fossil(1) diff.c:annotate_file().
+  */
+  
+  end:
+  return rc;
+}
+
+#undef MARKER
+#undef TO_BE_STATIC
+#undef blob_to_utf8_no_bom
+/* end of file annotate.c */
 /* start of file appendf.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
@@ -1144,6 +1357,11 @@ LICENSE:
 #include <string.h> /* strlen() */
 #include <ctype.h>
 #include <assert.h>
+
+#define MARKER(pfexp)                                               \
+  do{ printf("MARKER: %s:%d:%s():\t",__FILE__,__LINE__,__func__);   \
+    printf pfexp;                                                   \
+  } while(0)
 
 /* FIXME: determine this type at compile time via configuration
    options. OTOH, it compiles everywhere as-is so far.
@@ -2009,7 +2227,7 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
   int pfrc = 0;              /* result from calling pfAppend */
   int c;                     /* Next character in the format string */
   char *bufpt = 0;           /* Pointer to the conversion buffer */
-  int precision;             /* Precision of the current field */
+  int precision = 0;         /* Precision of the current field */
   int length;                /* Length of the field */
   int idx;                   /* A general purpose loop counter */
   int width;                 /* Width of the current field */
@@ -2546,7 +2764,9 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
       case etJSONSTR: {
         struct SpechJson state;
         bufpt = va_arg(ap,char *);
-        length = bufpt ? (int)fsl_strlen(bufpt) : 0;
+        length = bufpt
+          ? (precision>=0 ? precision : (int)fsl_strlen(bufpt))
+          : 0;
         state.z = bufpt;
         state.addQuotes = flag_altform2 ? true : false;
         state.escapeSmallUtf8 = flag_alternateform ? true : false;
@@ -2768,6 +2988,8 @@ int fsl_snprintf( char * dest, fsl_size_t n, char const * fmt, ... ){
   va_end( vargs );
   return rc;
 }
+
+#undef MARKER
 /* end of file appendf.c */
 /* start of file auth.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
@@ -3849,6 +4071,30 @@ int fsl_id_bag_to_buffer(fsl_id_bag const * bag, fsl_buffer * b,
     if(i++) rc = fsl_buffer_append(b, separator, sepLen);
     if(!rc) rc = fsl_buffer_appendf(b, "%" FSL_ID_T_PFMT, e);
   }
+  return rc;
+}
+
+int fsl_buffer_append_tcl_literal(fsl_buffer * const b,
+                                  char const * z, fsl_int_t n){
+  int rc;
+  if(n<0) n = fsl_strlen(z);
+  rc = fsl_buffer_append(b, "\"", 1);
+  for(fsl_int_t i=0; 0==rc && i<n; ++i){
+    char c = z[i];
+    switch( c ){
+      case '\r':  c = 'r';
+      case '[':
+      case ']':
+      case '$':
+      case '"':
+      case '\\':
+        if((rc = fsl_buffer_append(b, "\\", 1))) break;
+        /* fall through */
+      default:
+        rc = fsl_buffer_append(b, &c, 1);
+    }
+  }
+  if(0==rc) rc = fsl_buffer_append(b, "\"", 1);
   return rc;
 }
 
@@ -11888,7 +12134,7 @@ fsl_cx * fsl_cx_malloc(){
   return rc;
 }
 
-int fsl_cx_err_report( fsl_cx * f, char addNewline ){
+int fsl_cx_err_report( fsl_cx * const f, bool addNewline ){
   if(!f) return FSL_RC_MISUSE;
   else if(f->error.code){
     char const * msg = f->error.msg.used
@@ -11902,7 +12148,7 @@ int fsl_cx_err_report( fsl_cx * f, char addNewline ){
   else return 0;
 }
 
-int fsl_cx_uplift_db_error( fsl_cx * f, fsl_db * db ){
+int fsl_cx_uplift_db_error( fsl_cx * const f, fsl_db * db ){
   assert(f);
   if(!f) return FSL_RC_MISUSE;
   if(!db){
@@ -11914,7 +12160,7 @@ int fsl_cx_uplift_db_error( fsl_cx * f, fsl_db * db ){
   return f->error.code;
 }
 
-int fsl_cx_uplift_db_error2(fsl_cx *f, fsl_db * db, int rc){
+int fsl_cx_uplift_db_error2(fsl_cx * const f, fsl_db * db, int rc){
   if(!db) db = f->dbMain;
   assert(db);
   if(rc && FSL_RC_OOM!=rc && !f->error.code && db->error.code){
@@ -11923,21 +12169,21 @@ int fsl_cx_uplift_db_error2(fsl_cx *f, fsl_db * db, int rc){
   return rc;
 }
 
-fsl_db * fsl_cx_db_config( fsl_cx * f ){
+fsl_db * fsl_cx_db_config( fsl_cx * const f ){
   if(!f) return NULL;
   else if(f->config.db.dbh) return &f->config.db;
   else if(f->dbMain && (FSL_DBROLE_CONFIG & f->dbMain->role)) return f->dbMain;
   else return NULL;
 }
 
-fsl_db * fsl_cx_db_repo( fsl_cx * f ){
+fsl_db * fsl_cx_db_repo( fsl_cx * const f ){
   if(!f) return NULL;
   else if(f->repo.db.dbh) return &f->repo.db;
   else if(f->dbMain && (FSL_DBROLE_REPO & f->dbMain->role)) return f->dbMain;
   else return NULL;
 }
 
-fsl_db * fsl_needs_repo(fsl_cx * f){
+fsl_db * fsl_needs_repo(fsl_cx * const f){
   fsl_db * const db = fsl_cx_db_repo(f);
   if(!db){
     fsl_cx_err_set(f, FSL_RC_NOT_A_REPO,
@@ -11946,7 +12192,7 @@ fsl_db * fsl_needs_repo(fsl_cx * f){
   return db;
 }
 
-fsl_db * fsl_needs_ckout(fsl_cx * f){
+fsl_db * fsl_needs_ckout(fsl_cx * const f){
   fsl_db * const db = fsl_cx_db_ckout(f);
   if(!db){
     fsl_cx_err_set(f, FSL_RC_NOT_A_CKOUT,
@@ -11955,14 +12201,14 @@ fsl_db * fsl_needs_ckout(fsl_cx * f){
   return db;
 }
 
-fsl_db * fsl_cx_db_ckout( fsl_cx * f ){
+fsl_db * fsl_cx_db_ckout( fsl_cx * const f ){
   if(!f) return NULL;
   else if(f->ckout.db.dbh) return &f->ckout.db;
   else if(f->dbMain && (FSL_DBROLE_CKOUT & f->dbMain->role)) return f->dbMain;
   else return NULL;
 }
 
-fsl_db * fsl_cx_db( fsl_cx * f ){
+fsl_db * fsl_cx_db( fsl_cx * const f ){
   return f ? f->dbMain : NULL;
 }
 /** @internal
@@ -11979,7 +12225,7 @@ fsl_db * fsl_cx_db( fsl_cx * f ){
     e.g. passing a role of FSL_DBROLE_CKOUT this does NOT return
     the same thing as fsl_cx_db_ckout().
 */
-fsl_db * fsl_cx_db_for_role(fsl_cx * f, fsl_dbrole_e r){
+fsl_db * fsl_cx_db_for_role(fsl_cx * const f, fsl_dbrole_e r){
   switch(r){
     case FSL_DBROLE_CONFIG:
       return &f->config.db;
@@ -13919,6 +14165,8 @@ const char * fsl_db_role_label(fsl_dbrole_e r){
       return "ckout";
     case FSL_DBROLE_MAIN:
       return "main";
+    case FSL_DBROLE_TEMP:
+      return "temp";
     case FSL_DBROLE_NONE:
     default:
       assert(!"cannot happen/not legal");
@@ -14410,7 +14658,7 @@ int fsl_stmt_bind_fmtv( fsl_stmt * st, char const * fmt, va_list args ){
 /**
    The elipsis counterpart of fsl_stmt_bind_fmtv().
 */
-int fsl_stmt_bind_fmt( fsl_stmt * st, char const * fmt, ... ){
+int fsl_stmt_bind_fmt( fsl_stmt * const st, char const * fmt, ... ){
   int rc;
   va_list args;
   va_start(args,fmt);
@@ -14419,7 +14667,7 @@ int fsl_stmt_bind_fmt( fsl_stmt * st, char const * fmt, ... ){
   return rc;
 }
 
-int fsl_stmt_bind_stepv( fsl_stmt * st, char const * fmt,
+int fsl_stmt_bind_stepv( fsl_stmt * const st, char const * fmt,
                          va_list args ){
   int rc;
   fsl_stmt_reset(st);
@@ -15524,7 +15772,7 @@ int fsl_db_transaction_end(fsl_db * db, bool doRollback){
 #endif  
 }
 
-int fsl_db_get_int32v( fsl_db * db, int32_t * rv,
+int fsl_db_get_int32v( fsl_db * const db, int32_t * rv,
                        char const * sql, va_list args){
   /* Potential fixme: the fsl_db_get_XXX() funcs are 95%
      code duplicates. We "could" replace these with a macro
@@ -15554,9 +15802,8 @@ int fsl_db_get_int32v( fsl_db * db, int32_t * rv,
   }
 }
 
-int fsl_db_get_int32( fsl_db * db, int32_t * rv,
-                      char const * sql,
-                      ... ){
+int fsl_db_get_int32( fsl_db * const db, int32_t * rv,
+                      char const * sql, ... ){
   int rc;
   va_list args;
   va_start(args,sql);
@@ -15867,9 +16114,8 @@ int fsl_db_get_buffer( fsl_db * db, fsl_buffer * b,
   return rc;
 }
 
-int32_t fsl_db_g_int32( fsl_db * db, int32_t dflt,
-                            char const * sql,
-                            ... ){
+int32_t fsl_db_g_int32( fsl_db * const db, int32_t dflt,
+                        char const * sql, ... ){
   int32_t rv = dflt;
   va_list args;
   va_start(args,sql);
@@ -16127,11 +16373,12 @@ int fsl_db_init( fsl_error * err,
   return rc;
 }
 
-int fsl_stmt_each_f_dump( fsl_stmt * stmt, void * state ){
+int fsl_stmt_each_f_dump( fsl_stmt * const stmt, void * state ){
   int i;
   fsl_cx * f = (stmt && stmt->db) ? stmt->db->f : NULL;
   char const * sep = "\t";
   if(!f) return FSL_RC_MISUSE;
+  if(state){/*unused arg*/}
   if(1==stmt->rowCount){
     for( i = 0; i < stmt->colCount; ++i ){
       fsl_outputf(f, "%s%s", fsl_stmt_col_name(stmt, i),
@@ -22829,6 +23076,11 @@ int fsl_delta_apply(
 #include <stdlib.h>
 #include <string.h> /* for memmove()/strlen() */
 
+#define MARKER(pfexp)                                               \
+  do{ printf("MARKER: %s:%d:%s():\t",__FILE__,__LINE__,__func__);   \
+    printf pfexp;                                                   \
+  } while(0)
+
 typedef uint64_t u64;
 typedef void ReCompiled /* porting crutch. i would strongly prefer to
                            replace the regex support with a stateful
@@ -22935,33 +23187,12 @@ static uint64_t fsl_diff_flags_convert( int mask ){
 }
 
 /*
-   Information about each line of a file being diffed.
-  
-   The lower LENGTH_MASK_SZ bits of the hash (DLine.h) are the length
-   of the line.  If any line is longer than LENGTH_MASK characters,
-   the file is considered binary.
-*/
-typedef struct DLine DLine;
-struct DLine {
-  const char *z;        /* The text of the line */
-  unsigned int h;       /* Hash of the line */
-  unsigned short indent;  /* Indent of the line. Only !=0 with -w/-Z option */
-  unsigned short n;     /* number of bytes */
-  unsigned int iNext;   /* 1+(Index of next line with same the same hash) */
-
-  /* an array of DLine elements serves two purposes.  The fields
-     above are one per line of input text.  But each entry is also
-     a bucket in a hash table, as follows: */
-  unsigned int iHash;   /* 1+(first entry in the hash chain) */
-};
-
-/*
    Length of a dline
 */
 #define LENGTH(X)   ((X)->n)
 
 /*
-   Return an array of DLine objects containing a pointer to the
+   Return an array of fsl_dline objects containing a pointer to the
    start of each line and a hash of that line.  The lower
    bits of the hash store the length of each line.
   
@@ -22981,10 +23212,10 @@ struct DLine {
    TODO: enhance the error reporting: add a (fsl_error*) arg.
 */
 static int break_into_lines(const char *z, int n, int *pnLine,
-                            DLine **pOut, int diffFlags){
+                            fsl_dline **pOut, int diffFlags){
   int nLine, i, j, k, s, x;
   unsigned int h, h2;
-  DLine *a = NULL;
+  fsl_dline *a = NULL;
   /* Count the number of lines.  Allocate space to hold
      the returned array.
   */
@@ -23058,20 +23289,20 @@ static int break_into_lines(const char *z, int n, int *pnLine,
 
 
 /*
-   Return true if two DLine elements are identical.
+   Return true if two fsl_dline elements are identical.
 */
-static int same_dline(DLine const *pA, DLine const *pB){
-  return pA->h==pB->h && memcmp(pA->z+pA->indent,pB->z+pB->indent,
-                                pA->h & LENGTH_MASK)==0;
+static int same_dline(fsl_dline const *pA, fsl_dline const *pB){
+  if( pA->h!=pB->h ) return 1;
+  return memcmp(pA->z,pB->z, pA->h&LENGTH_MASK);
 }
 
 
 /*
-** Return true if two DLine elements are identical, ignoring
+** Return true if two fsl_dline elements are identical, ignoring
 ** all whitespace. The indent field of pA/pB already points
 ** to the first non-space character in the string.
 */
-static int same_dline_ignore_allws(const DLine *pA, const DLine *pB){
+static int same_dline_ignore_allws(const fsl_dline *pA, const fsl_dline *pB){
   int a = pA->indent, b = pB->indent;
   if( pA->h==pB->h ){
     while( a<pA->n || b<pB->n ){
@@ -23083,31 +23314,6 @@ static int same_dline_ignore_allws(const DLine *pA, const DLine *pB){
   }
   return 0;
 }
-
-/*
-   A context for running a raw diff.
-  
-   The aEdit[] array describes the raw diff.  Each triple of integers in
-   aEdit[] means:
-  
-     (1) COPY:   Number of lines aFrom and aTo have in common
-     (2) DELETE: Number of lines found only in aFrom
-     (3) INSERT: Number of lines found only in aTo
-  
-   The triples repeat until all lines of both aFrom and aTo are accounted
-   for.
-*/
-typedef struct DContext DContext;
-struct DContext {
-  int *aEdit;        /* Array of copy/delete/insert triples */
-  int nEdit;         /* Number of integers (3x num of triples) in aEdit[] */
-  int nEditAlloc;    /* Space allocated for aEdit[] */
-  DLine *aFrom;      /* File on left side of the diff */
-  int nFrom;         /* Number of lines in aFrom[] */
-  DLine *aTo;        /* File on right side of the diff */
-  int nTo;           /* Number of lines in aTo[] */
-  int (*same_fn)(const DLine *, const DLine *); /* Function to be used for comparing */
-};
 
 /**
     Holds output state for diff generation.
@@ -23143,11 +23349,10 @@ static int diff_out( DiffOutState * const o, void const * src, fsl_int_t n ){
     fsl_output_f() impl for use with diff_outf(). state must be a
     (DiffOutState*).
  */
-static int fsl_output_f_diff_out( void * state, void const * s,
+static int fsl_output_f_diff_out( void * state, void const * src,
                                   fsl_size_t n ){
-  DiffOutState * os = (DiffOutState *)state;
-  diff_out(os, s, n);
-  return os->rc;
+  DiffOutState * const os = (DiffOutState *)state;
+  return os->rc = os->out(os->oState, src, n);
 }
 
 static int diff_outf( DiffOutState * o, char const * fmt, ... ){
@@ -23162,9 +23367,9 @@ static int diff_outf( DiffOutState * o, char const * fmt, ... ){
    Append a single line of context-diff output to pOut.
 */
 static int appendDiffLine(
-  DiffOutState *pOut,         /* Where to write the line of output */
+  DiffOutState *const pOut, /* Where to write the line of output */
   char cPrefix,       /* One of " ", "+",  or "-" */
-  DLine *pLine,       /* The line to be output */
+  fsl_dline *pLine,       /* The line to be output */
   int html,           /* True if generating HTML.  False for plain text */
   ReCompiled *pRe     /* Colorize only if line matches this Regex */
 ){
@@ -23253,12 +23458,12 @@ static int appendDiffLineno(DiffOutState *pOut, int lnA,
 
 /**
     Compute the optimal longest common subsequence (LCS) using an
-    exhaustive search.  This version of the LCS is only used for
+    exhaustive search. This version of the LCS is only used for
     shorter input strings since runtime is O(N*N) where N is the
     input string length.
- */
-static void optimalLCS(
-  DContext *p,               /* Two files being compared */
+*/
+static void fsl__diff_optimal_lcs(
+  fsl_diff_cx * const p,     /* Two files being compared */
   int iS1, int iE1,          /* Range of lines in p->aFrom[] */
   int iS2, int iE2,          /* Range of lines in p->aTo[] */
   int *piSX, int *piEX,      /* Write p->aFrom[] common segment here */
@@ -23272,12 +23477,12 @@ static void optimalLCS(
 
   for(i=iS1; i<iE1-mxLength; i++){
     for(j=iS2; j<iE2-mxLength; j++){
-      if( !p->same_fn(&p->aFrom[i], &p->aTo[j]) ) continue;
-      if( mxLength && !p->same_fn(&p->aFrom[i+mxLength], &p->aTo[j+mxLength]) ){
+      if( p->cmpLine(&p->aFrom[i], &p->aTo[j]) ) continue;
+      if( mxLength && p->cmpLine(&p->aFrom[i+mxLength], &p->aTo[j+mxLength]) ){
         continue;
       }
       k = 1;
-      while( i+k<iE1 && j+k<iE2 && p->same_fn(&p->aFrom[i+k],&p->aTo[j+k]) ){
+      while( i+k<iE1 && j+k<iE2 && p->cmpLine(&p->aFrom[i+k],&p->aTo[j+k])==0 ){
         k++;
       }
       if( k>mxLength ){
@@ -23309,10 +23514,10 @@ static void optimalLCS(
     heuristic approximation based on hashing that usually works about
     as well.  But if the O(N) algorithm doesn't get a good solution
     and N is not too large, we fall back to an exact solution by
-    calling optimalLCS().
- */
-static void longestCommonSequence(
-  DContext *p,               /* Two files being compared */
+    calling fsl__diff_optimal_lcs().
+*/
+static void fsl__diff_lcs(
+  fsl_diff_cx * const p,     /* Two files being compared */
   int iS1, int iE1,          /* Range of lines in p->aFrom[] */
   int iS2, int iE2,          /* Range of lines in p->aTo[] */
   int *piSX, int *piEX,      /* Write p->aFrom[] common segment here */
@@ -23320,15 +23525,15 @@ static void longestCommonSequence(
 ){
   int i, j, k;               /* Loop counters */
   int n;                     /* Loop limit */
-  DLine *pA, *pB;            /* Pointers to lines */
+  fsl_dline *pA, *pB;            /* Pointers to lines */
   int iSX, iSY, iEX, iEY;    /* Current match */
   int skew = 0;              /* How lopsided is the match */
   int dist = 0;              /* Distance of match from center */
-  int mid;                   /* Center of the span */
+  int mid;                   /* Center of the chng */
   int iSXb, iSYb, iEXb, iEYb;   /* Best match so far */
   int iSXp, iSYp, iEXp, iEYp;   /* Previous match */
-  sqlite3_int64 bestScore;      /* Best score so far */
-  sqlite3_int64 score;          /* Score for current candidate LCS */
+  int64_t bestScore;      /* Best score so far */
+  int64_t score;          /* Score for current candidate LCS */
   int span;                     /* combined width of the input sequences */
 
   span = (iE1 - iS1) + (iE2 - iS2);
@@ -23343,7 +23548,7 @@ static void longestCommonSequence(
     int limit = 0;
     j = p->aTo[p->aFrom[i].h % p->nTo].iHash;
     while( j>0
-      && (j-1<iS2 || j>=iE2 || !p->same_fn(&p->aFrom[i], &p->aTo[j-1]))
+      && (j-1<iS2 || j>=iE2 || p->cmpLine(&p->aFrom[i], &p->aTo[j-1]))
     ){
       if( limit++ > 10 ){
         j = 0;
@@ -23360,7 +23565,7 @@ static void longestCommonSequence(
     pA = &p->aFrom[iSX-1];
     pB = &p->aTo[iSY-1];
     n = minInt(iSX-iS1, iSY-iS2);
-    for(k=0; k<n && p->same_fn(pA,pB); k++, pA--, pB--){}
+    for(k=0; k<n && p->cmpLine(pA,pB)==0; k++, pA--, pB--){}
     iSX -= k;
     iSY -= k;
     iEX = i+1;
@@ -23368,14 +23573,14 @@ static void longestCommonSequence(
     pA = &p->aFrom[iEX];
     pB = &p->aTo[iEY];
     n = minInt(iE1-iEX, iE2-iEY);
-    for(k=0; k<n && p->same_fn(pA,pB); k++, pA++, pB++){}
+    for(k=0; k<n && p->cmpLine(pA,pB)==0; k++, pA++, pB++){}
     iEX += k;
     iEY += k;
     skew = (iSX-iS1) - (iSY-iS2);
     if( skew<0 ) skew = -skew;
     dist = (iSX+iEX)/2 - mid;
     if( dist<0 ) dist = -dist;
-    score = (iEX - iSX)*(sqlite3_int64)span - (skew + dist);
+    score = (iEX - iSX)*(int64_t)span - (skew + dist);
     if( score>bestScore ){
       bestScore = score;
       iSXb = iSX;
@@ -23391,20 +23596,33 @@ static void longestCommonSequence(
   }
   if( iSXb==iEXb && (int64_t)(iE1-iS1)*(iE2-iS2)<400 ){
     /* If no common sequence is found using the hashing heuristic and
-       the input is not too big, use the expensive exact solution */
-    optimalLCS(p, iS1, iE1, iS2, iE2, piSX, piEX, piSY, piEY);
+    ** the input is not too big, use the expensive exact solution */
+    fsl__diff_optimal_lcs(p, iS1, iE1, iS2, iE2, piSX, piEX, piSY, piEY);
   }else{
     *piSX = iSXb;
     *piSY = iSYb;
     *piEX = iEXb;
     *piEY = iEYb;
   }
+
 }
 
-/**
+
+void fsl__dump_triples(fsl_diff_cx const * const p,
+                       char const * zFile, int ln ){
+    // Compare this with (fossil xdiff --raw) on the same inputs
+  fprintf(stderr,"%s:%d: Compare this with (fossil xdiff --raw) on the same inputs:\n",
+          zFile, ln);
+  for(int i = 0; p->aEdit[i] || p->aEdit[i+1] || p->aEdit[i+2]; i+=3){
+    printf(" copy %6d  delete %6d  insert %6d\n",
+           p->aEdit[i], p->aEdit[i+1], p->aEdit[i+2]);
+  }
+}
+
+/** @internal
     Expand the size of p->aEdit array to hold at least nEdit elements.
  */
-static int expandEdit(DContext *p, int nEdit){
+static int fsl__diff_expand_edit(fsl_diff_cx * const p, int nEdit){
   void * re = fsl_realloc(p->aEdit, nEdit*sizeof(int));
   if(!re) return FSL_RC_OOM;
   else{
@@ -23419,7 +23637,7 @@ static int expandEdit(DContext *p, int nEdit){
    
     Returns 0 on success, FSL_RC_OOM on OOM.
  */
-static int appendTriple(DContext *p, int nCopy, int nDel, int nIns){
+static int appendTriple(fsl_diff_cx *p, int nCopy, int nDel, int nIns){
   /* printf("APPEND %d/%d/%d\n", nCopy, nDel, nIns); */
   if( p->nEdit>=3 ){
     if( p->aEdit[p->nEdit-1]==0 ){
@@ -23441,7 +23659,7 @@ static int appendTriple(DContext *p, int nCopy, int nDel, int nIns){
     }
   }
   if( p->nEdit+3>p->nEditAlloc ){
-    int const rc = expandEdit(p, p->nEdit*2 + 15);
+    int const rc = fsl__diff_expand_edit(p, p->nEdit*2 + 15);
     if(rc) return rc;
     else if( p->aEdit==0 ) return 0;
   }
@@ -23450,7 +23668,6 @@ static int appendTriple(DContext *p, int nCopy, int nDel, int nIns){
   p->aEdit[p->nEdit++] = nIns;
   return 0;
 }
-
 
 /**
     Do a single step in the difference.  Compute a sequence of
@@ -23464,7 +23681,7 @@ static int appendTriple(DContext *p, int nCopy, int nDel, int nIns){
     Special cases apply if either input segment is empty or if the two
     segments have no text in common.
  */
-static int diff_step(DContext *p, int iS1, int iE1, int iS2, int iE2){
+static int diff_step(fsl_diff_cx *p, int iS1, int iE1, int iS2, int iE2){
   int iSX, iEX, iSY, iEY;
   int rc = 0;
   if( iE1<=iS1 ){
@@ -23480,13 +23697,14 @@ static int diff_step(DContext *p, int iS1, int iE1, int iS2, int iE2){
   }
 
   /* Find the longest matching segment between the two sequences */
-  longestCommonSequence(p, iS1, iE1, iS2, iE2, &iSX, &iEX, &iSY, &iEY);
+  fsl__diff_lcs(p, iS1, iE1, iS2, iE2, &iSX, &iEX, &iSY, &iEY);
+  //MARKER(("L p->nFrom = %d, p->nTo=%d, p->nEdit=%d\n", p->nFrom, p->nTo,p->nEdit));
 
   if( iEX>iSX ){
     /* A common segment has been found.
        Recursively diff either side of the matching segment */
     rc = diff_step(p, iS1, iSX, iS2, iSY);
-    if( !rc){
+    if(!rc){
       if(iEX>iSX){
         rc = appendTriple(p, iEX - iSX, 0, 0);
       }
@@ -23500,56 +23718,48 @@ static int diff_step(DContext *p, int iS1, int iE1, int iS2, int iE2){
   return rc;
 }
 
-/**
-    Compute the differences between two files already loaded into
-    the DContext structure.
-   
-    A divide and conquer technique is used.  We look for a large
-    block of common text that is in the middle of both files.  Then
-    compute the difference on those parts of the file before and
-    after the common block.  This technique is fast, but it does
-    not necessarily generate the minimum difference set.  On the
-    other hand, we do not need a minimum difference set, only one
-    that makes sense to human readers, which this algorithm does.
-   
-    Any common text at the beginning and end of the two files is
-    removed before starting the divide-and-conquer algorithm.
-   
-    Returns 0 on succes, FSL_RC_OOM on an allocation error.
- */
-static int diff_all(DContext *p){
+int fsl__diff_all(fsl_diff_cx * const p){
   int mnE, iS, iE1, iE2;
   int rc = 0;
   /* Carve off the common header and footer */
   iE1 = p->nFrom;
   iE2 = p->nTo;
-  while( iE1>0 && iE2>0 && p->same_fn(&p->aFrom[iE1-1], &p->aTo[iE2-1]) ){
+  //MARKER(("A p->nFrom = %d, p->nTo=%d, p->nEdit=%d\n", p->nFrom, p->nTo,p->nEdit));
+  while( iE1>0 && iE2>0 && p->cmpLine(&p->aFrom[iE1-1], &p->aTo[iE2-1])==0 ){
     iE1--;
     iE2--;
   }
+  //MARKER(("iE1=%d, iE2=%d\n", iE1, iE2));
   mnE = iE1<iE2 ? iE1 : iE2;
-  for(iS=0; iS<mnE && p->same_fn(&p->aFrom[iS],&p->aTo[iS]); iS++){}
+  for(iS=0; iS<mnE && p->cmpLine(&p->aFrom[iS],&p->aTo[iS])==0; iS++){}
+  //MARKER(("B p->nFrom = %d, p->nTo=%d, p->nEdit=%d, iS=%d\n", p->nFrom, p->nTo,p->nEdit, iS));
 
   /* do the difference */
   if( iS>0 ){
     rc = appendTriple(p, iS, 0, 0);
     if(rc) return rc;
   }
+  //MARKER(("B2 p->nFrom = %d, p->nTo=%d, p->nEdit=%d, iS=%d\n", p->nFrom, p->nTo,p->nEdit, iS));
   rc = diff_step(p, iS, iE1, iS, iE2);
+  //fsl__dump_triples(p, __FILE__, __LINE__);
+  //MARKER(("B3 p->nFrom = %d, p->nTo=%d, p->nEdit=%d, iS=%d\n", p->nFrom, p->nTo,p->nEdit, iS));
   if(rc) return rc;
-  if( iE1<p->nFrom ){
+  else if( iE1<p->nFrom ){
     rc = appendTriple(p, p->nFrom - iE1, 0, 0);
     if(rc) return rc;
   }
-
+  //MARKER(("C p->nFrom = %d, p->nTo=%d, p->nEdit=%d\n", p->nFrom, p->nTo,p->nEdit));
   /* Terminate the COPY/DELETE/INSERT triples with three zeros */
-  rc = expandEdit(p, p->nEdit+3);
-  if(rc) return rc;
-  else if( p->aEdit ){
-    p->aEdit[p->nEdit++] = 0;
-    p->aEdit[p->nEdit++] = 0;
-    p->aEdit[p->nEdit++] = 0;
+  rc = fsl__diff_expand_edit(p, p->nEdit+3);
+  if(0==rc){
+    if(p->aEdit ){
+      p->aEdit[p->nEdit++] = 0;
+      p->aEdit[p->nEdit++] = 0;
+      p->aEdit[p->nEdit++] = 0;
+      //fsl__dump_triples(p, __FILE__, __LINE__);
+    }
   }
+  //MARKER(("D p->nFrom = %d, p->nTo=%d, p->nEdit=%d\n", p->nFrom, p->nTo,p->nEdit));
   return rc;
 }
 
@@ -23585,12 +23795,13 @@ static int diff_all(DContext *p){
            return x/5;                    return x/5;
         }                              }
 */
-static void diff_optimize(DContext *p){
+void fsl__diff_optimize(fsl_diff_cx * const p){
   int r;       /* Index of current triple */
   int lnFrom;  /* Line number in p->aFrom */
   int lnTo;    /* Line number in p->aTo */
   int cpy, del, ins;
 
+  //fsl__dump_triples(p, __FILE__, __LINE__);
   lnFrom = lnTo = 0;
   for(r=0; r<p->nEdit; r += 3){
     cpy = p->aEdit[r];
@@ -23601,9 +23812,9 @@ static void diff_optimize(DContext *p){
 
     /* Shift insertions toward the beginning of the file */
     while( cpy>0 && del==0 && ins>0 ){
-      DLine *pTop = &p->aFrom[lnFrom-1];  /* Line before start of insert */
-      DLine *pBtm = &p->aTo[lnTo+ins-1];  /* Last line inserted */
-      if( p->same_fn(pTop, pBtm)==0 ) break;
+      fsl_dline *pTop = &p->aFrom[lnFrom-1];  /* Line before start of insert */
+      fsl_dline *pBtm = &p->aTo[lnTo+ins-1];  /* Last line inserted */
+      if( p->cmpLine(pTop, pBtm) ) break;
       if( LENGTH(pTop+1)+LENGTH(pBtm)<=LENGTH(pTop)+LENGTH(pBtm-1) ) break;
       lnFrom--;
       lnTo--;
@@ -23614,9 +23825,9 @@ static void diff_optimize(DContext *p){
 
     /* Shift insertions toward the end of the file */
     while( r+3<p->nEdit && p->aEdit[r+3]>0 && del==0 && ins>0 ){
-      DLine *pTop = &p->aTo[lnTo];       /* First line inserted */
-      DLine *pBtm = &p->aTo[lnTo+ins];   /* First line past end of insert */
-      if( p->same_fn(pTop, pBtm)==0 ) break;
+      fsl_dline *pTop = &p->aTo[lnTo];       /* First line inserted */
+      fsl_dline *pBtm = &p->aTo[lnTo+ins];   /* First line past end of insert */
+      if( p->cmpLine(pTop, pBtm) ) break;
       if( LENGTH(pTop)+LENGTH(pBtm-1)<=LENGTH(pTop+1)+LENGTH(pBtm) ) break;
       lnFrom++;
       lnTo++;
@@ -23627,9 +23838,9 @@ static void diff_optimize(DContext *p){
 
     /* Shift deletions toward the beginning of the file */
     while( cpy>0 && del>0 && ins==0 ){
-      DLine *pTop = &p->aFrom[lnFrom-1];     /* Line before start of delete */
-      DLine *pBtm = &p->aFrom[lnFrom+del-1]; /* Last line deleted */
-      if( p->same_fn(pTop, pBtm)==0 ) break;
+      fsl_dline *pTop = &p->aFrom[lnFrom-1];     /* Line before start of delete */
+      fsl_dline *pBtm = &p->aFrom[lnFrom+del-1]; /* Last line deleted */
+      if( p->cmpLine(pTop, pBtm) ) break;
       if( LENGTH(pTop+1)+LENGTH(pBtm)<=LENGTH(pTop)+LENGTH(pBtm-1) ) break;
       lnFrom--;
       lnTo--;
@@ -23640,9 +23851,9 @@ static void diff_optimize(DContext *p){
 
     /* Shift deletions toward the end of the file */
     while( r+3<p->nEdit && p->aEdit[r+3]>0 && del>0 && ins==0 ){
-      DLine *pTop = &p->aFrom[lnFrom];     /* First line deleted */
-      DLine *pBtm = &p->aFrom[lnFrom+del]; /* First line past end of delete */
-      if( p->same_fn(pTop, pBtm)==0 ) break;
+      fsl_dline *pTop = &p->aFrom[lnFrom];     /* First line deleted */
+      fsl_dline *pBtm = &p->aFrom[lnFrom+del]; /* First line past end of delete */
+      if( p->cmpLine(pTop, pBtm) ) break;
       if( LENGTH(pTop)+LENGTH(pBtm-1)<=LENGTH(pTop)+LENGTH(pBtm) ) break;
       lnFrom++;
       lnTo++;
@@ -23654,6 +23865,7 @@ static void diff_optimize(DContext *p){
     lnFrom += del;
     lnTo += ins;
   }
+  //fsl__dump_triples(p, __FILE__, __LINE__);
 }
 
 
@@ -23662,13 +23874,13 @@ static void diff_optimize(DContext *p){
    in, compute a context diff into pOut.
 */
 static int contextDiff(
-  DContext *p,      /* The difference */
+  fsl_diff_cx *p,      /* The difference */
   DiffOutState *pOut,       /* Output a context diff to here */
   ReCompiled *pRe,  /* Only show changes that match this regex */
   u64 diffFlags     /* Flags controlling the diff format */
 ){
-  DLine *A;     /* Left side of the diff */
-  DLine *B;     /* Right side of the diff */
+  fsl_dline *A;     /* Left side of the diff */
+  fsl_dline *B;     /* Right side of the diff */
   int a = 0;    /* Index of next line in A[] */
   int b = 0;    /* Index of next line in B[] */
   int *R;       /* Array of COPY/DELETE/INSERT triples */
@@ -23906,7 +24118,7 @@ static int sbsWriteSpace(SbsLine *p, int n, int col){
    This comment contains multibyte unicode characters (�, �, �) in order
    to test the ability of the diff code to handle such characters.
 */
-static int sbsWriteText(SbsLine *p, DLine *pLine, int col){
+static int sbsWriteText(SbsLine *p, fsl_dline *pLine, int col){
   fsl_buffer *pCol = p->apCols[col];
   int rc = 0;
   int n = pLine->n;
@@ -24152,9 +24364,9 @@ static void sbsSimplifyLine(SbsLine *p, const char *z){
 */
 static int sbsWriteLineChange(
   SbsLine *p,          /* The SBS output line */
-  DLine *pLeft,        /* Left line of the change */
+  fsl_dline *pLeft,        /* Left line of the change */
   int lnLeft,          /* Line number for the left line */
-  DLine *pRight,       /* Right line of the change */
+  fsl_dline *pRight,       /* Right line of the change */
   int lnRight          /* Line number of the right line */
 ){
   int rc = 0;
@@ -24325,7 +24537,7 @@ static int sbsWriteLineChange(
    (3) Find the length of the longest common subsequence
    (4) Longer common subsequences yield lower scores.
 */
-static int match_dline(DLine *pA, DLine *pB){
+static int match_dline(fsl_dline *pA, fsl_dline *pB){
   const char *zA;            /* Left string */
   const char *zB;            /* right string */
   int nA;                    /* Bytes in zA[] */
@@ -24405,8 +24617,8 @@ static int match_dline(DLine *pA, DLine *pB){
    mismatch.
 */
 static unsigned char *sbsAlignment(
-   DLine *aLeft, int nLeft,       /* Text on the left */
-   DLine *aRight, int nRight      /* Text on the right */
+   fsl_dline *aLeft, int nLeft,       /* Text on the left */
+   fsl_dline *aRight, int nRight      /* Text on the right */
 ){
   int i, j, k;                 /* Loop counters */
   int *a;                      /* One row of the Wagner matrix */
@@ -24544,13 +24756,13 @@ static int smallGap(int *R){
    in, compute a side-by-side diff into pOut.
 */
 static int sbsDiff(
-  DContext *p,       /* The computed diff */
+  fsl_diff_cx *p,       /* The computed diff */
   DiffOutState *pOut,        /* Write the results here */
   ReCompiled *pRe,   /* Only show changes that match this regex */
   u64 diffFlags      /* Flags controlling the diff */
 ){
-  DLine *A;     /* Left side of the diff */
-  DLine *B;     /* Right side of the diff */
+  fsl_dline *A;     /* Left side of the diff */
+  fsl_dline *B;     /* Right side of the diff */
   int rc = 0;
   int a = 0;    /* Index of next line in A[] */
   int b = 0;    /* Index of next line in B[] */
@@ -24872,7 +25084,7 @@ static int fsl_diff_text_impl(
   int ** outRaw
 ){
   int rc;
-  DContext c;
+  fsl_diff_cx c = fsl_diff_cx_empty;
   uint64_t diffFlags = fsl_diff_flags_convert(diffFlags_)
     | DIFF_CONTEXT_EX /* to shoehorn newer 0-handling semantics into
                          older (ported-in) code. */;
@@ -24892,11 +25104,10 @@ static int fsl_diff_text_impl(
   }
 
   /* Prepare the input files */
-  memset(&c, 0, sizeof(c));
   if( (diffFlags & DIFF_IGNORE_ALLWS)==DIFF_IGNORE_ALLWS ){
-    c.same_fn = same_dline_ignore_allws;
+    c.cmpLine = same_dline_ignore_allws;
   }else{
-    c.same_fn = same_dline;
+    c.cmpLine = same_dline;
   }
   rc = break_into_lines(fsl_buffer_cstr(pA), fsl_buffer_size(pA),
                         &c.nFrom, &c.aFrom, diffFlags);
@@ -24906,12 +25117,14 @@ static int fsl_diff_text_impl(
   if(rc) goto end;
 
   if( c.aFrom==0 || c.aTo==0 ){
-    /* Empty diff */
+    /* Binary data */
+    rc = FSL_RC_DIFF_BINARY;
     goto end;
   }
 
   /* Compute the difference */
-  rc = diff_all(&c);
+  rc = fsl__diff_all(&c);
+  //fsl__dump_triples(&c, __FILE__, __LINE__);
   if(rc) goto end;
   if( (diffFlags & DIFF_NOTTOOBIG)!=0 ){
     int i, m, n;
@@ -24921,12 +25134,14 @@ static int fsl_diff_text_impl(
     if( !n || n>10000 ){
       rc = FSL_RC_RANGE;
       /* diff_errmsg(pOut, DIFF_TOO_MANY_CHANGES, diffFlags); */
-      goto end;;
+      goto end;
     }
   }
+  //fsl__dump_triples(&c, __FILE__, __LINE__);
   if( (diffFlags & DIFF_NOOPT)==0 ){
-    diff_optimize(&c);
+    fsl__diff_optimize(&c);
   }
+  //fsl__dump_triples(&c, __FILE__, __LINE__);
 
   if( out ){
     /* Compute a context or side-by-side diff */
@@ -24980,6 +25195,7 @@ int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
     : FSL_RC_MISUSE;
 }
 
+#undef MARKER
 #undef TO_BE_STATIC
 #undef LENGTH_MASK
 #undef LENGTH_MASK_SZ
@@ -25030,6 +25246,1889 @@ int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
 #undef ANSI_DIFF_MOD
 #undef ANSI_DIFF_RM
 /* end of file diff.c */
+/* start of file diff2.c */
+/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
+/* vim: set ts=2 et sw=2 tw=80: */
+/*
+  Copyright 2013-2021 The Libfossil Authors, see LICENSES/BSD-2-Clause.txt
+
+  SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+  SPDX-FileCopyrightText: 2021 The Libfossil Authors
+  SPDX-ArtifactOfProjectName: Libfossil
+  SPDX-FileType: Code
+
+  Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
+*/
+/**
+   This file houses the "2nd generation" diff-generation APIs. This
+   code is a straight port of those algorithms from the Fossil SCM
+   project, initially implemented by D. Richard Hipp, ported and
+   the license re-assigned to this project with this consent.
+*/
+#include <assert.h>
+#include <memory.h>
+#include <stdlib.h>
+#include <string.h> /* for memmove()/strlen() */
+
+#include <stdio.h>
+#define MARKER(pfexp)                                               \
+  do{ printf("MARKER: %s:%d:%s():\t",__FILE__,__LINE__,__func__);   \
+    printf pfexp;                                                   \
+  } while(0)
+
+
+const fsl_diff_opt fsl_diff_opt_empty = fsl_diff_opt_empty_m;
+const fsl_diff_builder fsl_diff_builder_empty = fsl_diff_builder_empty_m;
+const fsl_dline fsl_dline_empty = fsl_dline_empty_m;
+const fsl_dline_change fsl_dline_change_empty = fsl_dline_change_empty_m;
+const fsl_diff_cx fsl_diff_cx_empty = fsl_diff_cx_empty_m;
+
+/* Porting crutch for to-be-static functions */
+
+/*
+** Maximum length of a line in a text file, in bytes.  (2**15 = 32768 bytes)
+*/
+#define LENGTH_MASK_SZ  15
+#define LENGTH_MASK     ((1<<LENGTH_MASK_SZ)-1)
+
+void fsl__diff_cx_clean(fsl_diff_cx * const cx){
+  fsl_free(cx->aFrom);
+  fsl_free(cx->aTo);
+  fsl_free(cx->aEdit);
+  cx->aFrom = cx->aTo = NULL;
+  cx->aEdit = NULL;
+  *cx = fsl_diff_cx_empty;
+}
+
+/**
+   Counts the number of lines in the first n bytes of the given 
+   string. If n<0 then fsl_strlen() is used to count it. 
+
+   It includes the last line in the count even if it lacks the \n
+   terminator. If an empty string is passed in, the number of lines
+   is zero.
+
+   For the purposes of this function, a string is considered empty if
+   it contains no characters OR contains only NUL characters.
+
+   If the input appears to be plain text it returns true and, if nOut
+   is not NULL, writes the number of lines there. If the input appears
+   to be binary, returns false and does not modify nOut.
+*/
+FSL_EXPORT bool fsl_count_lines(const char *z, fsl_int_t n, uint32_t * nOut );
+
+bool fsl_count_lines(const char *z, fsl_int_t n, uint32_t * nOut ){
+  uint32_t nLine;
+  const char *zNL, *z2;
+  if(n<0) n = (fsl_int_t)fsl_strlen(z);
+  for(nLine=0, z2=z; (zNL = strchr(z2,'\n'))!=0; z2=zNL+1, nLine++){}
+  if( z2[0]!='\0' ){
+    nLine++;
+    do{ z2++; }while( z2[0]!='\0' );
+  }
+  if( n!=(fsl_int_t)(z2-z) ) return false;
+  if( nOut ) *nOut = nLine;
+  return true;
+}
+
+int fsl_break_into_dlines(const char *z, fsl_int_t n,
+                          uint32_t *pnLine,
+                          fsl_dline **pOut, uint64_t diffFlags){
+  uint32_t nLine, i, k, nn, s, x;
+  uint64_t h, h2;
+  fsl_dline *a = 0;
+  const char *zNL;
+
+  if( !fsl_count_lines(z, n, &nLine) ){
+    *pOut = 0;
+    return FSL_RC_DIFF_BINARY;
+  }
+  assert( nLine>0 || z[0]=='\0' );
+  if(nLine>0){
+    a = fsl_malloc( sizeof(a[0])*nLine );
+    if(!a) return FSL_RC_OOM;
+    memset(a, 0, sizeof(a[0])*nLine);
+  }else{
+    *pnLine = 0;
+    *pOut = a;
+    return 0;
+  }
+  assert( a );
+  i = 0;
+  do{
+    zNL = strchr(z,'\n');
+    if( zNL==0 ) zNL = z+n;
+    nn = (uint32_t)(zNL - z);
+    if( nn>LENGTH_MASK ){
+      fsl_free(a);
+      *pOut = 0;
+      *pnLine = 0;
+      return FSL_RC_DIFF_BINARY;
+    }
+    a[i].z = z;
+    k = nn;
+    if( diffFlags & FSL_DIFF2_STRIP_EOLCR ){
+      if( k>0 && z[k-1]=='\r' ){ k--; }
+    }
+    a[i].n = k;
+    s = 0;
+    if( diffFlags & FSL_DIFF2_IGNORE_EOLWS ){
+      while( k>0 && fsl_isspace(z[k-1]) ){ k--; }
+    }
+    if( (diffFlags & FSL_DIFF2_IGNORE_ALLWS)
+        ==FSL_DIFF2_IGNORE_ALLWS ){
+      uint32_t numws = 0;
+      while( s<k && fsl_isspace(z[s]) ){ ++s; }
+      for(h=0, x=s; x<k; ++x){
+        char c = z[x];
+        if( fsl_isspace(c) ){
+          ++numws;
+        }else{
+          h = (h^c)*9000000000000000041LL;
+        }
+      }
+      k -= numws;
+    }else{
+      uint32_t k2 = k & ~0x7;
+      uint64_t m;
+      for(h=0, x=s; x<k2; x += 8){
+        memcpy(&m, z+x, 8);
+        h = (h^m)*9000000000000000041LL;
+      }
+      m = 0;
+      memcpy(&m, z+x, k-k2);
+      h ^= m;
+    }
+    a[i].indent = s;
+    a[i].h = h = ((h%281474976710597LL)<<LENGTH_MASK_SZ) | (k-s);
+    h2 = h % nLine;
+    a[i].iNext = a[h2].iHash;
+    a[h2].iHash = i+1;
+    z += nn+1; n -= nn+1;
+    i++;
+  }while( zNL[0]!='\0' && zNL[1]!='\0' );
+  assert( i==nLine );
+
+  *pnLine = nLine;
+  *pOut = a;
+  return 0;
+}
+
+int fsl_dline_cmp(const fsl_dline * const pA,
+                         const fsl_dline * const pB){
+  if( pA->h!=pB->h ) return 1;
+  return memcmp(pA->z,pB->z, pA->h&LENGTH_MASK);
+}
+
+int fsl_dline_cmp_ignore_ws(const fsl_dline * const pA,
+                               const fsl_dline * const pB){
+  unsigned short a = pA->indent, b = pB->indent;
+  if( pA->h==pB->h ){
+    while( a<pA->n || b<pB->n ){
+      if( a<pA->n && b<pB->n && pA->z[a++] != pB->z[b++] ) return 1;
+      while( a<pA->n && fsl_isspace(pA->z[a])) ++a;
+      while( b<pB->n && fsl_isspace(pB->z[b])) ++b;
+    }
+    return pA->n-a != pB->n-b;
+  }
+  return 1;
+}
+
+/*
+** The two text segments zLeft and zRight are known to be different on
+** both ends, but they might have  a common segment in the middle.  If
+** they do not have a common segment, return 0.  If they do have a large
+** common segment, return non-0 and before doing so set:
+**
+**   aLCS[0] = start of the common segment in zLeft
+**   aLCS[1] = end of the common segment in zLeft
+**   aLCS[2] = start of the common segment in zLeft
+**   aLCS[3] = end of the common segment in zLeft
+**
+** This computation is for display purposes only and does not have to be
+** optimal or exact.
+*/
+static int textLCS2(
+  const char *zLeft,  uint32_t nA, /* String on the left */
+  const char *zRight, uint32_t nB, /* String on the right */
+  uint32_t *aLCS                   /* Identify bounds of LCS here */
+){
+  const unsigned char *zA = (const unsigned char*)zLeft;    /* left string */
+  const unsigned char *zB = (const unsigned char*)zRight;   /* right string */
+  uint32_t i, j, k;               /* Loop counters */
+  uint32_t lenBest = 0;           /* Match length to beat */
+
+  for(i=0; i<nA-lenBest; i++){
+    unsigned char cA = zA[i];
+    if( (cA&0xc0)==0x80 ) continue;
+    for(j=0; j<nB-lenBest; j++ ){
+      if( zB[j]==cA ){
+        for(k=1; j+k<nB && i+k<nA && zB[j+k]==zA[i+k]; k++){}
+        while( (zB[j+k]&0xc0)==0x80 ){ k--; }
+        if( k>lenBest ){
+          lenBest = k;
+          aLCS[0] = i;
+          aLCS[1] = i+k;
+          aLCS[2] = j;
+          aLCS[3] = j+k;
+        }
+      }
+    }
+  }
+  return lenBest>0;
+}
+
+/*
+** Find the smallest spans that are different between two text strings
+** that are known to be different on both ends. Returns the number
+** of entries in p->a which get populated.
+*/
+static unsigned short textLineChanges(
+  const char *zLeft,  uint32_t nA, /* String on the left */
+  const char *zRight, uint32_t nB, /* String on the right */
+  fsl_dline_change * const p             /* Write results here */
+){
+  p->n = 1;
+  p->a[0].iStart1 = 0;
+  p->a[0].iLen1 = nA;
+  p->a[0].iStart2 = 0;
+  p->a[0].iLen2 = nB;
+  p->a[0].isMin = 0;
+  while( p->n<fsl_dline_change_max_spans-1 ){
+    int mxi = -1;
+    int mxLen = -1;
+    int x, i;
+    uint32_t aLCS[4];
+    struct fsl_dline_change_span *a, *b;
+    for(i=0; i<p->n; i++){
+      if( p->a[i].isMin ) continue;
+      x = p->a[i].iLen1;
+      if( p->a[i].iLen2<x ) x = p->a[i].iLen2;
+      if( x>mxLen ){
+        mxLen = x;
+        mxi = i;
+      }
+    }
+    if( mxLen<6 ) break;
+    x = textLCS2(zLeft + p->a[mxi].iStart1, p->a[mxi].iLen1,
+                 zRight + p->a[mxi].iStart2, p->a[mxi].iLen2, aLCS);
+    if( x==0 ){
+      p->a[mxi].isMin = 1;
+      continue;
+    }
+    a = p->a+mxi;
+    b = a+1;
+    if( mxi<p->n-1 ){
+      memmove(b+1, b, sizeof(*b)*(p->n-mxi-1));
+    }
+    p->n++;
+    b->iStart1 = a->iStart1 + aLCS[1];
+    b->iLen1 = a->iLen1 - aLCS[1];
+    a->iLen1 = aLCS[0];
+    b->iStart2 = a->iStart2 + aLCS[3];
+    b->iLen2 = a->iLen2 - aLCS[3];
+    a->iLen2 = aLCS[2];
+    b->isMin = 0;
+  }
+  return p->n;
+}
+
+/*
+** Return true if the string starts with n spaces
+*/
+static int allSpaces(const char *z, int n){
+  int i;
+  for(i=0; i<n && fsl_isspace(z[i]); ++i){}
+  return i==n;
+}
+
+/*
+** Try to improve the human-readability of the fsl_dline_change p.
+**
+** (1)  If the first change span shows a change of indentation, try to
+**      move that indentation change to the left margin.
+**
+** (2)  Try to shift changes so that they begin or end with a space.
+*/
+static void improveReadability(
+  const char *zA,  /* Left line of the change */
+  const char *zB,  /* Right line of the change */
+  fsl_dline_change * const p /* The fsl_dline_change to be adjusted */
+){
+  int j, n, len;
+  if( p->n<1 ) return;
+
+  /* (1) Attempt to move indentation changes to the left margin */
+  if( p->a[0].iLen1==0
+   && (len = p->a[0].iLen2)>0
+   && (j = p->a[0].iStart2)>0
+   && zB[0]==zB[j]
+   && allSpaces(zB, j)
+  ){
+    for(n=1; n<len && n<j && zB[j]==zB[j+n]; n++){}
+    if( n<len ){
+      memmove(&p->a[1], &p->a[0], sizeof(p->a[0])*p->n);
+      p->n++;
+      p->a[0] = p->a[1];
+      p->a[1].iStart2 += n;
+      p->a[1].iLen2 -= n;
+      p->a[0].iLen2 = n;
+    }
+    p->a[0].iStart1 = 0;
+    p->a[0].iStart2 = 0;
+  }else
+  if( p->a[0].iLen2==0
+   && (len = p->a[0].iLen1)>0
+   && (j = p->a[0].iStart1)>0
+   && zA[0]==zA[j]
+   && allSpaces(zA, j)
+  ){
+    for(n=1; n<len && n<j && zA[j]==zA[j+n]; n++){}
+    if( n<len ){
+      memmove(&p->a[1], &p->a[0], sizeof(p->a[0])*p->n);
+      p->n++;
+      p->a[0] = p->a[1];
+      p->a[1].iStart1 += n;
+      p->a[1].iLen1 -= n;
+      p->a[0].iLen1 = n;
+    }
+    p->a[0].iStart1 = 0;
+    p->a[0].iStart2 = 0;
+  }
+
+  /* (2) Try to shift changes so that they begin or end with a
+  ** space.  (TBD) */
+}
+
+void fsl_dline_change_spans(const fsl_dline *pLeft, const fsl_dline *pRight,
+                            fsl_dline_change * const p){
+  /* fossil(1) counterpart ==> diff.c oneLineChange() */
+  int nLeft;           /* Length of left line in bytes */
+  int nRight;          /* Length of right line in bytes */
+  int nShort;          /* Shortest of left and right */
+  int nPrefix;         /* Length of common prefix */
+  int nSuffix;         /* Length of common suffix */
+  int nCommon;         /* Total byte length of suffix and prefix */
+  const char *zLeft;   /* Text of the left line */
+  const char *zRight;  /* Text of the right line */
+  int nLeftDiff;       /* nLeft - nPrefix - nSuffix */
+  int nRightDiff;      /* nRight - nPrefix - nSuffix */
+
+  nLeft = pLeft->n;
+  zLeft = pLeft->z;
+  nRight = pRight->n;
+  zRight = pRight->z;
+  nShort = nLeft<nRight ? nLeft : nRight;
+
+  nPrefix = 0;
+  while( nPrefix<nShort && zLeft[nPrefix]==zRight[nPrefix] ){
+    nPrefix++;
+  }
+  if( nPrefix<nShort ){
+    while( nPrefix>0 && (zLeft[nPrefix]&0xc0)==0x80 ) nPrefix--;
+  }
+  nSuffix = 0;
+  if( nPrefix<nShort ){
+    while( nSuffix<nShort
+           && zLeft[nLeft-nSuffix-1]==zRight[nRight-nSuffix-1] ){
+      nSuffix++;
+    }
+    if( nSuffix<nShort ){
+      while( nSuffix>0 && (zLeft[nLeft-nSuffix]&0xc0)==0x80 ) nSuffix--;
+    }
+    if( nSuffix==nLeft || nSuffix==nRight ) nPrefix = 0;
+  }
+  nCommon = nPrefix + nSuffix;
+
+  /* If the prefix and suffix overlap, that means that we are dealing with
+  ** a pure insertion or deletion of text that can have multiple alignments.
+  ** Try to find an alignment to begins and ends on whitespace, or on
+  ** punctuation, rather than in the middle of a name or number.
+  */
+  if( nCommon > nShort ){
+    int iBest = -1;
+    int iBestVal = -1;
+    int i;
+    int nLong = nLeft<nRight ? nRight : nLeft;
+    int nGap = nLong - nShort;
+    for(i=nShort-nSuffix; i<=nPrefix; i++){
+       int iVal = 0;
+       char c = zLeft[i];
+       if( fsl_isspace(c) ){
+         iVal += 5;
+       }else if( !fsl_isalnum(c) ){
+         iVal += 2;
+       }
+       c = zLeft[i+nGap-1];
+       if( fsl_isspace(c) ){
+         iVal += 5;
+       }else if( !fsl_isalnum(c) ){
+         iVal += 2;
+       }
+       if( iVal>iBestVal ){
+         iBestVal = iVal;
+         iBest = i;
+       }
+    }
+    nPrefix = iBest;
+    nSuffix = nShort - nPrefix;
+    nCommon = nPrefix + nSuffix;
+  }
+
+  /* A single chunk of text inserted */
+  if( nCommon==nLeft ){
+    p->n = 1;
+    p->a[0].iStart1 = nPrefix;
+    p->a[0].iLen1 = 0;
+    p->a[0].iStart2 = nPrefix;
+    p->a[0].iLen2 = nRight - nCommon;
+    improveReadability(zLeft, zRight, p);
+    return;
+  }
+
+  /* A single chunk of text deleted */
+  if( nCommon==nRight ){
+    p->n = 1;
+    p->a[0].iStart1 = nPrefix;
+    p->a[0].iLen1 = nLeft - nCommon;
+    p->a[0].iStart2 = nPrefix;
+    p->a[0].iLen2 = 0;
+    improveReadability(zLeft, zRight, p);
+    return;
+  }
+
+  /* At this point we know that there is a chunk of text that has
+  ** changed between the left and the right.  Check to see if there
+  ** is a large unchanged section in the middle of that changed block.
+  */
+  nLeftDiff = nLeft - nCommon;
+  nRightDiff = nRight - nCommon;
+  if( nLeftDiff >= 4
+   && nRightDiff >= 4
+   && textLineChanges(&zLeft[nPrefix], nLeftDiff,
+                      &zRight[nPrefix], nRightDiff, p)>1
+  ){
+    int i;
+    for(i=0; i<p->n; i++){
+      p->a[i].iStart1 += nPrefix;
+      p->a[i].iStart2 += nPrefix;
+    }
+    improveReadability(zLeft, zRight, p);
+    return;
+  }
+
+  /* If all else fails, show a single big change between left and right */
+  p->n = 1;
+  p->a[0].iStart1 = nPrefix;
+  p->a[0].iLen1 = nLeft - nCommon;
+  p->a[0].iStart2 = nPrefix;
+  p->a[0].iLen2 = nRight - nCommon;
+  improveReadability(zLeft, zRight, p);
+}
+
+
+
+/*
+** The threshold at which diffBlockAlignment transitions from the
+** O(N*N) Wagner minimum-edit-distance algorithm to a less process
+** O(NlogN) divide-and-conquer approach.
+*/
+#define DIFF_ALIGN_MX  1225
+
+/*
+** R[] is an array of six integer, two COPY/DELETE/INSERT triples for a
+** pair of adjacent differences.  Return true if the gap between these
+** two differences is so small that they should be rendered as a single
+** edit.
+*/
+static int smallGap2(const int *R, int ma, int mb){
+  int m = R[3];
+  ma += R[4] + m;
+  mb += R[5] + m;
+  if( ma*mb>DIFF_ALIGN_MX ) return 0;
+  return m<=2 || m<=(R[1]+R[2]+R[4]+R[5])/8;
+}
+
+static unsigned short diff_opt_context_lines(fsl_diff_opt const * cfg){
+  const unsigned short dflt = 5;
+  unsigned short n = cfg ? cfg->nContext : dflt;
+  if( !n && (cfg->diffFlags & FSL_DIFF2_CONTEXT_ZERO)==0 ){
+    n = dflt;
+  }
+  return n;
+}
+
+/*
+** Minimum of two values
+*/
+static int minInt(int a, int b){ return a<b ? a : b; }
+
+/****************************************************************************/
+/*
+** Return the number between 0 and 100 that is smaller the closer pA and
+** pB match.  Return 0 for a perfect match.  Return 100 if pA and pB are
+** completely different.
+**
+** The current algorithm is as follows:
+**
+** (1) Remove leading and trailing whitespace.
+** (2) Truncate both strings to at most 250 characters
+** (3) If the two strings have a common prefix, measure that prefix
+** (4) Find the length of the longest common subsequence that is
+**     at least 150% longer than the common prefix.
+** (5) Longer common subsequences yield lower scores.
+*/
+static int match_dline2(const fsl_dline *pA, const fsl_dline *pB){
+  const char *zA;            /* Left string */
+  const char *zB;            /* right string */
+  int nA;                    /* Bytes in zA[] */
+  int nB;                    /* Bytes in zB[] */
+  int nMin;
+  int nPrefix;
+  int avg;                   /* Average length of A and B */
+  int i, j, k;               /* Loop counters */
+  int best = 0;              /* Longest match found so far */
+  int score;                 /* Final score.  0..100 */
+  unsigned char c;           /* Character being examined */
+  unsigned char aFirst[256]; /* aFirst[X] = index in zB[] of first char X */
+  unsigned char aNext[252];  /* aNext[i] = index in zB[] of next zB[i] char */
+
+  zA = pA->z;
+  zB = pB->z;
+  nA = pA->n;
+  nB = pB->n;
+  while( nA>0 && (unsigned char)zA[0]<=' ' ){ nA--; zA++; }
+  while( nA>0 && (unsigned char)zA[nA-1]<=' ' ){ nA--; }
+  while( nB>0 && (unsigned char)zB[0]<=' ' ){ nB--; zB++; }
+  while( nB>0 && (unsigned char)zB[nB-1]<=' ' ){ nB--; }
+  if( nA>250 ) nA = 250;
+  if( nB>250 ) nB = 250;
+  avg = (nA+nB)/2;
+  if( avg==0 ) return 0;
+  nMin = nA;
+  if( nB<nMin ) nMin = nB;
+  if( nMin==0 ) return 68;
+  for(nPrefix=0; nPrefix<nMin && zA[nPrefix]==zB[nPrefix]; nPrefix++){}
+  best = 0;
+  if( nPrefix>5 && nPrefix>nMin/2 ){
+    best = nPrefix*3/2;
+    if( best>=avg - 2 ) best = avg - 2;
+  }
+  if( nA==nB && memcmp(zA, zB, nA)==0 ) return 0;
+  memset(aFirst, 0xff, sizeof(aFirst));
+  zA--; zB--;   /* Make both zA[] and zB[] 1-indexed */
+  for(i=nB; i>0; i--){
+    c = (unsigned char)zB[i];
+    aNext[i] = aFirst[c];
+    aFirst[c] = i;
+  }
+  for(i=1; i<=nA-best; i++){
+    c = (unsigned char)zA[i];
+    for(j=aFirst[c]; j<nB-best && memcmp(&zA[i],&zB[j],best)==0; j = aNext[j]){
+      int limit = minInt(nA-i, nB-j);
+      for(k=best; k<=limit && zA[k+i]==zB[k+j]; k++){}
+      if( k>best ) best = k;
+    }
+  }
+  score = (best>=avg) ? 0 : (avg - best)*100/avg;
+
+#if 0
+  fprintf(stderr, "A: [%.*s]\nB: [%.*s]\nbest=%d avg=%d score=%d\n",
+  nA, zA+1, nB, zB+1, best, avg, score);
+#endif
+
+  /* Return the result */
+  return score;
+}
+
+/*
+** There is a change block in which nLeft lines of text on the left are
+** converted into nRight lines of text on the right.  This routine computes
+** how the lines on the left line up with the lines on the right.
+**
+** The return value is a buffer of unsigned characters, obtained from
+** fossil_malloc().  (The caller needs to free the return value using
+** fossil_free().)  Entries in the returned array have values as follows:
+**
+**    1.  Delete the next line of pLeft.
+**    2.  Insert the next line of pRight.
+**    3.  The next line of pLeft changes into the next line of pRight.
+**    4.  Delete one line from pLeft and add one line to pRight.
+**
+** The length of the returned array will be at most nLeft+nRight bytes.
+** If the first bytes is 4,  that means we could not compute reasonable
+** alignment between the two blocks.
+**
+** Algorithm:  Wagner's minimum edit-distance algorithm, modified by
+** adding a cost to each match based on how well the two rows match
+** each other.  Insertion and deletion costs are 50.  Match costs
+** are between 0 and 100 where 0 is a perfect match 100 is a complete
+** mismatch.
+*/
+static int diffBlockAlignment(
+  const fsl_dline *aLeft, int nLeft,     /* Text on the left */
+  const fsl_dline *aRight, int nRight,   /* Text on the right */
+  fsl_diff_opt *pCfg,                  /* Configuration options */
+  unsigned char **pResult, /* Raw result */
+  unsigned *pNResult               /* OUTPUT: length of result */
+){
+  int i, j, k;                 /* Loop counters */
+  int *a = 0;                  /* One row of the Wagner matrix */
+  int *pToFree = 0;            /* Space that needs to be freed */
+  unsigned char *aM = 0;       /* Wagner result matrix */
+  int nMatch, iMatch;          /* Number of matching lines and match score */
+  int aBuf[100];               /* Stack space for a[] if nRight not to big */
+  int rc = 0;
+
+  if( nLeft==0 ){
+    aM = fsl_malloc( nRight + 2 );
+    if(!aM) return FSL_RC_OOM;
+    memset(aM, 2, nRight);
+    *pNResult = nRight;
+    *pResult = aM;
+    return 0;
+  }
+  if( nRight==0 ){
+    aM = fsl_malloc( nLeft + 2 );
+    if(!aM) return FSL_RC_OOM;
+    memset(aM, 1, nLeft);
+    *pNResult = nLeft;
+    *pResult = aM;
+    return 0;
+  }
+
+  /* For large alignments, use a divide and conquer algorithm that is
+  ** O(NlogN).  The result is not as precise, but this whole thing is an
+  ** approximation anyhow, and the faster response time is an acceptable
+  ** trade-off for reduced precision.
+  */
+  if( nLeft*nRight>DIFF_ALIGN_MX
+      && (pCfg->diffFlags & FSL_DIFF2_SLOW_SBS)==0 ){
+    const fsl_dline *aSmall;   /* The smaller of aLeft and aRight */
+    const fsl_dline *aBig;     /* The larger of aLeft and aRight */
+    int nSmall, nBig;      /* Size of aSmall and aBig.  nSmall<=nBig */
+    int iDivSmall, iDivBig;  /* Divider point for aSmall and aBig */
+    int iDivLeft, iDivRight; /* Divider point for aLeft and aRight */
+    unsigned char *a1 = 0, *a2 = 0;  /* Results of the alignments on two halves */
+    unsigned int n1, n2;     /* Number of entries in a1 and a2 */
+    int score, bestScore;    /* Score and best score seen so far */
+    if( nLeft>nRight ){
+      aSmall = aRight;
+      nSmall = nRight;
+      aBig = aLeft;
+      nBig = nLeft;
+    }else{
+      aSmall = aLeft;
+      nSmall = nLeft;
+      aBig = aRight;
+      nBig = nRight;
+    }
+    iDivBig = nBig/2;
+    iDivSmall = nSmall/2;
+    bestScore = 10000;
+    for(i=0; i<nSmall; i++){
+      score = match_dline2(aBig+iDivBig, aSmall+i) + abs(i-nSmall/2)*2;
+      if( score<bestScore ){
+        bestScore = score;
+        iDivSmall = i;
+      }
+    }
+    if( aSmall==aRight ){
+      iDivRight = iDivSmall;
+      iDivLeft = iDivBig;
+    }else{
+      iDivRight = iDivBig;
+      iDivLeft = iDivSmall;
+    }
+    rc = diffBlockAlignment(aLeft,iDivLeft,aRight, iDivRight,
+                            pCfg, &a1, &n1);
+    if(!rc){
+      rc = diffBlockAlignment(aLeft+iDivLeft, nLeft-iDivLeft,
+                              aRight+iDivRight, nRight-iDivRight,
+                              pCfg, &a2, &n2);
+    }
+    if(rc) goto bail;
+    void * a1Re = fsl_realloc(a1, n1+n2 );
+    if(!a1Re) goto bail;
+    a1 = (unsigned char *)a1Re;
+    memcpy(a1+n1,a2,n2);
+    fsl_free(a2);
+    a2 = 0;
+    *pNResult = n1+n2;
+    *pResult = a1;
+    return 0;
+    bail:
+    assert(0!=rc);
+    fsl_free( a1 );
+    fsl_free( a2 );
+    goto end;
+  }
+
+  /* If we reach this point, we will be doing an O(N*N) Wagner minimum
+  ** edit distance to compute the alignment.
+  */
+  if( nRight < (int)(sizeof(aBuf)/sizeof(aBuf[0]))-1 ){
+    pToFree = 0;
+    a = aBuf;
+  }else{
+    a = pToFree = fsl_malloc( sizeof(a[0])*(nRight+1) );
+    if(!a){
+      rc = FSL_RC_OOM;
+      goto end;
+    }
+  }
+  aM = fsl_malloc( (nLeft+1)*(nRight+1) );
+  if(!aM){
+    rc = FSL_RC_OOM;
+    goto end;
+  }
+
+  /* Compute the best alignment */
+  for(i=0; i<=nRight; i++){
+    aM[i] = 2;
+    a[i] = i*50;
+  }
+  aM[0] = 0;
+  for(j=1; j<=nLeft; j++){
+    int p = a[0];
+    a[0] = p+50;
+    aM[j*(nRight+1)] = 1;
+    for(i=1; i<=nRight; i++){
+      int m = a[i-1]+50;
+      int d = 2;
+      if( m>a[i]+50 ){
+        m = a[i]+50;
+        d = 1;
+      }
+      if( m>p ){
+        int const score =
+          match_dline2(&aLeft[j-1], &aRight[i-1]);
+        if( (score<=90 || (i<j+1 && i>j-1)) && m>p+score ){
+          m = p+score;
+          d = 3 | score*4;
+        }
+      }
+      p = a[i];
+      a[i] = m;
+      aM[j*(nRight+1)+i] = d;
+    }
+  }
+
+  /* Compute the lowest-cost path back through the matrix */
+  i = nRight;
+  j = nLeft;
+  k = (nRight+1)*(nLeft+1)-1;
+  nMatch = iMatch = 0;
+  while( i+j>0 ){
+    unsigned char c = aM[k];
+    if( c>=3 ){
+      assert( i>0 && j>0 );
+      i--;
+      j--;
+      nMatch++;
+      iMatch += (c>>2);
+      aM[k] = 3;
+    }else if( c==2 ){
+      assert( i>0 );
+      i--;
+    }else{
+      assert( j>0 );
+      j--;
+    }
+    k--;
+    aM[k] = aM[j*(nRight+1)+i];
+  }
+  k++;
+  i = (nRight+1)*(nLeft+1) - k;
+  memmove(aM, &aM[k], i);
+  *pNResult = i;
+  *pResult = aM;
+
+  end:
+  fsl_free(pToFree);
+  return rc;
+}
+
+
+/*
+** Format a diff using a fsl_diff_builder object
+*/
+static int fdb__format(
+  fsl_diff_cx * const cx,
+  fsl_diff_builder * const pBuilder
+){
+  const fsl_dline *A;        /* Left side of the diff */
+  const fsl_dline *B;        /* Right side of the diff */
+  fsl_diff_opt * const pCfg = pBuilder->cfg;
+  const int *R;          /* Array of COPY/DELETE/INSERT triples */
+  unsigned int a = 0;    /* Index of next line in A[] */
+  unsigned int b = 0;    /* Index of next line in B[] */
+  unsigned int r;        /* Index into R[] */
+  unsigned int nr;       /* Number of COPY/DELETE/INSERT triples to process */
+  unsigned int mxr;      /* Maximum value for r */
+  unsigned int na, nb;   /* Number of lines shown from A and B */
+  unsigned int i, j;     /* Loop counters */
+  unsigned int m, ma, mb;/* Number of lines to output */
+  signed int skip = 0;   /* Number of lines to skip */
+  unsigned int nContext; /* Lines of context above and below each change */
+  int rc = 0;
+
+#define RC if(rc) goto end
+  nContext = diff_opt_context_lines(pCfg);
+  A = cx->aFrom;
+  B = cx->aTo;
+  R = cx->aEdit;
+  mxr = cx->nEdit;
+  //MARKER(("nContext=%u, nEdit = %d, mxr=%u\n", nContext, cx->nEdit, mxr));
+  while( mxr>2 && R[mxr-1]==0 && R[mxr-2]==0 ){ mxr -= 3; }
+
+  ++pCfg->fileCount;
+  if(pBuilder->start){
+    rc = pBuilder->start(pBuilder);
+    RC;
+  }
+
+  for(r=0; r<mxr; r += 3*nr){
+    /* Figure out how many triples to show in a single block */
+    for(nr=1; R[r+nr*3]>0 && R[r+nr*3]<(int)nContext*2; nr++){}
+
+#if 0
+    /* MISSING: this "should" be replaced by a stateful predicate
+       function, probably in the fsl_diff_opt class. */
+    /* If there is a regex, skip this block (generate no diff output)
+    ** if the regex matches or does not match both insert and delete.
+    ** Only display the block if one side matches but the other side does
+    ** not.
+    */
+    if( pCfg->pRe ){
+      int hideBlock = 1;
+      int xa = a, xb = b;
+      for(i=0; hideBlock && i<nr; i++){
+        int c1, c2;
+        xa += R[r+i*3];
+        xb += R[r+i*3];
+        c1 = re_dline_match(pCfg->pRe, &A[xa], R[r+i*3+1]);
+        c2 = re_dline_match(pCfg->pRe, &B[xb], R[r+i*3+2]);
+        hideBlock = c1==c2;
+        xa += R[r+i*3+1];
+        xb += R[r+i*3+2];
+      }
+      if( hideBlock ){
+        a = xa;
+        b = xb;
+        continue;
+      }
+    }
+#endif
+
+    /* Figure out how many lines of A and B are to be displayed
+    ** for this change block.
+    */
+    if( R[r]>(int)nContext ){
+      na = nb = nContext;
+      skip = R[r] - nContext;
+    }else{
+      na = nb = R[r];
+      skip = 0;
+    }
+    for(i=0; i<nr; i++){
+      na += R[r+i*3+1];
+      nb += R[r+i*3+2];
+    }
+    if( R[r+nr*3]>(int)nContext ){
+      na += nContext;
+      nb += nContext;
+    }else{
+      na += R[r+nr*3];
+      nb += R[r+nr*3];
+    }
+    for(i=1; i<nr; i++){
+      na += R[r+i*3];
+      nb += R[r+i*3];
+    }
+
+
+    //MARKER(("Chunk header... a=%u, b=%u, na=%u, nb=%u, skip=%d\n", a, b, na, nb, skip));
+    if(pBuilder->chunkHeader){
+      rc = pBuilder->chunkHeader(pBuilder,
+                                 (uint32_t)(na ? a+skip+1 : a+skip),
+                                 (uint32_t)na,
+                                 (uint32_t)(nb ? b+skip+1 : b+skip),
+                                 (uint32_t)nb);
+      RC;
+    }
+
+    /* Show the initial common area */
+    a += skip;
+    b += skip;
+    m = R[r] - skip;
+    if( r ) skip -= nContext;
+
+    //MARKER(("Show the initial common... a=%u, b=%u, m=%u, r=%u, skip=%d\n", a, b, m, r, skip));
+    if( skip>0 ){
+      if( NULL==pBuilder->chunkHeader && skip<(int)nContext ){
+        /* 2021-09-27: BUG: this is incompatible with unified diff
+           format. The generated header lines say we're skipping X
+           lines but we then end up including lines which that header
+           says to skip. As a workaround, we'll only run this when
+           pBuilder->chunkHeader is NULL, noting that fossil's
+           diff builder interface does not have that method.
+
+           Without this block, our "utxt" diff builder can mimic
+           fossil's non-diff builder unified diff format, except that
+           we add Index lines (feature or bug?). With this block,
+           the header values output above are wrong.
+        */
+        /* If the amount to skip is less that the context band, then
+        ** go ahead and show the skip band as it is not worth eliding */
+        //MARKER(("skip %d < nContext %d\n", skip, nContext));
+        /* from fossil(1) from formatDiff() */
+        for(j=0; 0==rc && j<(unsigned)skip; j++){
+          //MARKER(("(A) COMMON\n"));
+          rc = pBuilder->common(pBuilder, &A[a+j-skip]);
+        }
+      }else{
+        rc = pBuilder->skip(pBuilder, skip, 0);
+      }
+      RC;
+    }
+    for(j=0; 0==rc && j<m; j++){
+      //MARKER(("(B) COMMON\n"));
+      rc = pBuilder->common(pBuilder, &A[a+j]);
+    }
+    RC;
+    a += m;
+    b += m;
+    //MARKER(("Show the differences... a=%d, b=%d, m=%d\n", a, b, m));
+
+    /* Show the differences */
+    for(i=0; i<nr; i++){
+      unsigned int nAlign;
+      unsigned char *alignment = 0;
+      ma = R[r+i*3+1];   /* Lines on left but not on right */
+      mb = R[r+i*3+2];   /* Lines on right but not on left */
+
+      /* Try merging the current block with subsequent blocks, if the
+      ** subsequent blocks are nearby and their result isn't too big.
+      */
+      while( i<nr-1 && smallGap2(&R[r+i*3],ma,mb) ){
+        i++;
+        m = R[r+i*3];
+        ma += R[r+i*3+1] + m;
+        mb += R[r+i*3+2] + m;
+      }
+
+      /* Try to find an alignment for the lines within this one block */
+      rc = diffBlockAlignment(&A[a], ma, &B[b], mb, pCfg,
+                              &alignment, &nAlign);
+      RC;
+      for(j=0; ma+mb>0; j++){
+        assert( j<nAlign );
+        switch( alignment[j] ){
+          case 1: {
+            /* Delete one line from the left */
+            rc = pBuilder->deletion(pBuilder, &A[a]);
+            if(rc) goto bail;
+            ma--;
+            a++;
+            break;
+          }
+          case 2: {
+            /* Insert one line on the right */
+            rc = pBuilder->insertion(pBuilder, &B[b]);
+            if(rc) goto bail;
+            assert( mb>0 );
+            mb--;
+            b++;
+            break;
+          }
+          case 3: {
+            /* The left line is changed into the right line */
+            if( cx->cmpLine(&A[a], &B[b])==0 ){
+              //MARKER(("C common\n"));
+              rc = pBuilder->common(pBuilder, &A[a]);
+            }else{
+              rc = pBuilder->edit(pBuilder, &A[a], &B[b]);
+            }
+            if(rc) goto bail;
+            assert( ma>0 && mb>0 );
+            ma--;
+            mb--;
+            a++;
+            b++;
+            break;
+          }
+          case 4: {
+            /* Delete from left then separately insert on the right */
+            rc = pBuilder->replacement(pBuilder, &A[a], &B[b]);
+            if(rc) goto bail;
+            ma--;
+            a++;
+            mb--;
+            b++;
+            break;
+          }
+        }
+      }
+      assert( nAlign==j );
+      fsl_free(alignment);
+      if( i<nr-1 ){
+        m = R[r+i*3+3];
+        for(j=0; 0==rc && j<m; j++){
+          //MARKER(("D common\n"));
+          rc = pBuilder->common(pBuilder, &A[a+j]);
+        }
+        RC;
+        b += m;
+        a += m;
+      }
+      continue;
+      bail:
+      assert(rc);
+      fsl_free(alignment);
+      goto end;
+    }
+
+    /* Show the final common area */
+    assert( nr==i );
+    m = R[r+nr*3];
+    if( m>nContext ) m = nContext;
+    for(j=0; 0==rc && j<m && j<nContext; j++){
+      //MARKER(("E common\n"));
+      rc = pBuilder->common(pBuilder, &A[a+j]);
+    }
+    RC;
+  }
+  if( R[r]>(int)nContext ){
+    rc = pBuilder->skip(pBuilder, R[r] - nContext, true);
+  }
+  end:
+#undef RC
+  if(0==rc && pBuilder->finish){
+    pBuilder->finish(pBuilder);
+  }
+  return rc;
+}
+
+/* MISSING(?) fossil(1) converts the diff inputs into utf8 with no
+   BOM. Whether we really want to do that here or rely on the caller
+   to is up for debate. If we do it here, we have to make the inputs
+   non-const, which seems "wrong" for a library API. */
+#define blob_to_utf8_no_bom(A,B) (void)0
+
+/**
+   Performs a diff of version 1 (pA) and version 2 (pB). ONE of
+   pBuilder or outRaw must be non-NULL. If pBuilder is not NULL, all
+   output for the diff is emitted via pBuilder. If outRaw is not NULL
+   then on success *outRaw is set to the array of diff triples,
+   transfering ownership to the caller, who must eventually fsl_free()
+   it. On error, *outRaw is not modified but pBuilder may have emitted
+   partial output. That is not knowable for the general
+   case. Ownership of pBuilder is not changed. If pBuilder is not NULL
+   then pBuilder->cfg must be non-NULL.
+*/
+static int fsl_diff2_text_impl(fsl_buffer const *pA,
+                               fsl_buffer const *pB,
+                               fsl_diff_builder * const pBuilder,
+                               fsl_diff_opt const * const cfg,
+                               int ** outRaw){
+  int rc = 0;
+  fsl_diff_cx c = fsl_diff_cx_empty;
+  bool ignoreWs = false;
+  assert(cfg);
+  if(!pA || !pB || (pBuilder && outRaw)
+     || (!cfg && !outRaw)) return FSL_RC_MISUSE;
+
+  blob_to_utf8_no_bom(pA, 0);
+  blob_to_utf8_no_bom(pB, 0);
+
+  if( cfg->diffFlags & FSL_DIFF2_INVERT ){
+    fsl_buffer const *pTemp = pA;
+    pA = pB;
+    pB = pTemp;
+  }
+
+  ignoreWs = (cfg->diffFlags & FSL_DIFF2_IGNORE_ALLWS)!=0;
+  if(FSL_DIFF2_IGNORE_ALLWS==(cfg->diffFlags & FSL_DIFF2_IGNORE_ALLWS)){
+    c.cmpLine = fsl_dline_cmp_ignore_ws;
+  }else{
+    c.cmpLine = fsl_dline_cmp;
+  }
+ 
+  rc = fsl_break_into_dlines(fsl_buffer_cstr(pA), (fsl_int_t)pA->used,
+                             (uint32_t*)&c.nFrom, &c.aFrom, cfg->diffFlags);
+  if(rc) goto end;
+  rc = fsl_break_into_dlines(fsl_buffer_cstr(pB), (fsl_int_t)pB->used,
+                             (uint32_t*)&c.nTo, &c.aTo, cfg->diffFlags);
+  if(rc) goto end;
+  if( c.aFrom==0 || c.aTo==0 ){
+    /* Binary data */
+    rc = FSL_RC_DIFF_BINARY;
+    goto end;
+  }
+
+  /* Compute the difference */
+  rc = fsl__diff_all(&c);
+  if(rc) goto end;
+
+  if( ignoreWs && c.nEdit==6 && c.aEdit[1]==0 && c.aEdit[2]==0 ){
+    rc = FSL_RC_DIFF_WS_ONLY;
+    goto end;
+  }
+  if( (cfg->diffFlags & FSL_DIFF2_NOTTOOBIG)!=0 ){
+    int i, m, n;
+    int const * const a = c.aEdit;
+    int const mx = c.nEdit;
+    for(i=m=n=0; i<mx; i+=3){ m += a[i]; n += a[i+1]+a[i+2]; }
+    if( !n || n>10000 ){
+      rc = FSL_RC_RANGE;
+      /* diff_errmsg(pOut, DIFF_TOO_MANY_CHANGES, diffFlags); */
+      goto end;
+    }
+  }
+  //fsl__dump_triples(&c, __FILE__, __LINE__);
+  if( (cfg->diffFlags & FSL_DIFF2_NOOPT)==0 ){
+    fsl__diff_optimize(&c);
+  }
+  //fsl__dump_triples(&c, __FILE__, __LINE__);
+
+  /**
+     Reference:
+
+     https://fossil-scm.org/home/file?ci=cae7036bb7f07c1b&name=src/diff.c&ln=2749-2804
+
+     Noting that:
+
+     - That function's return value is this one's *outRaw
+
+     - DIFF_NUMSTAT flag is not implemented. For that matter,
+     flags which result in output going anywhere except for
+     pBuilder->out are not implemented here, e.g. DIFF_RAW.
+
+     That last point makes this impl tiny compared to the original!
+  */
+
+  if(pBuilder){
+    rc = fdb__format(&c, pBuilder);
+  }
+  end:
+  if(0==rc && outRaw){
+    *outRaw = c.aEdit;
+    c.aEdit = 0;
+  }
+  fsl__diff_cx_clean(&c);
+  return rc;
+}
+
+int fsl_diff_v2(fsl_buffer const * pv1,
+                fsl_buffer const * pv2,
+                fsl_diff_builder * const pBuilder){
+  return fsl_diff2_text_impl(pv1, pv2, pBuilder, pBuilder->cfg, NULL);
+}
+
+int fsl_diff_v2_raw(fsl_buffer const * pv1,
+                    fsl_buffer const * pv2,
+                    fsl_diff_opt const * const cfg,
+                    int **outRaw ){
+  return fsl_diff2_text_impl(pv1, pv2, NULL, cfg, outRaw);
+}
+
+
+/**
+   Allocator for fsl_diff_builder instances. If extra is >0 then that
+   much extra space is allocated as part of the same block and the
+   pimpl member of the returned object is pointed to that space.
+*/
+static fsl_diff_builder * fsl__diff_builder_alloc(fsl_size_t extra){
+  fsl_diff_builder * rc =
+    (fsl_diff_builder*)fsl_malloc(sizeof(fsl_diff_builder) + extra);
+  if(rc){
+    *rc = fsl_diff_builder_empty;
+    if(extra){
+      rc->pimpl = ((unsigned char *)rc)+sizeof(fsl_diff_builder);
+    }
+  }
+  return rc;
+}
+
+static int fdb__fsl_output_f( void * state, void const * src,
+                              fsl_size_t n ){
+  fsl_diff_builder * const b = (fsl_diff_builder *)state;
+  return b->cfg->out(b->cfg->outState, src, n);
+}
+
+static int fdb__out(fsl_diff_builder *const b,
+                    char const *z, fsl_size_t n){
+  return b->cfg->out(b->cfg->outState, z, n);
+}
+static int fdb__outf(fsl_diff_builder * const b,
+                     char const *fmt, ...){
+  int rc = 0;
+  va_list va;
+  assert(b->cfg->out);
+  va_start(va,fmt);
+  rc = fsl_appendfv(fdb__fsl_output_f, b, fmt, va);
+  va_end(va);
+  return rc;
+}
+
+
+static int fdb__debug_start(fsl_diff_builder * const b){
+  int rc = fdb__outf(b, "DEBUG builder starting up.\n");
+  if(0==rc && b->cfg->nameLHS){
+    rc = fdb__outf(b,"LHS: %s\n", b->cfg->nameLHS);
+  }
+  if(0==rc && b->cfg->nameRHS){
+    rc = fdb__outf(b,"RHS: %s\n", b->cfg->nameRHS);
+  }
+  if(0==rc && b->cfg->hashLHS){
+    rc = fdb__outf(b,"LHS hash: %s\n", b->cfg->hashLHS);
+  }
+  if(0==rc && b->cfg->hashRHS){
+    rc = fdb__outf(b,"RHS hash: %s\n", b->cfg->hashRHS);
+  }
+  return rc;
+}
+
+
+static int fdb__debug_chunkHeader(fsl_diff_builder* const b,
+                                  uint32_t lnnoLHS, uint32_t linesLHS,
+                                  uint32_t lnnoRHS, uint32_t linesRHS ){
+#if 1
+  return fdb__outf(b, "@@ -%" PRIu32 ",%" PRIu32
+                   " +%" PRIu32 ",%" PRIu32 " @@\n",
+                   lnnoLHS, linesLHS, lnnoRHS, linesRHS);
+#else
+  return 0;
+#endif
+}
+
+static int fdb__debug_skip(fsl_diff_builder * const p, uint32_t n, bool isFinal){
+  const int rc = fdb__outf(p, "SKIP %u (%u..%u left and %u..%u right)%s\n",
+                           n, p->lnLHS+1, p->lnLHS+n, p->lnRHS+1, p->lnRHS+n,
+                           isFinal ? " FINAL" : "");
+  p->lnLHS += n;
+  p->lnRHS += n;
+  return rc;
+}
+static int fdb__debug_common(fsl_diff_builder * const p, fsl_dline const * pLine){
+  ++p->lnLHS;
+  ++p->lnRHS;
+  return fdb__outf(p, "COMMON  %8u %8u %.*s\n",
+                   p->lnLHS, p->lnRHS, (int)pLine->n, pLine->z);
+}
+static int fdb__debug_insertion(fsl_diff_builder * const p, fsl_dline const * pLine){
+  p->lnRHS++;
+  return fdb__outf(p, "INSERT           %8u %.*s\n",
+                   p->lnRHS, (int)pLine->n, pLine->z);
+}
+static int fdb__debug_deletion(fsl_diff_builder * const p, fsl_dline const * pLine){
+  p->lnLHS++;
+  return fdb__outf(p, "DELETE  %8u          %.*s\n",
+                   p->lnLHS, (int)pLine->n, pLine->z);
+}
+static int fdb__debug_replacement(fsl_diff_builder * const p,
+                              fsl_dline const * lineLhs,
+                              fsl_dline const * lineRhs) {
+  int rc;
+  p->lnLHS++;
+  p->lnRHS++;
+  rc = fdb__outf(p, "REPLACE %8u          %.*s\n",
+      p->lnLHS, (int)lineLhs->n, lineLhs->z);
+  if(!rc){
+    rc = fdb__outf(p, "            %8u %.*s\n",
+                   p->lnRHS, (int)lineRhs->n, lineRhs->z);
+  }
+  return rc;
+}
+                 
+static int fdb__debug_edit(fsl_diff_builder * const b,
+                           fsl_dline const * pX,
+                           fsl_dline const * pY){
+  int rc = 0;
+  int i, j;
+  int x;
+  fsl_dline_change chng = fsl_dline_change_empty;
+#define RC if(rc) goto end
+  b->lnLHS++;
+  b->lnRHS++;
+  rc = fdb__outf(b, "EDIT    %8u          %.*s\n",
+                 b->lnLHS, (int)pX->n, pX->z);
+  RC;
+  fsl_dline_change_spans(pX, pY, &chng);
+  for(i=x=0; i<chng.n; i++){
+    int ofst = chng.a[i].iStart1;
+    int len = chng.a[i].iLen1;
+    if( len ){
+      char c = '0' + i;
+      if( x==0 ){
+        rc = fdb__outf(b, "%*s", 26, "");
+        RC;
+      }
+      while( ofst > x ){
+        if( (pX->z[x]&0xc0)!=0x80 ){
+          rc = fdb__out(b, " ", 1);
+          RC;
+        }
+        x++;
+      }
+      for(j=0; j<len; j++, x++){
+        if( (pX->z[x]&0xc0)!=0x80 ){
+          rc = fdb__out(b, &c, 1);
+          RC;
+        }
+      }
+    }
+  }
+  if( x ){
+    rc = fdb__out(b, "\n", 1);
+    RC;
+  }
+  rc = fdb__outf(b, "                 %8u %.*s\n",
+                 b->lnRHS, (int)pY->n, pY->z);
+  RC;
+  for(i=x=0; i<chng.n; i++){
+    int ofst = chng.a[i].iStart2;
+    int len = chng.a[i].iLen2;
+    if( len ){
+      char c = '0' + i;
+      if( x==0 ){
+        rc = fdb__outf(b, "%*s", 26, "");
+        RC;
+      }
+      while( ofst > x ){
+        if( (pY->z[x]&0xc0)!=0x80 ){
+          rc = fdb__out(b, " ", 1);
+          RC;
+        }
+        x++;
+      }
+      for(j=0; j<len; j++, x++){
+        if( (pY->z[x]&0xc0)!=0x80 ){
+          rc = fdb__out(b, &c, 1);
+          RC;
+        }
+      }
+    }
+  }
+  if( x ){
+    rc = fdb__out(b, "\n", 1);
+  }
+  end:
+#undef RC
+  return rc;
+}
+
+static int fdb__debug_finish(fsl_diff_builder * const b){
+  return fdb__outf(b, "END with %u lines left and %u lines right\n",
+                   b->lnLHS, b->lnRHS);
+}
+
+static void fdb__generic_finalize(fsl_diff_builder * const b){
+  fsl_free(b);
+}
+
+static fsl_diff_builder * fsl__diff_builder_debug(void){
+  fsl_diff_builder * rc = fsl__diff_builder_alloc(0);
+  if(rc){
+    rc->chunkHeader = fdb__debug_chunkHeader;
+    rc->start = fdb__debug_start;
+    rc->skip = fdb__debug_skip;
+    rc->common = fdb__debug_common;
+    rc->insertion = fdb__debug_insertion;
+    rc->deletion = fdb__debug_deletion;
+    rc->replacement = fdb__debug_replacement;
+    rc->edit = fdb__debug_edit;
+    rc->finish = fdb__debug_finish;
+    rc->finalize = fdb__generic_finalize;
+    assert(!rc->pimpl);
+    assert(0==rc->implFlags);
+    assert(0==rc->lnLHS);
+    assert(0==rc->lnRHS);
+    assert(NULL==rc->cfg);
+  }
+  return rc;
+}
+
+/******************** json1 diff builder ********************/
+/* Description taken verbatim from fossil(1): */
+/*
+** This formatter generates a JSON array that describes the difference.
+**
+** The Json array consists of integer opcodes with each opcode followed
+** by zero or more arguments:
+**
+**   Syntax        Mnemonic    Description
+**   -----------   --------    --------------------------
+**   0             END         This is the end of the diff
+**   1  INTEGER    SKIP        Skip N lines from both files
+**   2  STRING     COMMON      The line show by STRING is in both files
+**   3  STRING     INSERT      The line STRING is in only the right file
+**   4  STRING     DELETE      The STRING line is in only the left file
+**   5  SUBARRAY   EDIT        One line is different on left and right.
+**
+** The SUBARRAY is an array of 3*N+1 strings with N>=0.  The triples
+** represent common-text, left-text, and right-text.  The last string
+** in SUBARRAY is the common-suffix.  Any string can be empty if it does
+** not apply.
+*/
+
+static int fdb__outj(fsl_diff_builder * const b,
+                     char const *zJson, int n){
+  return n<0
+    ? fdb__outf(b, "%!j", zJson)
+    : fdb__outf(b, "%!.*j", n, zJson);
+}
+
+static int fdb__json1_start(fsl_diff_builder * const b){
+  int rc = fdb__outf(b, "{\"hashLHS\": %!j, \"hashRHS\": %!j, ",
+                     b->cfg->hashLHS, b->cfg->hashRHS);
+  if(0==rc && b->cfg->nameLHS){
+    rc = fdb__outf(b, "\"nameLHS\": %!j, ", b->cfg->nameLHS);
+  }
+  if(0==rc && b->cfg->nameRHS){
+    rc = fdb__outf(b, "\"nameRHS\": %!j, ", b->cfg->nameRHS);
+  }
+  if(0==rc){
+    rc = fdb__out(b, "\"diff\":[", 8);
+  }
+  return rc;
+}
+
+static int fdb__json1_skip(fsl_diff_builder * const b, uint32_t n, bool isFinal){
+  return fdb__outf(b, "1,%" PRIu32 ",\n", n);
+}
+static int fdb__json1_common(fsl_diff_builder * const b, fsl_dline const * pLine){
+  int rc = fdb__out(b, "2,",2);
+  if(!rc) {
+    rc = fdb__outj(b, pLine->z, (int)pLine->n);
+    if(!rc) rc = fdb__out(b, ",\n",2);
+  }
+  return rc;
+}
+static int fdb__json1_insertion(fsl_diff_builder * const b, fsl_dline const * pLine){
+  int rc = fdb__out(b, "3,",2);
+  if(!rc){
+    rc = fdb__outj(b, pLine->z, (int)pLine->n);
+    if(!rc) rc = fdb__out(b, ",\n",2);
+  }
+  return rc;
+}
+static int fdb__json1_deletion(fsl_diff_builder * const b, fsl_dline const * pLine){
+  int rc = fdb__out(b, "4,",2);
+  if(!rc){
+    rc = fdb__outj(b, pLine->z, (int)pLine->n);
+    if(!rc) rc = fdb__out(b, ",\n",2);
+  }
+  return rc;
+}
+static int fdb__json1_replacement(fsl_diff_builder * const b,
+                              fsl_dline const * lineLhs,
+                              fsl_dline const * lineRhs) {
+  int rc = fdb__out(b, "5,[\"\",",6);
+  if(!rc) rc = fdb__outf(b,"%!.*j", (int)lineLhs->n, lineLhs->z);
+  if(!rc) rc = fdb__out(b, ",", 1);
+  if(!rc) rc = fdb__outf(b,"%!.*j", (int)lineRhs->n, lineRhs->z);
+  if(!rc) rc = fdb__out(b, ",\"\"],\n",6);
+  return rc;
+}
+                 
+static int fdb__json1_edit(fsl_diff_builder * const b,
+                           fsl_dline const * pX,
+                           fsl_dline const * pY){
+  int rc = 0;
+  int i,x;
+  fsl_dline_change chng = fsl_dline_change_empty;
+
+#define RC if(rc) goto end
+  rc = fdb__out(b, "5,[", 3); RC;
+  fsl_dline_change_spans(pX, pY, &chng);
+  for(i=x=0; i<(int)chng.n; i++){
+    rc = fdb__outj(b, pX->z + x, (int)chng.a[i].iStart1 - x); RC;
+    x = chng.a[i].iStart1;
+    rc = fdb__out(b, ",", 1); RC;
+    rc = fdb__outj(b, pX->z + x, (int)chng.a[i].iLen1); RC;
+    x += chng.a[i].iLen1;
+    rc = fdb__out(b, ",", 1); RC;
+    rc = fdb__outj(b, pY->z + chng.a[i].iStart2,
+                   (int)chng.a[i].iLen2); RC;
+  }
+  rc = fdb__out(b, ",", 1); RC;
+  rc = fdb__outj(b, pX->z + x, (int)(pX->n - x)); RC;
+  rc = fdb__out(b, "],\n",3); RC;
+  end:
+  return rc;
+#undef RC
+}
+
+static int fdb__json1_finish(fsl_diff_builder * const b){
+  return fdb__out(b, "0]}", 3);
+}
+
+static fsl_diff_builder * fsl__diff_builder_json1(void){
+  fsl_diff_builder * rc = fsl__diff_builder_alloc(0);
+  if(rc){
+    rc->chunkHeader = NULL;
+    rc->start = fdb__json1_start;
+    rc->skip = fdb__json1_skip;
+    rc->common = fdb__json1_common;
+    rc->insertion = fdb__json1_insertion;
+    rc->deletion = fdb__json1_deletion;
+    rc->replacement = fdb__json1_replacement;
+    rc->edit = fdb__json1_edit;
+    rc->finish = fdb__json1_finish;
+    rc->finalize = fdb__generic_finalize;
+    assert(!rc->pimpl);
+    assert(0==rc->implFlags);
+    assert(0==rc->lnLHS);
+    assert(0==rc->lnRHS);
+    assert(NULL==rc->cfg);
+  }
+  return rc;
+}
+
+#if 0
+/*
+  If we do unified diff line numbers, or HTML-mode unified diffs,
+  we'll probably want something like this for accumulating the various
+  columns.
+*/
+struct UnifiedTxt {
+  fsl_buffer cols[5];
+};
+typedef struct UnifiedTxt UnifiedTxt;
+static const UnifiedTxt_empty = {
+{fsl_buffer_empty_m, fsl_buffer_empty_m,
+ fsl_buffer_empty_m, fsl_buffer_empty_m,
+ fsl_buffer_empty_m}
+};
+#define USTATE UnifiedTxt * const ust = (UnifiedTxt *)b->pimpl
+#endif
+
+static int fdb__utxt_start(fsl_diff_builder * const b){
+  int rc = 0;
+  if(0==(FSL_DIFF2_NOINDEX & b->cfg->diffFlags)){
+    rc = fdb__outf(b,"Index: %s\n%.66c\n",
+                   b->cfg->nameLHS/*RHS?*/, '=');
+  }
+  if(0==rc){
+    rc = fdb__outf(b, "--- %s\n+++ %s\n",
+                   b->cfg->nameLHS, b->cfg->nameRHS);
+  }
+  return rc;
+}
+
+static int fdb__utxt_chunkHeader(fsl_diff_builder* const b,
+                                 uint32_t lnnoLHS, uint32_t linesLHS,
+                                 uint32_t lnnoRHS, uint32_t linesRHS ){
+  return fdb__outf(b, "@@ -%" PRIu32 ",%" PRIu32
+                   " +%" PRIu32 ",%" PRIu32 " @@\n",
+                   lnnoLHS, linesLHS, lnnoRHS, linesRHS);
+}
+
+
+static int fdb__utxt_skip(fsl_diff_builder * const b, uint32_t n, bool isFinal){
+  //MARKER(("SKIP\n"));
+  b->lnLHS += n;
+  b->lnRHS += n;
+  return 0;
+}
+
+/** Outputs line numbers to b->cfg->out. */
+static int fdb__utxt_lineno(fsl_diff_builder * const b, uint32_t lnL, uint32_t lnR){
+  int rc = 0;
+  if(FSL_DIFF2_LINE_NUMBERS & b->cfg->diffFlags){
+    rc = lnL
+      ? fdb__outf(b, "%6" PRIu32 " ", lnL)
+      : fdb__out(b, "       ", 7);
+    if(0==rc){
+      rc = lnR
+      ? fdb__outf(b, "%6" PRIu32 " ", lnR)
+      : fdb__out(b, "       ", 7);
+    }
+  }
+  return rc;
+}
+
+static int fdb__utxt_common(fsl_diff_builder * const b, fsl_dline const * pLine){
+  //MARKER(("COMMON\n"));
+  ++b->lnLHS;
+  ++b->lnRHS;
+  const int rc = fdb__utxt_lineno(b, b->lnLHS, b->lnRHS);
+  return rc ? rc : fdb__outf(b, " %.*s\n", (int)pLine->n, pLine->z);
+}
+static int fdb__utxt_insertion(fsl_diff_builder * const b, fsl_dline const * pLine){
+  //MARKER(("INSERT\n"));
+  ++b->lnRHS;
+  const int rc = fdb__utxt_lineno(b, 0, b->lnRHS);
+  return rc ? rc : fdb__outf(b, "+%.*s\n", (int)pLine->n, pLine->z);
+}
+static int fdb__utxt_deletion(fsl_diff_builder * const b, fsl_dline const * pLine){
+  //MARKER(("DELETE\n"));
+  ++b->lnLHS;
+  const int rc = fdb__utxt_lineno(b, b->lnLHS, 0);
+  return rc ? rc : fdb__outf(b, "-%.*s\n", (int)pLine->n, pLine->z);
+}
+static int fdb__utxt_replacement(fsl_diff_builder * const b,
+                                 fsl_dline const * lineLhs,
+                                 fsl_dline const * lineRhs) {
+  //MARKER(("REPLACE\n"));
+  int rc = b->deletion(b, lineLhs);
+  if(0==rc) rc = b->insertion(b, lineRhs);
+  return rc;
+}
+static int fdb__utxt_edit(fsl_diff_builder * const b,
+                           fsl_dline const * lineLhs,
+                           fsl_dline const * lineRhs){
+  //MARKER(("EDIT\n"));
+  int rc = b->deletion(b, lineLhs);
+  if(0==rc) rc = b->insertion(b, lineRhs);
+  return rc;
+}
+
+static void fdb__utxt_finalize(fsl_diff_builder * const b){
+#if 0
+  USTATE;
+  for( int i = 0; i < sizeof(ust->cols)/sizeof(ust->cols[0]); ++i ){
+    fsl_buffer_clear(&usr->cols[i]);
+  }
+  fsl_free(ust);
+#endif
+  fsl_free(b);
+}
+#undef USTATE
+
+static fsl_diff_builder * fsl__diff_builder_utxt(void){
+  fsl_diff_builder * rc = fsl__diff_builder_alloc(0);
+  if(!rc) return NULL;
+  /****
+  UnifiedTxt * ust = fsl_malloc(sizeof(UnifiedTxt));
+  if(!ust){
+    fsl_free(rc);
+    return NULL;
+  }else{
+    *usr = UnifiedTxt_empty;
+  }
+  *****/
+  rc->chunkHeader = fdb__utxt_chunkHeader;
+  rc->start = fdb__utxt_start;
+  rc->skip = fdb__utxt_skip;
+  rc->common = fdb__utxt_common;
+  rc->insertion = fdb__utxt_insertion;
+  rc->deletion = fdb__utxt_deletion;
+  rc->replacement = fdb__utxt_replacement;
+  rc->edit = fdb__utxt_edit;
+  rc->finish = NULL;
+  rc->finalize = fdb__utxt_finalize;
+  return rc;
+}
+
+struct DiBuTcl {
+  /** Buffer for TCL-format string conversion */
+  fsl_buffer str;
+};
+typedef struct DiBuTcl DiBuTcl;
+static const DiBuTcl DiBuTcl_empty = {fsl_buffer_empty_m};
+
+#define BR_OPEN if(FSL_DIFF2_TCL_BRACES & b->cfg->diffFlags) \
+    rc = fdb__out(b, "{", 1)
+#define BR_CLOSE if(FSL_DIFF2_TCL_BRACES & b->cfg->diffFlags) \
+    rc = fdb__out(b, "}", 1)
+
+#define DTCL_BUFFER(B) &((DiBuTcl*)(B)->pimpl)->str
+static int fdb__outtcl(fsl_diff_builder * const b,
+                       char const *z, unsigned int n,
+                       char chAppend ){
+  int rc;
+  fsl_buffer * const o = DTCL_BUFFER(b);
+  fsl_buffer_reuse(o);
+  rc = fsl_buffer_append_tcl_literal(o, z, n);
+  if(0==rc) rc = fdb__out(b, (char const *)o->mem, o->used);
+  if(chAppend && 0==rc) rc = fdb__out(b, &chAppend, 1);
+  return rc;
+}
+
+static int fdb__tcl_start(fsl_diff_builder * const b){
+  int rc = 0;
+  fsl_buffer_reuse(DTCL_BUFFER(b));
+  BR_OPEN;
+  if(0==rc) rc = fdb__out(b, "\n", 1);
+  if(0==rc && b->cfg->nameLHS){
+    char const * zRHS =
+      b->cfg->nameRHS ? b->cfg->nameRHS : b->cfg->nameLHS;
+    BR_OPEN;
+    if(0==rc) rc = fdb__out(b, "FILE ", 5);
+    if(0==rc) rc = fdb__outtcl(b, b->cfg->nameLHS,
+                               (unsigned)fsl_strlen(b->cfg->nameLHS), ' ');
+    if(0==rc) rc = fdb__outtcl(b, zRHS,
+                               (unsigned)fsl_strlen(zRHS), 0);
+    if(0==rc) {BR_CLOSE;}
+    if(0==rc) rc = fdb__out(b, "\n", 1);
+  }
+  return rc;
+}
+
+static int fdb__tcl_skip(fsl_diff_builder * const b, uint32_t n, bool isFinal){
+  int rc = 0;
+  BR_OPEN;
+  if(0==rc) rc = fdb__outf(b, "SKIP %" PRIu32, n);
+  if(0==rc) {BR_CLOSE;}
+  if(0==rc) rc = fdb__outf(b, "\n", 1);
+  return rc;
+}
+
+static int fdb__tcl_common(fsl_diff_builder * const b, fsl_dline const * pLine){
+  int rc = 0;
+  BR_OPEN;
+  if(0==rc) rc = fdb__out(b, "COM  ", 5);
+  if(0==rc) rc= fdb__outtcl(b, pLine->z, pLine->n, 0);
+  if(0==rc) {BR_CLOSE;}
+  if(0==rc) rc = fdb__outf(b, "\n", 1);
+  return rc;
+}
+static int fdb__tcl_insertion(fsl_diff_builder * const b, fsl_dline const * pLine){
+  int rc = 0;
+  BR_OPEN;
+  if(0==rc) rc = fdb__out(b, "INS  ", 5);
+  if(0==rc) rc = fdb__outtcl(b, pLine->z, pLine->n, 0);
+  if(0==rc) {BR_CLOSE;}
+  if(0==rc) rc = fdb__outf(b, "\n", 1);
+  return rc;
+}
+static int fdb__tcl_deletion(fsl_diff_builder * const b, fsl_dline const * pLine){
+  int rc = 0;
+  BR_OPEN;
+  if(0==rc) rc = fdb__out(b, "DEL  ", 5);
+  if(0==rc) rc = fdb__outtcl(b, pLine->z, pLine->n, 0);
+  if(0==rc) {BR_CLOSE;}
+  if(0==rc) rc = fdb__outf(b, "\n", 1);
+  return rc;
+}
+static int fdb__tcl_replacement(fsl_diff_builder * const b,
+                                fsl_dline const * lineLhs,
+                                fsl_dline const * lineRhs) {
+  int rc = 0;
+  BR_OPEN;
+  if(0==rc) rc = fdb__out(b, "EDIT \"\" ", 8);
+  if(0==rc) rc = fdb__outtcl(b, lineLhs->z, lineLhs->n, ' ');
+  if(0==rc) rc = fdb__outtcl(b, lineRhs->z, lineRhs->n, 0);
+  if(0==rc) {BR_CLOSE;}
+  if(0==rc) rc = fdb__outf(b, "\n", 1);
+  return rc;
+}
+                 
+static int fdb__tcl_edit(fsl_diff_builder * const b,
+                         fsl_dline const * pX,
+                         fsl_dline const * pY){
+  int rc = 0;
+  int i, x;
+  fsl_dline_change chng = fsl_dline_change_empty;
+#define RC if(rc) goto end
+  BR_OPEN;
+  rc = fdb__out(b, "EDIT", 4); RC;
+  fsl_dline_change_spans(pX, pY, &chng);
+  for(i=x=0; i<chng.n; i++){
+    rc = fdb__out(b, " ", 1); RC;
+    rc = fdb__outtcl(b, pX->z + x, chng.a[i].iStart1 - x, ' '); RC;
+    x = chng.a[i].iStart1;
+    rc = fdb__outtcl(b, pX->z + x, chng.a[i].iLen1, ' '); RC;
+    x += chng.a[i].iLen1;
+    rc = fdb__outtcl(b, pY->z + chng.a[i].iStart2,
+                     chng.a[i].iLen2, 0); RC;
+  }
+  assert(0==rc);
+  if( x < pX->n ){
+    rc = fdb__out(b, " ", 1); RC;
+    rc = fdb__outtcl(b, pX->z + x, pX->n - x, 0); RC;
+  }
+  BR_CLOSE; RC;
+  rc = fdb__out(b, "\n", 1);
+  end:
+#undef RC
+  return rc;
+}
+
+static int fdb__tcl_finish(fsl_diff_builder * const b){
+  int rc = 0;
+  BR_CLOSE;
+  if(0==rc && FSL_DIFF2_TCL_BRACES & b->cfg->diffFlags){
+    rc = fdb__out(b, "\n", 1);
+  }
+  return rc;
+}
+#undef BR_OPEN
+#undef BR_CLOSE
+
+static void fdb__tcl_finalize(fsl_diff_builder * const b){
+  fsl_buffer_clear( &((DiBuTcl*)b->pimpl)->str );
+  *b = fsl_diff_builder_empty;
+  fsl_free(b);
+}
+
+static fsl_diff_builder * fsl__diff_builder_tcl(void){
+  fsl_diff_builder * rc =
+    fsl__diff_builder_alloc((fsl_size_t)sizeof(DiBuTcl));
+  if(rc){
+    rc->chunkHeader = NULL;
+    rc->start = fdb__tcl_start;
+    rc->skip = fdb__tcl_skip;
+    rc->common = fdb__tcl_common;
+    rc->insertion = fdb__tcl_insertion;
+    rc->deletion = fdb__tcl_deletion;
+    rc->replacement = fdb__tcl_replacement;
+    rc->edit = fdb__tcl_edit;
+    rc->finish = fdb__tcl_finish;
+    rc->finalize = fdb__tcl_finalize;
+    assert(0!=rc->pimpl);
+    DiBuTcl * const dbt = (DiBuTcl*)rc->pimpl;
+    *dbt = DiBuTcl_empty;
+    if(fsl_buffer_reserve(&dbt->str, 120)){
+      rc->finalize(rc);
+      rc = 0;
+    }
+  }
+  return rc;
+}
+
+int fsl_diff_builder_factory( fsl_diff_builder_e type,
+                              fsl_diff_builder **pOut ){
+  int rc = FSL_RC_TYPE;
+  fsl_diff_builder * (*factory)(void) = NULL;
+  switch(type){
+    case FSL_DIFF_BUILDER_DEBUG:
+      factory = fsl__diff_builder_debug;
+      break;
+    case FSL_DIFF_BUILDER_JSON1:
+      factory = fsl__diff_builder_json1;
+      break;
+    case FSL_DIFF_BUILDER_UNIFIED_TEXT:
+      factory = fsl__diff_builder_utxt;
+      break;
+    case FSL_DIFF_BUILDER_TCL:
+      factory = fsl__diff_builder_tcl;
+      break;
+    case FSL_DIFF_BUILDER_SBS_TEXT:
+      break;
+  }
+  if(NULL!=factory){
+    *pOut = factory();
+    rc = *pOut ? 0 : FSL_RC_OOM;
+  }
+  return rc;
+}
+
+#undef DIFF_ALIGN_MX
+#undef DIFF_CANNOT_COMPUTE_BINARY
+#undef DIFF_CANNOT_COMPUTE_SYMLINK
+#undef DIFF_TOO_MANY_CHANGES
+#undef DIFF_WHITESPACE_ONLY
+#undef LENGTH_MASK
+#undef LENGTH_MASK_SZ
+#undef fsl_dline_empty_m
+#undef MARKER
+#undef DTCL_BUFFER
+#undef blob_to_utf8_no_bom
+/* end of file diff2.c */
 /* start of file encode.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
@@ -28488,7 +30587,7 @@ void fsl_md5_update(fsl_md5_cx *ctx, void const * buf_, fsl_size_t len){
  * Final wrapup - pad to 64-byte boundary with the bit pattern 
  * 1 0* (64-bit count of bits processed, MSB-first)
  */
-void fsl_md5_final(fsl_md5_cx * ctx, unsigned char digest[16]){
+void fsl_md5_final(fsl_md5_cx * ctx, unsigned char * digest){
     unsigned count;
     unsigned char *p;
 
@@ -31244,12 +33343,20 @@ int fsl_repo_manifest_write(fsl_cx *f,
                             fsl_buffer * const pManifest,
                             fsl_buffer * const pHash,
                             fsl_buffer * const pTags) {
-  fsl_db * const db = fsl_needs_ckout(f);
-  if(!db) return FSL_RC_NOT_A_CKOUT;
-  if(manifestRid<=0) manifestRid = f->ckout.rid;
-  else if(!manifestRid){
-    return fsl_cx_err_set(f, FSL_RC_RANGE,
-                          "Checkout RID is 0, so it has no manifest.");
+  fsl_db * const db = fsl_needs_repo(f);
+  if(!db) return FSL_RC_NOT_A_REPO;
+  if(manifestRid<=0){
+    manifestRid = f->ckout.rid;
+    if(manifestRid<=0){
+      return fsl_cx_err_set(f, 0==f->ckout.rid
+                            ? FSL_RC_RANGE
+                            : FSL_RC_NOT_A_CKOUT,
+                            "%s(): no checkin version was specified "
+                            "and %s.", __func__,
+                            0==f->ckout.rid
+                            ? "checkout has no version"
+                            : "no checkout is opened");
+    }
   }
   int rc = 0;
   char * str = 0;
@@ -31259,7 +33366,7 @@ int fsl_repo_manifest_write(fsl_cx *f,
   
   if(pManifest){
     fsl_buffer_reuse(pManifest);
-    rc = fsl_content_get(f, f->ckout.rid, pManifest);
+    rc = fsl_content_get(f, manifestRid, pManifest);
     if(rc) goto end;
   }
   if(pHash){
@@ -36399,7 +38506,7 @@ static fsl_vpath_node * fsl_vpath_new_node(fsl_vpath * path, fsl_id_t rid,
   return rc;
 }
 
-int fsl_vpath_shortest( fsl_cx * f, fsl_vpath * path,
+int fsl_vpath_shortest( fsl_cx * const f, fsl_vpath * const path,
                         fsl_id_t iFrom, fsl_id_t iTo,
                         bool directOnly, bool oneWayOnly ){
   fsl_stmt s = fsl_stmt_empty;
@@ -36489,6 +38596,45 @@ int fsl_vpath_shortest( fsl_cx * f, fsl_vpath * path,
   fsl_stmt_finalize(&s);
   fsl_vpath_clear(path);
   return rc;
+}
+
+int fsl_vpath_shortest_store_in_ancestor(fsl_cx * const f,
+                                         fsl_id_t iFrom,
+                                         fsl_id_t iTo,
+                                         uint32_t *pSteps){
+  int rc;
+  fsl_vpath path = fsl_vpath_empty;
+  fsl_stmt ins = fsl_stmt_empty;
+  fsl_db * const db = fsl_needs_repo(f);
+  fsl_vpath_node * node;
+  int32_t gen = 0;
+  if(!db) return FSL_RC_NOT_A_REPO;
+  rc = fsl_vpath_shortest(f, &path, iFrom, iTo, true, false);
+  if(rc) goto end;
+  rc = fsl_db_exec_multi(db,
+                         "CREATE TEMP TABLE IF NOT EXISTS ancestor("
+                         "  rid INT UNIQUE,"
+                         "  generation INTEGER PRIMARY KEY"
+                         ");"
+                         "DELETE FROM TEMP.ancestor;");
+  if(rc) goto dberr;
+  rc = fsl_db_prepare(db, &ins,
+                      "INSERT INTO TEMP.ancestor(rid, generation) "
+                      "VALUES(?,?)");
+  if(rc) goto dberr;
+  for(node = fsl_vpath_first(&path);
+      node; node = fsl_vpath_next(node)){
+    rc = fsl_stmt_bind_step(&ins, "Ri", node->rid, ++gen);
+    if(rc) goto dberr;
+  }
+  end:
+  if(0==rc && pSteps) *pSteps = (uint32_t)gen;
+  fsl_stmt_finalize(&ins);
+  fsl_vpath_clear(&path);
+  return rc;
+  dberr:
+  assert(rc!=0);
+  return fsl_cx_uplift_db_error2(f, db, rc);
 }
 
 /*
@@ -36657,7 +38803,6 @@ int fsl_cx_find_filename_changes(
   rc = fsl_cx_uplift_db_error2(f, db, rc);
   goto end;
 }
-
 
 #undef MARKER
 /* end of file vpath.c */
