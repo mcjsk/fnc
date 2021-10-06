@@ -13901,8 +13901,8 @@ bool fsl_repo_forbids_delta_manifests(fsl_cx * f){
 }
 
 int fsl_ckout_fingerprint_check(fsl_cx * f){
-  fsl_db * const db = fsl_needs_ckout(f);
-  if(!db) return FSL_RC_NOT_A_CKOUT;
+  fsl_db * const db = fsl_cx_db_ckout(f);
+  if(!db) return 0;
   int rc = 0;
   char const * zCkout = 0;
   char * zRepo = 0;

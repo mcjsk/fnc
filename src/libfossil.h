@@ -15256,9 +15256,10 @@ FSL_EXPORT int fsl_vfile_unload_except(fsl_cx * f, fsl_id_t vid);
 
 /**
    Performs a "fingerprint check" between f's current checkout and
-   repository databases. Returns 0 if either there is no mismatch or
-   it is impossible to determine because the checkout is missing a
-   fingerprint (which is legal for "older" checkout databases).
+   repository databases. Returns 0 if either there is no checkout, no
+   mismatch, or it is impossible to determine because the checkout is
+   missing a fingerprint (which is legal for "older" checkout
+   databases).
 
    If a mismatch is found, FSL_RC_REPO_MISMATCH is returned. Returns
    some other non-0 code on a lower-level error (db access, OOM,
