@@ -3600,7 +3600,7 @@ struct fsl_dline {
   /**  The text of the line. Owned by higher-level code. */
   const char *z;
   /** Hash of the line. Lower X bits are the length. */
-  unsigned int h;
+  uint64_t h;
   /** Indent of the line. Only !=0 with certain options */
   unsigned short indent;
   /** number of bytes */
@@ -7219,17 +7219,17 @@ FSL_EXPORT int fsl_cx_getcwd(fsl_cx * f, fsl_buffer * pOut);
 
    @see fsl_cx_db()
 */
-FSL_EXPORT int fsl_cx_transaction_level(fsl_cx * f);
+FSL_EXPORT int fsl_cx_transaction_level(fsl_cx * const f);
 /**
    Returns the same as passing fsl_cx_db() to
    fsl_db_transaction_begin().
 */
-FSL_EXPORT int fsl_cx_transaction_begin(fsl_cx * f);
+FSL_EXPORT int fsl_cx_transaction_begin(fsl_cx * const f);
 /**
    Returns the same as passing fsl_cx_db() to
    fsl_db_transaction_end().
 */
-FSL_EXPORT int fsl_cx_transaction_end(fsl_cx * f, bool doRollback);
+FSL_EXPORT int fsl_cx_transaction_end(fsl_cx * const f, bool doRollback);
 
 /**
    Installs or (if f is NULL) uninstalls a confirmation callback for
@@ -11504,13 +11504,15 @@ FSL_EXPORT int fsl_content_blob( fsl_cx * f, fsl_id_t blobRid, fsl_buffer * tgt 
    @see fsl_content_blob()
    @see fsl_content_size()
 */
-FSL_EXPORT int fsl_content_get( fsl_cx * f, fsl_id_t blobRid, fsl_buffer * tgt );
+FSL_EXPORT int fsl_content_get( fsl_cx * const f, fsl_id_t blobRid,
+                                fsl_buffer * const tgt );
 
 /**
    Uses fsl_sym_to_rid() to convert sym to a record ID, then
    passes that to fsl_content_get(). Returns 0 on success.
 */
-FSL_EXPORT int fsl_content_get_sym( fsl_cx * f, char const * sym, fsl_buffer * tgt );
+FSL_EXPORT int fsl_content_get_sym( fsl_cx * const f, char const * sym,
+                                    fsl_buffer * const tgt );
 
 /**
    Returns true if the given rid is marked as PRIVATE in f's current
@@ -12584,8 +12586,8 @@ FSL_EXPORT int fsl_repo_import_buffer( fsl_cx * f, fsl_buffer const * bIn,
    FSL_SATYPE_ANY.
 
 */
-FSL_EXPORT int fsl_sym_to_rid( fsl_cx * f, char const * sym, fsl_satype_e type,
-                               fsl_id_t * rv );
+FSL_EXPORT int fsl_sym_to_rid( fsl_cx * const f, char const * sym,
+                               fsl_satype_e type, fsl_id_t * rv );
 
 /**
    Similar to fsl_sym_to_rid() but on success it returns a UUID string
@@ -12941,7 +12943,13 @@ FSL_EXPORT int fsl_repo_manifest_write(fsl_cx *f,
                                        fsl_buffer * const manifestTags );
 
 /**
-   UNDER CONSTRUCTION. Configuration for use with fsl_annotate().
+   Configuration for use with fsl_annotate().
+
+   This structure holds options for the "annotate" operation and its
+   close cousin, "blame" a.k.a. "praise." Annotation takes a given
+   file version and builds a line-by-line history, showing when each
+   line was last modified. The "blame" a.k.a. "praise" option includes
+   *who* modified that line.
 */
 struct fsl_annotate_opt {
   /**
@@ -12964,27 +12972,41 @@ struct fsl_annotate_opt {
   fsl_id_t originRid;
   /**
      The maximum number of versions to search through.
+
+     Note that fossil(1) offers the ability to limit the calculation
+     based on processing time, e.g. to 1500ms. We may or may not add
+     that in this library.
   */
-  unsigned int limit;
+  uint32_t limit;
   /**
      - 0 = do not ignore any spaces.
      - <0 = ignore trailing end-of-line spaces.
      - >1 = ignore all spaces
   */
-  int spacePolicy;
+  int16_t spacePolicy;
   /**
-     If true, include the name of the user for which each
-     change is attributed (noting that merges show whoever
-     merged the change, which may differ from the original
-     committer. If false, show only version information.
+     If true, include the name of the user for which each change is
+     attributed (noting that merges show whoever merged the change,
+     which may differ from the original committer, and amended user
+     names will be used over those in the initial commit). If false,
+     show only version information.
 
      This option is alternately known as "blame".
+
+     For reasons lost to history, blame/praise mode does not include
+     line numbers. That may change in the future.
   */
   bool praise;
   /**
      Output file blob versions, instead of checkin versions.
   */
   bool fileVersions;
+
+  /**
+     If true, annotation output will start with a list of all
+     versions analyzed by the annotation process.
+  */
+  bool dumpVersions;
   /**
      The output channel for the resulting annotation.
   */
@@ -13003,8 +13025,9 @@ typedef struct fsl_annotate_opt fsl_annotate_opt;
   NULL/*filename*/, \
   0/*versionRid*/,0/*originRid*/,    \
   0U/*limit*/, 0/*spacePolicy*/, \
-  false/*praise*/, \
-  NULL/*out*/, NULL/*outState*/ \
+  false/*praise*/, false/*fileVersions*/,     \
+  false/*dumpVersions*/, \
+  NULL/*out*/, NULL/*outState*/               \
 }
 
 /** Initialized-with-defaults fsl_annotate_opt structure, intended for
@@ -13012,7 +13035,8 @@ typedef struct fsl_annotate_opt fsl_annotate_opt;
 extern const fsl_annotate_opt fsl_annotate_opt_empty;
 
 /**
-   UNDER CONSTRUCTION, not yet implemented.
+   UNDER CONSTRUCTION. Not yet known to be fully functional or
+   bug-free.
 
    Runs an "annotation" of an SCM-controled file and sends the results
    to opt->out().
@@ -13032,6 +13056,9 @@ extern const fsl_annotate_opt fsl_annotate_opt_empty;
 
    opt->out() may return arbitrary non-0 result codes, in which case
    the returned code is propagated to the caller of this function.
+
+   Results are undefined if either argument is invalid or opt->out is
+   NULL.
 */
 FSL_EXPORT int fsl_annotate( fsl_cx * const f,
                              fsl_annotate_opt const * const opt );
@@ -13091,8 +13118,8 @@ extern "C" {
    as those always "seed" the database with an initial commit artifact
    containing no files.
 */
-FSL_EXPORT void fsl_ckout_version_info(fsl_cx *f, fsl_id_t * rid,
-                                       fsl_uuid_cstr * uuid );
+FSL_EXPORT void fsl_ckout_version_info(fsl_cx * const f, fsl_id_t * const rid,
+                                       fsl_uuid_cstr * const uuid );
 
 /**
    Given a fsl_cx with an opened checkout, and a filename, this
@@ -13292,8 +13319,8 @@ FSL_EXPORT const fsl_ckout_manage_opt fsl_ckout_manage_opt_empty;
    @see fsl_ckout_unmanage()
    @see fsl_reserved_fn_check()
 */
-FSL_EXPORT int fsl_ckout_manage( fsl_cx * f,
-                                   fsl_ckout_manage_opt * opt );
+FSL_EXPORT int fsl_ckout_manage( fsl_cx * const f,
+                                 fsl_ckout_manage_opt * const opt );
 
 
 /**
@@ -15896,6 +15923,20 @@ FSL_EXPORT int fsl_vpath_shortest_store_in_ancestor(fsl_cx * const f,
                                                     fsl_id_t iTo,
                                                     uint32_t *pSteps);
 
+/**
+   Computes a list of direct (non-merge) ancestors of the given
+   checkin RID and stores it in the TEMP table [ancestor], which it
+   creates if needed or clears if it currently exists.
+
+   The [ancestor] schema is described in
+   fsl_vpath_shortest_store_in_ancestor(). The [generation] value of
+   the record corresponding to rid is 1, increasing by 1 for each
+   generation back in the history.
+
+   Returns 0 on success, FSL_RC_NOT_A_REPO if f has no repo db opened,
+   and any number of lower-level result codes if something goes wrong.
+*/
+FSL_EXPORT int fsl_compute_direct_ancestors(fsl_cx * const f, fsl_id_t rid);
 
 /**
    Reconstructs path from path->pStart to path->pEnd, reversing its

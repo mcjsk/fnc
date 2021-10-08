@@ -1143,45 +1143,55 @@ const fsl_annotate_opt fsl_annotate_opt_empty = fsl_annotate_opt_empty_m;
 typedef struct Annotator Annotator;
 struct Annotator {
   fsl_diff_cx c;       /* The diff-engine context */
+  fsl_buffer headVersion;/*starting version of the content*/
   struct AnnLine {  /* Lines of the original files... */
-    const char *z;       /* The text of the line */
+    const char *z;       /* The text of the line. Points into
+                            this->headVersion. */
     short int n;         /* Number of bytes (omitting trailing \n) */
     short int iVers;     /* Level at which tag was set */
   } *aOrig;
-  int nOrig;        /* Number of elements in aOrig[] */
-  int nVers;        /* Number of versions analyzed */
-  int bMoreToDo;    /* True if the limit was reached */
+  unsigned int nOrig;/* Number of elements in aOrig[] */
+  unsigned int nVers;/* Number of versions analyzed */
+  bool bMoreToDo;    /* True if the limit was reached */
   fsl_id_t origId;       /* RID for the zOrigin version */
   fsl_id_t showId;       /* RID for the version being analyzed */
   struct AnnVers {
-    const char *zFUuid;   /* File being analyzed */
-    const char *zMUuid;   /* Check-in containing the file */
-    const char *zDate;    /* Date of the check-in */
-    const char *zBgColor; /* Suggested background color */
-    const char *zUser;    /* Name of user who did the check-in */
-    unsigned cnt;         /* Number of lines contributed by this check-in */
+    char *zFUuid;   /* File being analyzed */
+    char *zMUuid;   /* Check-in containing the file */
+    char *zDate;    /* Date of the check-in */
+    char *zUser;    /* Name of user who did the check-in */
   } *aVers;         /* For each check-in analyzed */
-  char **azVers;    /* Names of versions analyzed */
+  unsigned int naVers; /* # of entries allocated in this->aVers */
 };
 
-TO_BE_STATIC const Annotator Annotator_empty = {
+static const Annotator Annotator_empty = {
 fsl_diff_cx_empty_m,
+fsl_buffer_empty_m/*headVersion*/,
 NULL/*aOrig*/,
-0/*nOrig*/, 0/*nVers*/,
-0/*bMoreToDo*/,
+0U/*nOrig*/, 0U/*nVers*/,
+false/*bMoreToDo*/,
 0/*origId*/,
 0/*showId*/,
-NULL/*aVerse*/,
-NULL/*azVers*/
+NULL/*aVers*/,
+0U/*naVerse*/
 };
 
-TO_BE_STATIC void fsl__annotator_clean(Annotator * const a){
+static void fsl__annotator_clean(Annotator * const a){
+  unsigned i;
   fsl__diff_cx_clean(&a->c);
-  //fsl_free(...);
+  for(i = 0; i < a->nVers; ++i){
+    fsl_free(a->aVers[i].zFUuid);
+    fsl_free(a->aVers[i].zMUuid);
+    fsl_free(a->aVers[i].zDate);
+    fsl_free(a->aVers[i].zUser);
+  }
+  fsl_free(a->aVers);
+  fsl_free(a->aOrig);
+  fsl_buffer_clear(&a->headVersion);
 }
 
 static uint64_t fsl__annotate_opt_difflags(fsl_annotate_opt const * const opt){
-  uint64_t diffFlags = 0;
+  uint64_t diffFlags = FSL_DIFF2_STRIP_EOLCR;
   if(opt->spacePolicy>0) diffFlags |= FSL_DIFF2_IGNORE_ALLWS;
   else if(opt->spacePolicy<0) diffFlags |= FSL_DIFF2_IGNORE_EOLWS;
   return diffFlags;
@@ -1189,8 +1199,10 @@ static uint64_t fsl__annotate_opt_difflags(fsl_annotate_opt const * const opt){
 
 /**
    Initializes the annocation process by populating `a` from
-   pInput. `a` must have already been cleanly initialized via copying
-   from Annotator_empty.  Returns 0 on success, else:
+   a->toAnnote, which must have been previously populated.  `a` must
+   have already been cleanly initialized via copying from
+   Annotator_empty and a->headVersion populated.  Returns 0 on success,
+   else:
 
    - FSL_RC_RANGE if pInput is empty.
    - FSL_RC_OOM on OOM.
@@ -1198,8 +1210,8 @@ static uint64_t fsl__annotate_opt_difflags(fsl_annotate_opt const * const opt){
    Regardless of success or failure, `a` must eventually be passed
    to fsl__annotator_clean() to free up any resources.
 */
-TO_BE_STATIC int fsl__annotation_start(Annotator * const a, fsl_buffer * const pInput,
-                                       fsl_annotate_opt const * const opt){
+static int fsl__annotation_start(Annotator * const a,
+                                 fsl_annotate_opt const * const opt){
   int rc;
   uint64_t const diffFlags = fsl__annotate_opt_difflags(opt);
   if(opt->spacePolicy>0){
@@ -1207,7 +1219,8 @@ TO_BE_STATIC int fsl__annotation_start(Annotator * const a, fsl_buffer * const p
   }else{
     assert(fsl_dline_cmp == a->c.cmpLine);
   }
-  rc = fsl_break_into_dlines(fsl_buffer_cstr(pInput), (fsl_int_t)pInput->used,
+  rc = fsl_break_into_dlines(fsl_buffer_cstr(&a->headVersion),
+                             (fsl_int_t)a->headVersion.used,
                              (uint32_t*)&a->c.nTo, &a->c.aTo, diffFlags);
   if(rc) goto end;
   if(!a->c.nTo){
@@ -1219,12 +1232,12 @@ TO_BE_STATIC int fsl__annotation_start(Annotator * const a, fsl_buffer * const p
     rc = FSL_RC_OOM;
     goto end;
   }
-  a->nOrig = a->c.nTo;
   for(int i = 0; i < a->c.nTo; ++i){
     a->aOrig[i].z = a->c.aTo[i].z;
     a->aOrig[i].n = a->c.aTo[i].n;
     a->aOrig[i].iVers = -1;
   }
+  a->nOrig = (unsigned)a->c.nTo;
   end:
   return rc;
 }
@@ -1233,14 +1246,13 @@ TO_BE_STATIC int fsl__annotation_start(Annotator * const a, fsl_buffer * const p
    The input pParent is the next most recent ancestor of the file
    being annotated.  Do another step of the annotation. On success
    return 0 and, if additional annotation is required, assign *doMore
-   to true.
+   (if not NULL) to true.
 */
-TO_BE_STATIC int fsl__annotation_step(
-  Annotator *a,
+static int fsl__annotation_step(
+  Annotator * const a,
   fsl_buffer const *pParent,
   int iVers,
-  fsl_annotate_opt const * const opt,
-  bool * doMore
+  fsl_annotate_opt const * const opt
 ){
   int i, j, rc;
   int lnTo;
@@ -1252,11 +1264,10 @@ TO_BE_STATIC int fsl__annotation_step(
                              (uint32_t*)&a->c.nFrom, &a->c.aFrom,
                              diffFlags);
   if(rc) goto end;
-  if( a->c.aFrom==0 ){
-    *doMore = true;
+  else if( a->c.aFrom==0 ){
     return 0;
   }
-
+  //MARKER(("Line #1: %.*s\n", (int)a->c.aFrom[0].n, a->c.aFrom[0].z));
   /* Compute the differences going from pParent to the file being
   ** annotated. */
   rc = fsl__diff_all(&a->c);
@@ -1269,14 +1280,15 @@ TO_BE_STATIC int fsl__annotation_step(
     int const nCopy = a->c.aEdit[i];
     int const nIns = a->c.aEdit[i+2];
     lnTo += nCopy;
-    for(j=0; j<nIns; j++, lnTo++){
+    for(j=0; j<nIns; ++j, ++lnTo){
       if( a->aOrig[lnTo].iVers<0 ){
         a->aOrig[lnTo].iVers = iVers;
       }
     }
   }
 
-  /* Clear out the diff results */
+  /* Clear out the diff results except for c.aTo, as that's pointed to
+     by a->aOrig.*/
   fsl_free(a->c.aEdit);
   a->c.aEdit = 0;
   a->c.nEdit = 0;
@@ -1285,7 +1297,7 @@ TO_BE_STATIC int fsl__annotation_step(
   /* Clear out the from file */
   fsl_free(a->c.aFrom);
   a->c.aFrom = 0;
-
+  a->c.nFrom = 0;
   end:
   return rc;
 }
@@ -1296,22 +1308,223 @@ TO_BE_STATIC int fsl__annotation_step(
    non-const, which seems "wrong" for a library API. */
 #define blob_to_utf8_no_bom(A,B) (void)0
 
+static int fsl__annotate_file(fsl_cx * const f,
+                              Annotator * const a,
+                              fsl_annotate_opt const * const opt){
+  int rc = FSL_RC_NYI;
+  fsl_buffer step = fsl_buffer_empty /*previous revision*/;
+  fsl_id_t cid = 0, fnid = 0; // , rid = 0;
+  fsl_stmt q = fsl_stmt_empty;
+  bool openedTransaction = false;
+  fsl_db * const db = fsl_needs_repo(f);
+
+  if(!db) return FSL_RC_NOT_A_REPO;
+  rc = fsl_cx_transaction_begin(f);
+  if(rc) goto dberr;
+  openedTransaction = true;
+
+  fnid = fsl_db_g_id(db, 0,
+                     "SELECT fnid FROM filename WHERE name=%Q %s",
+                     opt->filename, fsl_cx_filename_collation(f));
+  if(0==fnid){
+    rc = fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
+                        "File not found in repository: %s",
+                        opt->filename);
+    goto end;
+  }
+  if(opt->versionRid>0){
+    cid = opt->versionRid;
+  }else{
+    fsl_ckout_version_info(f, &cid, NULL);
+    if(cid<=0){
+      rc = fsl_cx_err_set(f, FSL_RC_NOT_A_CKOUT,
+                          "Cannot determine version RID to "
+                          "annotate from.");
+      goto end;
+    }
+  }
+  if(opt->originRid>0){
+    rc = fsl_vpath_shortest_store_in_ancestor(f, cid, opt->originRid, NULL);
+  }else{
+    rc = fsl_compute_direct_ancestors(f, cid);
+  }
+  if(rc) goto end;
+  
+  rc = fsl_db_prepare(db, &q,
+    "SELECT DISTINCT"
+    "   (SELECT uuid FROM blob WHERE rid=mlink.fid),"
+    "   (SELECT uuid FROM blob WHERE rid=mlink.mid),"
+    "   date(event.mtime),"
+    "   coalesce(event.euser,event.user),"
+    "   mlink.fid"
+    "  FROM mlink, event, ancestor"
+    " WHERE mlink.fnid=%" FSL_ID_T_PFMT
+    "   AND ancestor.rid=mlink.mid"
+    "   AND event.objid=mlink.mid"
+    "   AND mlink.mid!=mlink.pid"
+    " ORDER BY ancestor.generation;",
+    fnid
+  );
+  if(rc) goto dberr;
+  
+  while(FSL_RC_STEP_ROW==fsl_stmt_step(&q)){
+    if(a->nVers>=3){
+      /*Process at least 3 rows before imposing any limit.
+        Note that we do not impose a time-based limit here like
+        fossil does, but may want to add that at some point.*/
+      if(opt->limit>0 && a->nVers>=opt->limit){
+        a->bMoreToDo = true;
+        break;
+      }
+    }
+    char * zTmp = 0;
+    char const * zCol = 0;
+    fsl_size_t nCol = 0;
+    fsl_id_t const rid = fsl_stmt_g_id(&q, 4);
+    if(0==a->nVers){
+      rc = fsl_content_get(f, rid, &a->headVersion);
+      if(rc) goto end;
+      blob_to_utf8_no_bom(&a->headVersion,0);
+      rc = fsl__annotation_start(a, opt);
+      if(rc) goto end;
+      a->bMoreToDo = opt->originRid>0;
+      a->origId = opt->originRid;
+      a->showId = cid;
+      assert(0==a->nVers);
+      assert(NULL==a->aVers);
+    }
+    if(a->naVers==a->nVers){
+      unsigned int const n = a->naVers ? a->naVers*3/2 : 10;
+      void * const x = fsl_realloc(a->aVers, n*sizeof(a->aVers[0]));
+      if(NULL==x){
+        rc = FSL_RC_OOM;
+        goto end;
+      }
+      a->aVers = x;
+      a->naVers = n;
+    }
+#define AnnStr(COL,FLD) zCol = fsl_stmt_g_text(&q, COL, &nCol); \
+    zTmp = fsl_strndup(zCol, nCol); \
+    if(!zTmp){ rc = FSL_RC_OOM; goto end; } \
+    a->aVers[a->nVers].FLD = zTmp
+    AnnStr(0,zFUuid);
+    AnnStr(1,zMUuid);
+    AnnStr(2,zDate);
+    AnnStr(3,zUser);
+#undef AnnStr
+    if( a->nVers>0 ){
+      rc = fsl_content_get(f, rid, &step);
+      if(!rc){
+        rc = fsl__annotation_step(a, &step, a->nVers-1, opt);
+      }
+      fsl_buffer_reuse(&step);
+      if(rc) goto end;
+    }
+    ++a->nVers;
+  }
+
+  assert(0==rc);
+  if(0==a->nVers){
+    if(opt->versionRid>0){
+      rc = fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
+                          "File [%s] does not exist "
+                          "in checkin RID %" FSL_ID_T_PFMT,
+                          opt->filename, opt->versionRid);
+    }else{
+      rc = fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
+                          "No history found for file: %s",
+                          opt->filename);
+    }
+  }
+  
+  end:
+  fsl_buffer_clear(&step);
+  fsl_stmt_finalize(&q);
+  if(openedTransaction) fsl_cx_transaction_end(f, rc!=0);
+  return rc;
+  dberr:
+  assert(openedTransaction);
+  assert(rc!=0);
+  fsl_stmt_finalize(&q);
+  fsl_buffer_clear(&step);
+  rc = fsl_cx_uplift_db_error2(f, db, rc);
+  if(openedTransaction) fsl_cx_transaction_end(f, rc!=0);
+  return rc;
+}
+
+/*TO_BE_STATIC int fann__out(fsl_annotate_opt const *const o,
+                     char const *z, fsl_size_t n){
+  return o->out(o->outState, z, n);
+  }*/
+
+static int fann__outf(fsl_annotate_opt const * const o,
+                      char const *fmt, ...){
+  int rc = 0;
+  //MARKER(("fmt=%s\n", fmt));
+  va_list va;
+  va_start(va,fmt);
+  rc = fsl_appendfv(o->out, o->outState, fmt, va);
+  va_end(va);
+  //MARKER(("after appendfv\n"));
+  return rc;
+}
 
 int fsl_annotate( fsl_cx * const f, fsl_annotate_opt const * const opt ){
   int rc;
-  if(!opt->out) return FSL_RC_MISUSE;
-  if(f||opt){/*unused*/}
+  Annotator ann = Annotator_empty;
+  unsigned int i;
+  assert(opt->out);
 
-  rc = fsl_cx_err_set(f, FSL_RC_NYI, "%s() is not yet implemented.",
-                      __func__);
-  goto end;
+  rc = fsl__annotate_file(f, &ann, opt);
+  if(rc) goto end;
 
-  /* TODO:
+  int const szHash = 10
+    /*# of hash bytes to show. TODO: move this into fsl_annotate_opt. */;
+  if(opt->dumpVersions){
+    struct AnnVers *av;
+    for(av = ann.aVers, i = 0;
+        0==rc && i < ann.nVers; ++i, ++av){
+      rc = fann__outf(opt, "version %3u: %s %.*s file %.*s\n",
+                      i+1, av->zDate, szHash, av->zMUuid,
+                      szHash, av->zFUuid);
+    }
+    if(!rc) rc = fann__outf(opt, "%.*c\n", 60, '-');
+    if(rc) goto end;
+  }
 
-     Port over fossil(1) diff.c:annotate_file().
-  */
+  for(i = 0; 0==rc && i<ann.nOrig; ++i){
+    short iVers = ann.aOrig[i].iVers;
+    char const * z = ann.aOrig[i].z;
+    int const n = ann.aOrig[i].n;
+    if(iVers<0 && !ann.bMoreToDo){
+      iVers = ann.nVers-1;
+    }
+    if(opt->praise){
+      if(iVers>=0){
+        struct AnnVers * const av = &ann.aVers[iVers];
+        rc = fann__outf(opt, "%.*s %s %13.13s: %.*s\n",
+                        szHash,
+                        opt->fileVersions ? av->zFUuid : av->zMUuid,
+                       av->zDate, av->zUser, n, z);
+      }else{
+        rc = fann__outf(opt, "%*s %.*s\n", szHash+26, "", n, z);
+      }
+    }else{
+      if(iVers>=0){
+        struct AnnVers * const av = &ann.aVers[iVers];
+        rc = fann__outf(opt, "%.*s %s %5u: %.*s\n",
+                        szHash,
+                        opt->fileVersions ? av->zFUuid : av->zMUuid,
+                        av->zDate, i+1, n, z);
+      }else{
+        rc = fann__outf(opt, "%*s %5u: %.*s\n",
+                        szHash+11, "", i+1, n, z);
+      }
+    }
+  }
   
   end:
+  fsl__annotator_clean(&ann);
   return rc;
 }
 
@@ -5925,7 +6138,7 @@ static int fsl_dircrawl_f_add(fsl_dircrawl_state const *dst){
   return rc;
 }
 
-int fsl_ckout_manage( fsl_cx * f, fsl_ckout_manage_opt * opt_ ){
+int fsl_ckout_manage( fsl_cx * const f, fsl_ckout_manage_opt * const opt_ ){
   int rc = 0;
   CoAddState cas = CoAddState_empty;
   fsl_ckout_manage_opt opt;
@@ -8465,19 +8678,19 @@ static const fcli_cliflag FCliFlagsGlobal[] = {
   FCLI_FLAG("R","repo","REPO-FILE",&fcli.transient.repoDbArg,
             "Selects a specific repository database, ignoring the one "
             "used by the current directory's checkout (if any)."),
-  FCLI_FLAG_BOOL("D","dry-run",&fcli.clientFlags.dryRun,
+  FCLI_FLAG_BOOL(NULL,"dry-run",&fcli.clientFlags.dryRun,
                  "Enable dry-run mode (not supported by all apps)."),
-  FCLI_FLAG("U","user","username",&fcli.transient.userArg,
+  FCLI_FLAG(NULL,"user","username",&fcli.transient.userArg,
             "Sets the name of the fossil user name for this session."),
-  FCLI_FLAG_BOOL_X("C", "no-checkout",NULL,fcli_flag_f_nocheckoutDir,
+  FCLI_FLAG_BOOL_X(NULL, "no-checkout",NULL,fcli_flag_f_nocheckoutDir,
                    "Disable automatic attempt to open checkout."),
-  FCLI_FLAG(0,"checkout-dir","DIRECTORY", &fcli.clientFlags.checkoutDir,
+  FCLI_FLAG(NULL,"checkout-dir","DIRECTORY", &fcli.clientFlags.checkoutDir,
             "Open the given directory as a checkout, instead of the current dir."),
   FCLI_FLAG_BOOL_X("V","verbose",NULL,fcli_flag_f_verbose,
               "Increases the verbosity level by 1. May be used multiple times."),
-  FCLI_FLAG_BOOL(0,"trace-sql",&TempFlags.traceSql,
+  FCLI_FLAG_BOOL(NULL,"trace-sql",&TempFlags.traceSql,
                  "Enable SQL tracing."),
-  FCLI_FLAG_BOOL(0,"timer",&TempFlags.doTimer,
+  FCLI_FLAG_BOOL(NULL,"timer",&TempFlags.doTimer,
                  "At the end of successful app execution, output how long it took "
                  "from the call to fcli_setup() until the end of main()."),
   fcli_cliflag_empty_m
@@ -9022,12 +9235,12 @@ int fcli_setup(int argc, char const * const * argv ){
       fcli_help();
       rc = FCLI_RC_HELP;
     }else{
-      if( fcli_flag2("C", "no-checkout", NULL) ){
+      if( fcli_flag2(NULL, "no-checkout", NULL) ){
         fcli.clientFlags.checkoutDir = NULL;
       }
-      fcli_flag2("U","user", &fcli.transient.userArg);
-      fcli.config.traceSql =  fcli_flag2("S","trace-sql", NULL);
-      fcli.clientFlags.dryRun = fcli_flag2("D","dry-run", NULL);
+      fcli_flag2(NULL,"user", &fcli.transient.userArg);
+      fcli.config.traceSql =  fcli_flag2(NULL,"trace-sql", NULL);
+      fcli.clientFlags.dryRun = fcli_flag2(NULL,"dry-run", NULL);
       fcli_flag2("R", "repo", &fcli.transient.repoDbArg);
       rc = fcli_setup_common2();
     }
@@ -9590,8 +9803,9 @@ bool fsl_content_is_private(fsl_cx * f, fsl_id_t rid){
 }
 
 
-int fsl_content_get( fsl_cx * f, fsl_id_t rid, fsl_buffer * tgt ){
-  fsl_db * db = fsl_cx_db_repo(f);
+int fsl_content_get( fsl_cx * const f, fsl_id_t rid,
+                     fsl_buffer * const tgt ){
+  fsl_db * const db = fsl_cx_db_repo(f);
   if(!tgt) return FSL_RC_MISUSE;
   else if(rid<=0){
     return fsl_cx_err_set(f, FSL_RC_RANGE,
@@ -9756,7 +9970,8 @@ int fsl_content_get( fsl_cx * f, fsl_id_t rid, fsl_buffer * tgt ){
   }
 }
 
-int fsl_content_get_sym( fsl_cx * f, char const * sym, fsl_buffer * tgt ){
+int fsl_content_get_sym( fsl_cx * const f, char const * sym,
+                         fsl_buffer * const tgt ){
   int rc;
   fsl_db * db = f ? fsl_needs_repo(f) : NULL;
   fsl_id_t rid = 0;
@@ -11834,6 +12049,11 @@ bool fsl_config_has_versionable( fsl_cx * f, char const * key ){
 /*************************************************************************
   This file houses most of the context-related APIs.
 */
+#if !defined(FSL_ENABLE_SQLITE_REGEXP)
+#  define FSL_ENABLE_SQLITE_REGEXP 0
+#endif
+#if FSL_ENABLE_SQLITE_REGEXP
+#endif
 #include "sqlite3.h"
 #include <assert.h>
 
@@ -11924,14 +12144,15 @@ int fsl_cx_init( fsl_cx ** tgt, fsl_cx_init_opt const * param ){
   sqlite3_initialize(); /*the SQLITE_MUTEX_STATIC_MASTER will not cause autoinit of sqlite for some reason*/
   sqlite3_mutex_enter(sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER));
 #endif
-    if ( 1 == ++sg_autoregctr )
-    {
-      /*register our statically linked extensions to be auto-init'ed at the appropriate time*/
-      sqlite3_auto_extension((void(*)(void))(sqlite3_regexp_init));     /*sqlite regexp extension*/
-      atexit(sqlite3_reset_auto_extension)
-        /* Clean up pseudo-leak valgrind complains about:
-           https://www.sqlite.org/c3ref/auto_extension.html */;
-    }
+#if FSL_ENABLE_SQLITE_REGEXP
+  if ( 1 == ++sg_autoregctr ){
+    /*register our statically linked extensions to be auto-init'ed at the appropriate time*/
+    sqlite3_auto_extension((void(*)(void))(sqlite3_regexp_init));     /*sqlite regexp extension*/
+    atexit(sqlite3_reset_auto_extension)
+      /* Clean up pseudo-leak valgrind complains about:
+         https://www.sqlite.org/c3ref/auto_extension.html */;
+  }
+#endif
 #if defined(SQLITE_THREADSAFE) && SQLITE_THREADSAFE>0
   sqlite3_mutex_leave(sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER));
 #endif
@@ -12061,12 +12282,13 @@ void fsl_cx_finalize( fsl_cx * f ){
 #if defined(SQLITE_THREADSAFE) && SQLITE_THREADSAFE>0
   sqlite3_mutex_enter(sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER));
 #endif
-  if ( 0 == --sg_autoregctr )
-  {
+#if FSL_ENABLE_SQLITE_REGEXP
+  if ( 0 == --sg_autoregctr ){
     /*register our statically linked extensions to be auto-init'ed at the appropriate time*/
     sqlite3_cancel_auto_extension((void(*)(void))(sqlite3_regexp_init));     /*sqlite regexp extension*/
   }
   assert(sg_autoregctr>=0);
+#endif
 #if defined(SQLITE_THREADSAFE) && SQLITE_THREADSAFE>0
   sqlite3_mutex_leave(sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER));
 #endif
@@ -13099,7 +13321,8 @@ int fsl_ckout_version_write( fsl_cx *f, fsl_id_t vid,
   return rc;
 }
 
-void fsl_ckout_version_info(fsl_cx *f, fsl_id_t * rid, fsl_uuid_cstr * uuid ){
+void fsl_ckout_version_info(fsl_cx * const f, fsl_id_t * const rid,
+                            fsl_uuid_cstr * const uuid ){
   if(uuid) *uuid = f->ckout.uuid;
   if(rid) *rid = f->ckout.rid>=0 ? f->ckout.rid : 0;
 }
@@ -13629,18 +13852,20 @@ fsl_hashpolicy_e fsl_cx_hash_policy_get(fsl_cx const*f){
   return f->cxConfig.hashPolicy;
 }
 
-int fsl_cx_transaction_level(fsl_cx * f){
+int fsl_cx_transaction_level(fsl_cx * const f){
   return f->dbMain
     ? fsl_db_transaction_level(f->dbMain)
     : 0;
 }
 
-int fsl_cx_transaction_begin(fsl_cx * f){
-  return fsl_db_transaction_begin(f->dbMain);
+int fsl_cx_transaction_begin(fsl_cx * const f){
+  int const rc = fsl_db_transaction_begin(f->dbMain);
+  return rc ? fsl_cx_uplift_db_error2(f, f->dbMain, rc) : 0;
 }
 
-int fsl_cx_transaction_end(fsl_cx * f, bool doRollback){
-  return fsl_db_transaction_end(f->dbMain, doRollback);
+int fsl_cx_transaction_end(fsl_cx * const f, bool doRollback){
+  int const rc = fsl_db_transaction_end(f->dbMain, doRollback);
+  return rc ? fsl_cx_uplift_db_error2(f, f->dbMain, rc) : 0;
 }
 
 void fsl_cx_confirmer(fsl_cx * f,
@@ -23110,7 +23335,7 @@ typedef void ReCompiled /* porting crutch. i would strongly prefer to
 /**
     Maximum length of a line in a text file, in bytes.  (2**13 = 8192 bytes)
  */
-#define LENGTH_MASK_SZ  13
+#define LENGTH_MASK_SZ  15
 #define LENGTH_MASK     ((1<<LENGTH_MASK_SZ)-1)
 
 
@@ -23190,130 +23415,6 @@ static uint64_t fsl_diff_flags_convert( int mask ){
    Length of a dline
 */
 #define LENGTH(X)   ((X)->n)
-
-/*
-   Return an array of fsl_dline objects containing a pointer to the
-   start of each line and a hash of that line.  The lower
-   bits of the hash store the length of each line.
-  
-   Trailing whitespace is removed from each line.  2010-08-20:  Not any
-   more.  If trailing whitespace is ignored, the "patch" command gets
-   confused by the diff output.  Ticket [a9f7b23c2e376af5b0e5b]
-  
-   If the file is binary or contains a line that is too long, or is
-   empty, it sets *pOut to NULL, *pnLine to 0. It returns 0 if no
-   lines are found, FSL_RC_TYPE if the input is binary, and
-   FSL_RC_RANGE if a some number (e.g. the number of columns) is out
-   of range.
-  
-   Profiling shows that in most cases this routine consumes the bulk
-   of the CPU time on a diff.
-  
-   TODO: enhance the error reporting: add a (fsl_error*) arg.
-*/
-static int break_into_lines(const char *z, int n, int *pnLine,
-                            fsl_dline **pOut, int diffFlags){
-  int nLine, i, j, k, s, x;
-  unsigned int h, h2;
-  fsl_dline *a = NULL;
-  /* Count the number of lines.  Allocate space to hold
-     the returned array.
-  */
-  for(i=j=0, nLine=1; i<n; i++, j++){
-    int c = z[i];
-    if( c==0 ){
-      /* printf("BINARY DATA AT BYTE %d\n", i); */
-      /* goto gotNone; */
-      *pOut = NULL;
-      return FSL_RC_TYPE;
-    }
-    if( c=='\n' && z[i+1]!=0 ){
-      nLine++;
-      if( j>LENGTH_MASK ){
-        /* printf("TOO LONG AT COLUMN %d\n", j); */
-        /* goto gotNone; */
-        *pOut = NULL;
-        return FSL_RC_RANGE;
-      }
-      j = 0;
-    }
-  }
-  if( j>LENGTH_MASK ){
-    /* printf("TOO LONG AGAIN AT COLUMN %d\n", j); */
-    /* goto gotNone; */
-    *pOut = NULL;
-    return FSL_RC_RANGE;
-  }
-  a = fsl_malloc( nLine*sizeof(a[0]) );
-  if(!a) return FSL_RC_OOM;
-  memset(a, 0, nLine*sizeof(a[0]) );
-  if( n==0 ){
-    /* gotNone: */
-    *pnLine = 0;
-    *pOut = a;
-    return 0;
-  }
-
-  /* Fill in the array */
-  for(i=0; i<nLine; i++){
-    for(j=0; z[j] && z[j]!='\n'; j++){}
-    a[i].z = z;
-    k = j;
-    if( diffFlags & DIFF_STRIP_EOLCR ){
-      if( k>0 && z[k-1]=='\r' ){ k--; }
-    }
-    a[i].n = k;
-    s = 0;
-    if(diffFlags & DIFF_IGNORE_EOLWS){
-      while( k>0 && fsl_isspace(z[k-1]) ){ k--; }
-    }
-    if( (diffFlags & DIFF_IGNORE_ALLWS)==DIFF_IGNORE_ALLWS ){
-      while( s<k && fsl_isspace(z[s]) ){ s++; }
-    }
-    a[i].indent = s;
-    for(h=0, x=s; x<k; x++){
-      h = h ^ (h<<2) ^ z[x];
-    }
-    a[i].h = h = (h<<LENGTH_MASK_SZ) | (k-s);
-    h2 = h % nLine;
-    a[i].iNext = a[h2].iHash;
-    a[h2].iHash = i+1;
-    z += j+1;
-  }
-
-  /* Return results */
-  *pnLine = nLine;
-  *pOut = a;
-  return 0;
-}
-
-
-/*
-   Return true if two fsl_dline elements are identical.
-*/
-static int same_dline(fsl_dline const *pA, fsl_dline const *pB){
-  if( pA->h!=pB->h ) return 1;
-  return memcmp(pA->z,pB->z, pA->h&LENGTH_MASK);
-}
-
-
-/*
-** Return true if two fsl_dline elements are identical, ignoring
-** all whitespace. The indent field of pA/pB already points
-** to the first non-space character in the string.
-*/
-static int same_dline_ignore_allws(const fsl_dline *pA, const fsl_dline *pB){
-  int a = pA->indent, b = pB->indent;
-  if( pA->h==pB->h ){
-    while( a<pA->n || b<pB->n ){
-      if( a<pA->n && b<pB->n && pA->z[a++] != pB->z[b++] ) return 0;
-      while( a<pA->n && fsl_isspace(pA->z[a])) ++a;
-      while( b<pB->n && fsl_isspace(pB->z[b])) ++b;
-    }
-    return pA->n-a == pB->n-b;
-  }
-  return 0;
-}
 
 /**
     Holds output state for diff generation.
@@ -23453,8 +23554,7 @@ static int appendDiffLineno(DiffOutState *pOut, int lnA,
 /*
    Minimum of two values
 */
-#define minInt(a,b) (((a)<(b)) ? (a) : (b))
-
+static int minInt(int a, int b){ return a<b ? a : b; }
 
 /**
     Compute the optimal longest common subsequence (LCS) using an
@@ -23532,8 +23632,8 @@ static void fsl__diff_lcs(
   int mid;                   /* Center of the chng */
   int iSXb, iSYb, iEXb, iEYb;   /* Best match so far */
   int iSXp, iSYp, iEXp, iEYp;   /* Previous match */
-  int64_t bestScore;      /* Best score so far */
-  int64_t score;          /* Score for current candidate LCS */
+  sqlite3_int64 bestScore;      /* Best score so far */
+  sqlite3_int64 score;          /* Score for current candidate LCS */
   int span;                     /* combined width of the input sequences */
 
   span = (iE1 - iS1) + (iE2 - iS2);
@@ -23580,7 +23680,7 @@ static void fsl__diff_lcs(
     if( skew<0 ) skew = -skew;
     dist = (iSX+iEX)/2 - mid;
     if( dist<0 ) dist = -dist;
-    score = (iEX - iSX)*(int64_t)span - (skew + dist);
+    score = (iEX - iSX)*(sqlite3_int64)span - (skew + dist);
     if( score>bestScore ){
       bestScore = score;
       iSXb = iSX;
@@ -23594,7 +23694,17 @@ static void fsl__diff_lcs(
       iEYp = iEY;
     }
   }
-  if( iSXb==iEXb && (int64_t)(iE1-iS1)*(iE2-iS2)<400 ){
+  if(
+#if 0
+     1
+     /* CANNOT EXPLAIN why we get different diff results than fossil
+        unless we use fsl_diff_optimal_lcs() despite using, insofar as
+        i can tell, the same inputs. There is some aspect i'm
+        overlooking. */
+#else
+     iSXb==iEXb && (sqlite3_int64)(iE1-iS1)*(iE2-iS2)<400
+#endif
+     ){
     /* If no common sequence is found using the hashing heuristic and
     ** the input is not too big, use the expensive exact solution */
     fsl__diff_optimal_lcs(p, iS1, iE1, iS2, iE2, piSX, piEX, piSY, piEY);
@@ -23604,13 +23714,12 @@ static void fsl__diff_lcs(
     *piEX = iEXb;
     *piEY = iEYb;
   }
-
 }
 
 
 void fsl__dump_triples(fsl_diff_cx const * const p,
                        char const * zFile, int ln ){
-    // Compare this with (fossil xdiff --raw) on the same inputs
+  // Compare this with (fossil xdiff --raw) on the same inputs
   fprintf(stderr,"%s:%d: Compare this with (fossil xdiff --raw) on the same inputs:\n",
           zFile, ln);
   for(int i = 0; p->aEdit[i] || p->aEdit[i+1] || p->aEdit[i+2]; i+=3){
@@ -23698,8 +23807,6 @@ static int diff_step(fsl_diff_cx *p, int iS1, int iE1, int iS2, int iE2){
 
   /* Find the longest matching segment between the two sequences */
   fsl__diff_lcs(p, iS1, iE1, iS2, iE2, &iSX, &iEX, &iSY, &iEY);
-  //MARKER(("L p->nFrom = %d, p->nTo=%d, p->nEdit=%d\n", p->nFrom, p->nTo,p->nEdit));
-
   if( iEX>iSX ){
     /* A common segment has been found.
        Recursively diff either side of the matching segment */
@@ -23724,31 +23831,25 @@ int fsl__diff_all(fsl_diff_cx * const p){
   /* Carve off the common header and footer */
   iE1 = p->nFrom;
   iE2 = p->nTo;
-  //MARKER(("A p->nFrom = %d, p->nTo=%d, p->nEdit=%d\n", p->nFrom, p->nTo,p->nEdit));
   while( iE1>0 && iE2>0 && p->cmpLine(&p->aFrom[iE1-1], &p->aTo[iE2-1])==0 ){
     iE1--;
     iE2--;
   }
-  //MARKER(("iE1=%d, iE2=%d\n", iE1, iE2));
   mnE = iE1<iE2 ? iE1 : iE2;
   for(iS=0; iS<mnE && p->cmpLine(&p->aFrom[iS],&p->aTo[iS])==0; iS++){}
-  //MARKER(("B p->nFrom = %d, p->nTo=%d, p->nEdit=%d, iS=%d\n", p->nFrom, p->nTo,p->nEdit, iS));
 
   /* do the difference */
   if( iS>0 ){
     rc = appendTriple(p, iS, 0, 0);
     if(rc) return rc;
   }
-  //MARKER(("B2 p->nFrom = %d, p->nTo=%d, p->nEdit=%d, iS=%d\n", p->nFrom, p->nTo,p->nEdit, iS));
   rc = diff_step(p, iS, iE1, iS, iE2);
   //fsl__dump_triples(p, __FILE__, __LINE__);
-  //MARKER(("B3 p->nFrom = %d, p->nTo=%d, p->nEdit=%d, iS=%d\n", p->nFrom, p->nTo,p->nEdit, iS));
   if(rc) return rc;
   else if( iE1<p->nFrom ){
     rc = appendTriple(p, p->nFrom - iE1, 0, 0);
     if(rc) return rc;
   }
-  //MARKER(("C p->nFrom = %d, p->nTo=%d, p->nEdit=%d\n", p->nFrom, p->nTo,p->nEdit));
   /* Terminate the COPY/DELETE/INSERT triples with three zeros */
   rc = fsl__diff_expand_edit(p, p->nEdit+3);
   if(0==rc){
@@ -23759,7 +23860,6 @@ int fsl__diff_all(fsl_diff_cx * const p){
       //fsl__dump_triples(p, __FILE__, __LINE__);
     }
   }
-  //MARKER(("D p->nFrom = %d, p->nTo=%d, p->nEdit=%d\n", p->nFrom, p->nTo,p->nEdit));
   return rc;
 }
 
@@ -25044,7 +25144,6 @@ static int sbsDiff(
   return rc;
 }
 
-
 /** @internal
 
     Performs a text diff on two buffers, either streaming the
@@ -25105,15 +25204,15 @@ static int fsl_diff_text_impl(
 
   /* Prepare the input files */
   if( (diffFlags & DIFF_IGNORE_ALLWS)==DIFF_IGNORE_ALLWS ){
-    c.cmpLine = same_dline_ignore_allws;
+    c.cmpLine = fsl_dline_cmp_ignore_ws;
   }else{
-    c.cmpLine = same_dline;
+    c.cmpLine = fsl_dline_cmp;
   }
-  rc = break_into_lines(fsl_buffer_cstr(pA), fsl_buffer_size(pA),
-                        &c.nFrom, &c.aFrom, diffFlags);
+  rc = fsl_break_into_dlines(fsl_buffer_cstr(pA), fsl_buffer_size(pA),
+                             (uint32_t*)&c.nFrom, &c.aFrom, diffFlags);
   if(rc) goto end;
-  rc = break_into_lines(fsl_buffer_cstr(pB), fsl_buffer_size(pB),
-                        &c.nTo, &c.aTo, diffFlags);
+  rc = fsl_break_into_dlines(fsl_buffer_cstr(pB), fsl_buffer_size(pB),
+                             (uint32_t*)&c.nTo, &c.aTo, diffFlags);
   if(rc) goto end;
 
   if( c.aFrom==0 || c.aTo==0 ){
@@ -25214,7 +25313,6 @@ int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
 #undef DIFF_CONTEXT_EX
 #undef DIFF_NOTTOOBIG
 #undef DIFF_STRIP_EOLCR
-#undef minInt
 #undef SBS_LNA
 #undef SBS_TXTA
 #undef SBS_MKR
@@ -25415,13 +25513,13 @@ int fsl_break_into_dlines(const char *z, fsl_int_t n,
 }
 
 int fsl_dline_cmp(const fsl_dline * const pA,
-                         const fsl_dline * const pB){
+                  const fsl_dline * const pB){
   if( pA->h!=pB->h ) return 1;
   return memcmp(pA->z,pB->z, pA->h&LENGTH_MASK);
 }
 
 int fsl_dline_cmp_ignore_ws(const fsl_dline * const pA,
-                               const fsl_dline * const pB){
+                            const fsl_dline * const pB){
   unsigned short a = pA->indent, b = pB->indent;
   if( pA->h==pB->h ){
     while( a<pA->n || b<pB->n ){
@@ -25761,7 +25859,7 @@ static unsigned short diff_opt_context_lines(fsl_diff_opt const * cfg){
 /*
 ** Minimum of two values
 */
-static int minInt(int a, int b){ return a<b ? a : b; }
+static int minInt2(int a, int b){ return a<b ? a : b; }
 
 /****************************************************************************/
 /*
@@ -25825,7 +25923,7 @@ static int match_dline2(const fsl_dline *pA, const fsl_dline *pB){
   for(i=1; i<=nA-best; i++){
     c = (unsigned char)zA[i];
     for(j=aFirst[c]; j<nB-best && memcmp(&zA[i],&zB[j],best)==0; j = aNext[j]){
-      int limit = minInt(nA-i, nB-j);
+      int limit = minInt2(nA-i, nB-j);
       for(k=best; k<=limit && zA[k+i]==zB[k+j]; k++){}
       if( k>best ) best = k;
     }
@@ -26370,7 +26468,6 @@ static int fsl_diff2_text_impl(fsl_buffer const *pA,
   /* Compute the difference */
   rc = fsl__diff_all(&c);
   if(rc) goto end;
-
   if( ignoreWs && c.nEdit==6 && c.aEdit[1]==0 && c.aEdit[2]==0 ){
     rc = FSL_RC_DIFF_WS_ONLY;
     goto end;
@@ -26451,12 +26548,6 @@ static fsl_diff_builder * fsl__diff_builder_alloc(fsl_size_t extra){
   return rc;
 }
 
-static int fdb__fsl_output_f( void * state, void const * src,
-                              fsl_size_t n ){
-  fsl_diff_builder * const b = (fsl_diff_builder *)state;
-  return b->cfg->out(b->cfg->outState, src, n);
-}
-
 static int fdb__out(fsl_diff_builder *const b,
                     char const *z, fsl_size_t n){
   return b->cfg->out(b->cfg->outState, z, n);
@@ -26467,7 +26558,7 @@ static int fdb__outf(fsl_diff_builder * const b,
   va_list va;
   assert(b->cfg->out);
   va_start(va,fmt);
-  rc = fsl_appendfv(fdb__fsl_output_f, b, fmt, va);
+  rc = fsl_appendfv(b->cfg->out, b->cfg->outState, fmt, va);
   va_end(va);
   return rc;
 }
@@ -27456,770 +27547,6 @@ int fsl_event_ids_get( fsl_cx * f, fsl_list * tgt ){
 
 #undef MARKER
 /* end of file event.c */
-/* start of file ext_regexp.c */
-/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
-/* vim: set ts=2 et sw=2 tw=80: */
-/*
-** 2012-11-13
-**
-** The author disclaims copyright to this source code.  In place of
-** a legal notice, here is a blessing:
-**
-**    May you do good and not evil.
-**    May you find forgiveness for yourself and forgive others.
-**    May you share freely, never taking more than you give.
-**
-******************************************************************************
-**
-** The code in this file implements a compact but reasonably
-** efficient regular-expression matcher for posix extended regular
-** expressions against UTF8 text.
-**
-** This file is an SQLite extension.  It registers a single function
-** named "regexp(A,B)" where A is the regular expression and B is the
-** string to be matched.  By registering this function, SQLite will also
-** then implement the "B regexp A" operator.  Note that with the function
-** the regular expression comes first, but with the operator it comes
-** second.
-**
-**  The following regular expression syntax is supported:
-**
-**     X*      zero or more occurrences of X
-**     X+      one or more occurrences of X
-**     X?      zero or one occurrences of X
-**     X{p,q}  between p and q occurrences of X
-**     (X)     match X
-**     X|Y     X or Y
-**     ^X      X occurring at the beginning of the string
-**     X$      X occurring at the end of the string
-**     .       Match any single character
-**     \c      Character c where c is one of \{}()[]|*+?.
-**     \c      C-language escapes for c in afnrtv.  ex: \t or \n
-**     \uXXXX  Where XXXX is exactly 4 hex digits, unicode value XXXX
-**     \xXX    Where XX is exactly 2 hex digits, unicode value XX
-**     [abc]   Any single character from the set abc
-**     [^abc]  Any single character not in the set abc
-**     [a-z]   Any single character in the range a-z
-**     [^a-z]  Any single character not in the range a-z
-**     \b      Word boundary
-**     \w      Word character.  [A-Za-z0-9_]
-**     \W      Non-word character
-**     \d      Digit
-**     \D      Non-digit
-**     \s      Whitespace character
-**     \S      Non-whitespace character
-**
-** A nondeterministic finite automaton (NFA) is used for matching, so the
-** performance is bounded by O(N*M) where N is the size of the regular
-** expression and M is the size of the input string.  The matcher never
-** exhibits exponential behavior.  Note that the X{p,q} operator expands
-** to p copies of X following by q-p copies of X? and that the size of the
-** regular expression in the O(N*M) performance bound is computed after
-** this expansion.
-*/
-#if defined(_MSC_VER)
-#pragma warning ( disable : 4786 )
-#endif
-#ifndef SQLITE_CORE
-#include "sqlite3ext.h"
-/*declares extern the vtable of all the sqlite3 functions (for loadable modules only)*/
-SQLITE_EXTENSION_INIT3
-#else
-#include "sqlite3.h"
-#endif
-#include <string.h>
-#include <stdlib.h>
-
-
-/* The end-of-input character */
-#define RE_EOF            0    /* End of input */
-
-/* The NFA is implemented as sequence of opcodes taken from the following
-** set.  Each opcode has a single integer argument.
-*/
-#define RE_OP_MATCH       1    /* Match the one character in the argument */
-#define RE_OP_ANY         2    /* Match any one character.  (Implements ".") */
-#define RE_OP_ANYSTAR     3    /* Special optimized version of .* */
-#define RE_OP_FORK        4    /* Continue to both next and opcode at iArg */
-#define RE_OP_GOTO        5    /* Jump to opcode at iArg */
-#define RE_OP_ACCEPT      6    /* Halt and indicate a successful match */
-#define RE_OP_CC_INC      7    /* Beginning of a [...] character class */
-#define RE_OP_CC_EXC      8    /* Beginning of a [^...] character class */
-#define RE_OP_CC_VALUE    9    /* Single value in a character class */
-#define RE_OP_CC_RANGE   10    /* Range of values in a character class */
-#define RE_OP_WORD       11    /* Perl word character [A-Za-z0-9_] */
-#define RE_OP_NOTWORD    12    /* Not a perl word character */
-#define RE_OP_DIGIT      13    /* digit:  [0-9] */
-#define RE_OP_NOTDIGIT   14    /* Not a digit */
-#define RE_OP_SPACE      15    /* space:  [ \t\n\r\v\f] */
-#define RE_OP_NOTSPACE   16    /* Not a digit */
-#define RE_OP_BOUNDARY   17    /* Boundary between word and non-word */
-
-/* Each opcode is a "state" in the NFA */
-typedef unsigned short sqlite3_ReStateNumber;
-
-/* Because this is an NFA and not a DFA, multiple states can be active at
-** once.  An instance of the following object records all active states in
-** the NFA.  The implementation is optimized for the common case where the
-** number of actives states is small.
-*/
-typedef struct sqlite3_ReStateSet {
-  unsigned nState;            /* Number of current states */
-  sqlite3_ReStateNumber *aState;      /* Current states */
-} sqlite3_ReStateSet;
-
-/* An input string read one character at a time.
-*/
-typedef struct sqlite3_ReInput sqlite3_ReInput;
-struct sqlite3_ReInput {
-  const unsigned char *z;  /* All text */
-  int i;                   /* Next byte to read */
-  int mx;                  /* EOF when i>=mx */
-};
-
-/* A compiled NFA (or an NFA that is in the process of being compiled) is
-** an instance of the following object.
-*/
-/*typedef struct sqlite3_ReCompiled sqlite3_ReCompiled;*/
-struct sqlite3_ReCompiled {
-  sqlite3_ReInput sIn;        /* Regular expression text */
-  const char *zErr;           /* Error message to return */
-  char *aOp;                  /* Operators for the virtual machine */
-  int *aArg;                  /* Arguments to each operator */
-  unsigned (*xNextChar)(sqlite3_ReInput*);  /* Next character function */
-  unsigned char zInit[12];    /* Initial text to match */
-  int nInit;                  /* Number of characters in zInit */
-  unsigned nState;            /* Number of entries in aOp[] and aArg[] */
-  unsigned nAlloc;            /* Slots allocated for aOp[] and aArg[] */
-};
-
-/* Add a state to the given state set if it is not already there */
-static void sqlite3re_add_state(sqlite3_ReStateSet *pSet, int newState){
-  unsigned i;
-  for(i=0; i<pSet->nState; i++) if( pSet->aState[i]==newState ) return;
-  pSet->aState[pSet->nState++] = newState;
-}
-
-/* Extract the next unicode character from *pzIn and return it.  Advance
-** *pzIn to the first byte past the end of the character returned.  To
-** be clear:  this routine converts utf8 to unicode.  This routine is 
-** optimized for the common case where the next character is a single byte.
-*/
-static unsigned sqlite3re_next_char(sqlite3_ReInput *p){
-  unsigned c;
-  if( p->i>=p->mx ) return 0;
-  c = p->z[p->i++];
-  if( c>=0x80 ){
-    if( (c&0xe0)==0xc0 && p->i<p->mx && (p->z[p->i]&0xc0)==0x80 ){
-      c = (c&0x1f)<<6 | (p->z[p->i++]&0x3f);
-      if( c<0x80 ) c = 0xfffd;
-    }else if( (c&0xf0)==0xe0 && p->i+1<p->mx && (p->z[p->i]&0xc0)==0x80
-           && (p->z[p->i+1]&0xc0)==0x80 ){
-      c = (c&0x0f)<<12 | ((p->z[p->i]&0x3f)<<6) | (p->z[p->i+1]&0x3f);
-      p->i += 2;
-      if( c<=0x3ff || (c>=0xd800 && c<=0xdfff) ) c = 0xfffd;
-    }else if( (c&0xf8)==0xf0 && p->i+3<p->mx && (p->z[p->i]&0xc0)==0x80
-           && (p->z[p->i+1]&0xc0)==0x80 && (p->z[p->i+2]&0xc0)==0x80 ){
-      c = (c&0x07)<<18 | ((p->z[p->i]&0x3f)<<12) | ((p->z[p->i+1]&0x3f)<<6)
-                       | (p->z[p->i+2]&0x3f);
-      p->i += 3;
-      if( c<=0xffff || c>0x10ffff ) c = 0xfffd;
-    }else{
-      c = 0xfffd;
-    }
-  }
-  return c;
-}
-static unsigned sqlite3re_next_char_nocase(sqlite3_ReInput *p){
-  unsigned c = sqlite3re_next_char(p);
-  if( c>='A' && c<='Z' ) c += 'a' - 'A';
-  return c;
-}
-
-/* Return true if c is a perl "word" character:  [A-Za-z0-9_] */
-static int sqlite3re_word_char(int c){
-  return (c>='0' && c<='9') || (c>='a' && c<='z')
-      || (c>='A' && c<='Z') || c=='_';
-}
-
-/* Return true if c is a "digit" character:  [0-9] */
-static int sqlite3re_digit_char(int c){
-  return (c>='0' && c<='9');
-}
-
-/* Return true if c is a perl "space" character:  [ \t\r\n\v\f] */
-static int sqlite3re_space_char(int c){
-  return c==' ' || c=='\t' || c=='\n' || c=='\r' || c=='\v' || c=='\f';
-}
-
-/* Run a compiled regular expression on the zero-terminated input
-** string zIn[].  Return true on a match and false if there is no match.
-*/
-int sqlite3re_match(sqlite3_ReCompiled *pRe, const unsigned char *zIn, int nIn){
-  sqlite3_ReStateSet aStateSet[2], *pThis, *pNext;
-  sqlite3_ReStateNumber aSpace[100];
-  sqlite3_ReStateNumber *pToFree;
-  unsigned int i = 0;
-  unsigned int iSwap = 0;
-  int c = RE_EOF+1;
-  int cPrev = 0;
-  int rc = 0;
-  sqlite3_ReInput in;
-
-  in.z = zIn;
-  in.i = 0;
-  in.mx = nIn>=0 ? nIn : (int)strlen((char const*)zIn);
-
-  /* Look for the initial prefix match, if there is one. */
-  if( pRe->nInit ){
-    unsigned char x = pRe->zInit[0];
-    while( in.i+pRe->nInit<=in.mx 
-     && (zIn[in.i]!=x ||
-         strncmp((const char*)zIn+in.i, (const char*)pRe->zInit, pRe->nInit)!=0)
-    ){
-      in.i++;
-    }
-    if( in.i+pRe->nInit>in.mx ) return 0;
-  }
-
-  if( pRe->nState<=(sizeof(aSpace)/(sizeof(aSpace[0])*2)) ){
-    pToFree = 0;
-    aStateSet[0].aState = aSpace;
-  }else{
-    pToFree = sqlite3_malloc( sizeof(sqlite3_ReStateNumber)*2*pRe->nState );
-    if( pToFree==0 ) return -1;
-    aStateSet[0].aState = pToFree;
-  }
-  aStateSet[1].aState = &aStateSet[0].aState[pRe->nState];
-  pNext = &aStateSet[1];
-  pNext->nState = 0;
-  sqlite3re_add_state(pNext, 0);
-  while( c!=RE_EOF && pNext->nState>0 ){
-    cPrev = c;
-    c = pRe->xNextChar(&in);
-    pThis = pNext;
-    pNext = &aStateSet[iSwap];
-    iSwap = 1 - iSwap;
-    pNext->nState = 0;
-    for(i=0; i<pThis->nState; i++){
-      int x = pThis->aState[i];
-      switch( pRe->aOp[x] ){
-        case RE_OP_MATCH: {
-          if( pRe->aArg[x]==c ) sqlite3re_add_state(pNext, x+1);
-          break;
-        }
-        case RE_OP_ANY: {
-          sqlite3re_add_state(pNext, x+1);
-          break;
-        }
-        case RE_OP_WORD: {
-          if( sqlite3re_word_char(c) ) sqlite3re_add_state(pNext, x+1);
-          break;
-        }
-        case RE_OP_NOTWORD: {
-          if( !sqlite3re_word_char(c) ) sqlite3re_add_state(pNext, x+1);
-          break;
-        }
-        case RE_OP_DIGIT: {
-          if( sqlite3re_digit_char(c) ) sqlite3re_add_state(pNext, x+1);
-          break;
-        }
-        case RE_OP_NOTDIGIT: {
-          if( !sqlite3re_digit_char(c) ) sqlite3re_add_state(pNext, x+1);
-          break;
-        }
-        case RE_OP_SPACE: {
-          if( sqlite3re_space_char(c) ) sqlite3re_add_state(pNext, x+1);
-          break;
-        }
-        case RE_OP_NOTSPACE: {
-          if( !sqlite3re_space_char(c) ) sqlite3re_add_state(pNext, x+1);
-          break;
-        }
-        case RE_OP_BOUNDARY: {
-          if( sqlite3re_word_char(c)!=sqlite3re_word_char(cPrev) ) sqlite3re_add_state(pThis, x+1);
-          break;
-        }
-        case RE_OP_ANYSTAR: {
-          sqlite3re_add_state(pNext, x);
-          sqlite3re_add_state(pThis, x+1);
-          break;
-        }
-        case RE_OP_FORK: {
-          sqlite3re_add_state(pThis, x+pRe->aArg[x]);
-          sqlite3re_add_state(pThis, x+1);
-          break;
-        }
-        case RE_OP_GOTO: {
-          sqlite3re_add_state(pThis, x+pRe->aArg[x]);
-          break;
-        }
-        case RE_OP_ACCEPT: {
-          rc = 1;
-          goto re_match_end;
-        }
-        case RE_OP_CC_INC:
-        case RE_OP_CC_EXC: {
-          int j = 1;
-          int n = pRe->aArg[x];
-          int hit = 0;
-          for(j=1; j>0 && j<n; j++){
-            if( pRe->aOp[x+j]==RE_OP_CC_VALUE ){
-              if( pRe->aArg[x+j]==c ){
-                hit = 1;
-                j = -1;
-              }
-            }else{
-              if( pRe->aArg[x+j]<=c && pRe->aArg[x+j+1]>=c ){
-                hit = 1;
-                j = -1;
-              }else{
-                j++;
-              }
-            }
-          }
-          if( pRe->aOp[x]==RE_OP_CC_EXC ) hit = !hit;
-          if( hit ) sqlite3re_add_state(pNext, x+n);
-          break;            
-        }
-      }
-    }
-  }
-  for(i=0; i<pNext->nState; i++){
-    if( pRe->aOp[pNext->aState[i]]==RE_OP_ACCEPT ){ rc = 1; break; }
-  }
-re_match_end:
-  sqlite3_free(pToFree);
-  return rc;
-}
-
-/* Resize the opcode and argument arrays for an RE under construction.
-*/
-static int sqlite3re_resize(sqlite3_ReCompiled *p, int N){
-  char *aOp;
-  int *aArg;
-  aOp = sqlite3_realloc(p->aOp, N*sizeof(p->aOp[0]));
-  if( aOp==0 ) return 1;
-  p->aOp = aOp;
-  aArg = sqlite3_realloc(p->aArg, N*sizeof(p->aArg[0]));
-  if( aArg==0 ) return 1;
-  p->aArg = aArg;
-  p->nAlloc = N;
-  return 0;
-}
-
-/* Insert a new opcode and argument into an RE under construction.  The
-** insertion point is just prior to existing opcode iBefore.
-*/
-static int sqlite3re_insert(sqlite3_ReCompiled *p, int iBefore, int op, int arg){
-  int i;
-  if( p->nAlloc<=p->nState && sqlite3re_resize(p, p->nAlloc*2) ) return 0;
-  for(i=p->nState; i>iBefore; i--){
-    p->aOp[i] = p->aOp[i-1];
-    p->aArg[i] = p->aArg[i-1];
-  }
-  p->nState++;
-  p->aOp[iBefore] = op;
-  p->aArg[iBefore] = arg;
-  return iBefore;
-}
-
-/* Append a new opcode and argument to the end of the RE under construction.
-*/
-static int sqlite3re_append(sqlite3_ReCompiled *p, int op, int arg){
-  return sqlite3re_insert(p, p->nState, op, arg);
-}
-
-/* Make a copy of N opcodes starting at iStart onto the end of the RE
-** under construction.
-*/
-static void sqlite3re_copy(sqlite3_ReCompiled *p, int iStart, int N){
-  if( p->nState+N>=p->nAlloc && sqlite3re_resize(p, p->nAlloc*2+N) ) return;
-  memcpy(&p->aOp[p->nState], &p->aOp[iStart], N*sizeof(p->aOp[0]));
-  memcpy(&p->aArg[p->nState], &p->aArg[iStart], N*sizeof(p->aArg[0]));
-  p->nState += N;
-}
-
-/* Return true if c is a hexadecimal digit character:  [0-9a-fA-F]
-** If c is a hex digit, also set *pV = (*pV)*16 + valueof(c).  If
-** c is not a hex digit *pV is unchanged.
-*/
-static int sqlite3re_hex(int c, int *pV){
-  if( c>='0' && c<='9' ){
-    c -= '0';
-  }else if( c>='a' && c<='f' ){
-    c -= 'a' - 10;
-  }else if( c>='A' && c<='F' ){
-    c -= 'A' - 10;
-  }else{
-    return 0;
-  }
-  *pV = (*pV)*16 + (c & 0xff);
-  return 1;
-}
-
-/* A backslash character has been seen, read the next character and
-** return its interpretation.
-*/
-static unsigned sqlite3re_esc_char(sqlite3_ReCompiled *p){
-  static const char zEsc[] = "afnrtv\\()*.+?[$^{|}]";
-  static const char zTrans[] = "\a\f\n\r\t\v";
-  int i, v = 0;
-  char c;
-  if( p->sIn.i>=p->sIn.mx ) return 0;
-  c = p->sIn.z[p->sIn.i];
-  if( c=='u' && p->sIn.i+4<p->sIn.mx ){
-    const unsigned char *zIn = p->sIn.z + p->sIn.i;
-    if( sqlite3re_hex(zIn[1],&v)
-     && sqlite3re_hex(zIn[2],&v)
-     && sqlite3re_hex(zIn[3],&v)
-     && sqlite3re_hex(zIn[4],&v)
-    ){
-      p->sIn.i += 5;
-      return v;
-    }
-  }
-  if( c=='x' && p->sIn.i+2<p->sIn.mx ){
-    const unsigned char *zIn = p->sIn.z + p->sIn.i;
-    if( sqlite3re_hex(zIn[1],&v)
-     && sqlite3re_hex(zIn[2],&v)
-    ){
-      p->sIn.i += 3;
-      return v;
-    }
-  }
-  for(i=0; zEsc[i] && zEsc[i]!=c; i++){}
-  if( zEsc[i] ){
-    if( i<6 ) c = zTrans[i];
-    p->sIn.i++;
-  }else{
-    p->zErr = "unknown \\ escape";
-  }
-  return c;
-}
-
-/* Forward declaration */
-static const char* sqlite3re_subcompile_string(sqlite3_ReCompiled*);
-
-/* Peek at the next byte of input */
-static unsigned char sqlite3rePeek(sqlite3_ReCompiled *p){
-  return p->sIn.i<p->sIn.mx ? p->sIn.z[p->sIn.i] : 0;
-}
-
-/* Compile RE text into a sequence of opcodes.  Continue up to the
-** first unmatched ")" character, then return.  If an error is found,
-** return a pointer to the error message string.
-*/
-static const char* sqlite3re_subcompile_re(sqlite3_ReCompiled *p){
-  const char *zErr;
-  int iStart, iEnd, iGoto;
-  iStart = p->nState;
-  zErr = sqlite3re_subcompile_string(p);
-  if( zErr ) return zErr;
-  while( sqlite3rePeek(p)=='|' ){
-    iEnd = p->nState;
-    sqlite3re_insert(p, iStart, RE_OP_FORK, iEnd + 2 - iStart);
-    iGoto = sqlite3re_append(p, RE_OP_GOTO, 0);
-    p->sIn.i++;
-    zErr = sqlite3re_subcompile_string(p);
-    if( zErr ) return zErr;
-    p->aArg[iGoto] = p->nState - iGoto;
-  }
-  return 0;
-}
-
-/* Compile an element of regular expression text (anything that can be
-** an operand to the "|" operator).  Return NULL on success or a pointer
-** to the error message if there is a problem.
-*/
-static const char* sqlite3re_subcompile_string(sqlite3_ReCompiled *p){
-  int iPrev = -1;
-  int iStart;
-  unsigned c;
-  const char *zErr;
-  while( (c = p->xNextChar(&p->sIn))!=0 ){
-    iStart = p->nState;
-    switch( c ){
-      case '|':
-      case '$': 
-      case ')': {
-        p->sIn.i--;
-        return 0;
-      }
-      case '(': {
-        zErr = sqlite3re_subcompile_re(p);
-        if( zErr ) return zErr;
-        if( sqlite3rePeek(p)!=')' ) return "unmatched '('";
-        p->sIn.i++;
-        break;
-      }
-      case '.': {
-        if( sqlite3rePeek(p)=='*' ){
-          sqlite3re_append(p, RE_OP_ANYSTAR, 0);
-          p->sIn.i++;
-        }else{ 
-          sqlite3re_append(p, RE_OP_ANY, 0);
-        }
-        break;
-      }
-      case '*': {
-        if( iPrev<0 ) return "'*' without operand";
-        sqlite3re_insert(p, iPrev, RE_OP_GOTO, p->nState - iPrev + 1);
-        sqlite3re_append(p, RE_OP_FORK, iPrev - p->nState + 1);
-        break;
-      }
-      case '+': {
-        if( iPrev<0 ) return "'+' without operand";
-        sqlite3re_append(p, RE_OP_FORK, iPrev - p->nState);
-        break;
-      }
-      case '?': {
-        if( iPrev<0 ) return "'?' without operand";
-        sqlite3re_insert(p, iPrev, RE_OP_FORK, p->nState - iPrev+1);
-        break;
-      }
-      case '{': {
-        int m = 0, n = 0;
-        int sz, j;
-        if( iPrev<0 ) return "'{m,n}' without operand";
-        while( (c=sqlite3rePeek(p))>='0' && c<='9' ){ m = m*10 + c - '0'; p->sIn.i++; }
-        n = m;
-        if( c==',' ){
-          p->sIn.i++;
-          n = 0;
-          while( (c=sqlite3rePeek(p))>='0' && c<='9' ){ n = n*10 + c-'0'; p->sIn.i++; }
-        }
-        if( c!='}' ) return "unmatched '{'";
-        if( n>0 && n<m ) return "n less than m in '{m,n}'";
-        p->sIn.i++;
-        sz = p->nState - iPrev;
-        if( m==0 ){
-          if( n==0 ) return "both m and n are zero in '{m,n}'";
-          sqlite3re_insert(p, iPrev, RE_OP_FORK, sz+1);
-          n--;
-        }else{
-          for(j=1; j<m; j++) sqlite3re_copy(p, iPrev, sz);
-        }
-        for(j=m; j<n; j++){
-          sqlite3re_append(p, RE_OP_FORK, sz+1);
-          sqlite3re_copy(p, iPrev, sz);
-        }
-        if( n==0 && m>0 ){
-          sqlite3re_append(p, RE_OP_FORK, -sz);
-        }
-        break;
-      }
-      case '[': {
-        int iFirst = p->nState;
-        if( sqlite3rePeek(p)=='^' ){
-          sqlite3re_append(p, RE_OP_CC_EXC, 0);
-          p->sIn.i++;
-        }else{
-          sqlite3re_append(p, RE_OP_CC_INC, 0);
-        }
-        while( (c = p->xNextChar(&p->sIn))!=0 ){
-          if( c=='[' && sqlite3rePeek(p)==':' ){
-            return "POSIX character classes not supported";
-          }
-          if( c=='\\' ) c = sqlite3re_esc_char(p);
-          if( sqlite3rePeek(p)=='-' ){
-            sqlite3re_append(p, RE_OP_CC_RANGE, c);
-            p->sIn.i++;
-            c = p->xNextChar(&p->sIn);
-            if( c=='\\' ) c = sqlite3re_esc_char(p);
-            sqlite3re_append(p, RE_OP_CC_RANGE, c);
-          }else{
-            sqlite3re_append(p, RE_OP_CC_VALUE, c);
-          }
-          if( sqlite3rePeek(p)==']' ){ p->sIn.i++; break; }
-        }
-        if( c==0 ) return "unclosed '['";
-        p->aArg[iFirst] = p->nState - iFirst;
-        break;
-      }
-      case '\\': {
-        int specialOp = 0;
-        switch( sqlite3rePeek(p) ){
-          case 'b': specialOp = RE_OP_BOUNDARY;   break;
-          case 'd': specialOp = RE_OP_DIGIT;      break;
-          case 'D': specialOp = RE_OP_NOTDIGIT;   break;
-          case 's': specialOp = RE_OP_SPACE;      break;
-          case 'S': specialOp = RE_OP_NOTSPACE;   break;
-          case 'w': specialOp = RE_OP_WORD;       break;
-          case 'W': specialOp = RE_OP_NOTWORD;    break;
-        }
-        if( specialOp ){
-          p->sIn.i++;
-          sqlite3re_append(p, specialOp, 0);
-        }else{
-          c = sqlite3re_esc_char(p);
-          sqlite3re_append(p, RE_OP_MATCH, c);
-        }
-        break;
-      }
-      default: {
-        sqlite3re_append(p, RE_OP_MATCH, c);
-        break;
-      }
-    }
-    iPrev = iStart;
-  }
-  return 0;
-}
-
-/* Free and reclaim all the memory used by a previously compiled
-** regular expression.  Applications should invoke this routine once
-** for every call to re_compile() to avoid memory leaks.
-*/
-void sqlite3re_free(sqlite3_ReCompiled *pRe){
-  if( pRe ){
-    sqlite3_free(pRe->aOp);
-    sqlite3_free(pRe->aArg);
-    sqlite3_free(pRe);
-  }
-}
-
-/*
-** Compile a textual regular expression in zIn[] into a compiled regular
-** expression suitable for us by re_match() and return a pointer to the
-** compiled regular expression in *ppRe.  Return NULL on success or an
-** error message if something goes wrong.
-*/
-const char* sqlite3re_compile(sqlite3_ReCompiled **ppRe, const char *zIn, int noCase){
-  sqlite3_ReCompiled *pRe;
-  const char *zErr;
-  int i, j;
-
-  *ppRe = 0;
-  pRe = sqlite3_malloc( sizeof(*pRe) );
-  if( pRe==0 ){
-    return "out of memory";
-  }
-  memset(pRe, 0, sizeof(*pRe));
-  pRe->xNextChar = noCase ? sqlite3re_next_char_nocase : sqlite3re_next_char;
-  if( sqlite3re_resize(pRe, 30) ){
-    sqlite3re_free(pRe);
-    return "out of memory";
-  }
-  if( zIn[0]=='^' ){
-    zIn++;
-  }else{
-    sqlite3re_append(pRe, RE_OP_ANYSTAR, 0);
-  }
-  pRe->sIn.z = (unsigned char*)zIn;
-  pRe->sIn.i = 0;
-  pRe->sIn.mx = (int)strlen(zIn);
-  zErr = sqlite3re_subcompile_re(pRe);
-  if( zErr ){
-    sqlite3re_free(pRe);
-    return zErr;
-  }
-  if( sqlite3rePeek(pRe)=='$' && pRe->sIn.i+1>=pRe->sIn.mx ){
-    sqlite3re_append(pRe, RE_OP_MATCH, RE_EOF);
-    sqlite3re_append(pRe, RE_OP_ACCEPT, 0);
-    *ppRe = pRe;
-  }else if( pRe->sIn.i>=pRe->sIn.mx ){
-    sqlite3re_append(pRe, RE_OP_ACCEPT, 0);
-    *ppRe = pRe;
-  }else{
-    sqlite3re_free(pRe);
-    return "unrecognized character";
-  }
-
-  /* The following is a performance optimization.  If the regex begins with
-  ** ".*" (if the input regex lacks an initial "^") and afterwards there are
-  ** one or more matching characters, enter those matching characters into
-  ** zInit[].  The re_match() routine can then search ahead in the input 
-  ** string looking for the initial match without having to run the whole
-  ** regex engine over the string.  Do not worry able trying to match
-  ** unicode characters beyond plane 0 - those are very rare and this is
-  ** just an optimization. */
-  if( pRe->aOp[0]==RE_OP_ANYSTAR ){
-    for(j=0, i=1; j<(int)sizeof(pRe->zInit)-2 && pRe->aOp[i]==RE_OP_MATCH; i++){
-      unsigned x = pRe->aArg[i];
-      if( x<=127 ){
-        pRe->zInit[j++] = x;
-      }else if( x<=0xfff ){
-        pRe->zInit[j++] = 0xc0 | (x>>6);
-        pRe->zInit[j++] = 0x80 | (x&0x3f);
-      }else if( x<=0xffff ){
-        pRe->zInit[j++] = 0xd0 | (x>>12);
-        pRe->zInit[j++] = 0x80 | ((x>>6)&0x3f);
-        pRe->zInit[j++] = 0x80 | (x&0x3f);
-      }else{
-        break;
-      }
-    }
-    if( j>0 && pRe->zInit[j-1]==0 ) j--;
-    pRe->nInit = j;
-  }
-  return pRe->zErr;
-}
-
-/*
-** Implementation of the regexp() SQL function.  This function implements
-** the build-in REGEXP operator.  The first argument to the function is the
-** pattern and the second argument is the string.  So, the SQL statements:
-**
-**       A REGEXP B
-**
-** is implemented as regexp(B,A).
-*/
-static void re_sql_func(
-  sqlite3_context *context, 
-  int argc, 
-  sqlite3_value **argv
-){
-  sqlite3_ReCompiled *pRe;  /* Compiled regular expression */
-  const char *zPattern;     /* The regular expression */
-  const unsigned char *zStr;/* String being searched */
-  const char *zErr;         /* Compile error message */
-  int setAux = 0;           /* True to invoke sqlite3_set_auxdata() */
-
-  pRe = sqlite3_get_auxdata(context, 0);
-  if( pRe==0 ){
-    zPattern = (const char*)sqlite3_value_text(argv[0]);
-    if( zPattern==0 ) return;
-    zErr = sqlite3re_compile(&pRe, zPattern, 0);
-    if( zErr ){
-      sqlite3re_free(pRe);
-      sqlite3_result_error(context, zErr, -1);
-      return;
-    }
-    if( pRe==0 ){
-      sqlite3_result_error_nomem(context);
-      return;
-    }
-    setAux = 1;
-  }
-  zStr = (const unsigned char*)sqlite3_value_text(argv[1]);
-  if( zStr!=0 ){
-    sqlite3_result_int(context, sqlite3re_match(pRe, zStr, -1));
-  }
-  if( setAux ){
-    sqlite3_set_auxdata(context, 0, pRe, (void(*)(void*))sqlite3re_free);
-  }
-}
-
-/*
-** Invoke this routine to register the regexp() function with the
-** SQLite database connection.
-*/
-int sqlite3_regexp_init(
-  sqlite3 *db, 
-  char **pzErrMsg, 
-  const struct sqlite3_api_routines *pApi
-){
-  int rc = SQLITE_OK;
-#ifndef SQLITE_CORE
-	SQLITE_EXTENSION_INIT2(pApi)	/*sets up the 'vtable' to the host exe sqlite3 impl*/
-#else
-#endif
-  rc = sqlite3_create_function(db, "regexp", 2, SQLITE_UTF8, 0,
-                                 re_sql_func, 0, 0);
-  return rc;
-}
-/* end of file ext_regexp.c */
 /* start of file fs.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
@@ -28837,14 +28164,18 @@ int fsl_errno_to_rc(int errNo, int dflt){
     case EBUSY:
     case EPERM:
     case EDQUOT:
+    case EAGAIN:
+    case ETXTBSY:
       return FSL_RC_ACCESS;
     case EISDIR:
     case ENOTDIR:
       return FSL_RC_TYPE;
     case ENAMETOOLONG:
     case ELOOP:
+    case ERANGE:
       return FSL_RC_RANGE;
     case ENOENT:
+    case ESRCH:
       return FSL_RC_NOT_FOUND;
     case EEXIST:
     case ENOTEMPTY:
@@ -31832,8 +31163,8 @@ static fsl_id_t fsl_start_of_branch(fsl_cx * f, fsl_id_t rid,
   return -1;
 }
 
-int fsl_sym_to_rid( fsl_cx * f, char const * sym, fsl_satype_e type,
-                    fsl_id_t * rv ){
+int fsl_sym_to_rid( fsl_cx * const f, char const * sym,
+                    fsl_satype_e type, fsl_id_t * rv ){
   fsl_id_t rid = 0;
   fsl_id_t vid;
   fsl_size_t symLen;
@@ -38598,6 +37929,44 @@ int fsl_vpath_shortest( fsl_cx * const f, fsl_vpath * const path,
   return rc;
 }
 
+/**
+   Creates, if needed, the [ancestor] table, else clears its
+   contents. Returns 
+ */
+static int fsl__init_ancestor(fsl_cx * const f){
+  fsl_db * const db = fsl_cx_db_repo(f);
+  int rc;
+  if(db){
+    rc = fsl_db_exec_multi(db,
+                           "CREATE TEMP TABLE IF NOT EXISTS ancestor("
+                           "  rid INT UNIQUE,"
+                           "  generation INTEGER PRIMARY KEY"
+                           ");"
+                           "DELETE FROM TEMP.ancestor;");
+  }else{
+    rc = fsl_cx_err_set(f, FSL_RC_NOT_A_REPO,
+                        "Cannot compute ancestors without an "
+                        "opened repository.");
+  }
+  return rc ? fsl_cx_uplift_db_error2(f, db, rc) : 0;
+}
+
+int fsl_compute_direct_ancestors(fsl_cx * const f, fsl_id_t rid){
+  int rc = fsl__init_ancestor(f);
+  fsl_db * const db = rc ? NULL : fsl_needs_repo(f);
+  if(rc) return rc;
+  assert(db);
+  return fsl_db_exec_multi(db,
+      "WITH RECURSIVE g(x,i) AS ("
+      "  VALUES(%" FSL_ID_T_PFMT ",1)"
+      "  UNION ALL"
+      "  SELECT plink.pid, g.i+1 FROM plink, g"
+      "   WHERE plink.cid=g.x AND plink.isprim)"
+      "INSERT INTO ancestor(rid,generation) SELECT x,i FROM g;",
+      rid
+  );
+}
+
 int fsl_vpath_shortest_store_in_ancestor(fsl_cx * const f,
                                          fsl_id_t iFrom,
                                          fsl_id_t iTo,
@@ -38611,13 +37980,8 @@ int fsl_vpath_shortest_store_in_ancestor(fsl_cx * const f,
   if(!db) return FSL_RC_NOT_A_REPO;
   rc = fsl_vpath_shortest(f, &path, iFrom, iTo, true, false);
   if(rc) goto end;
-  rc = fsl_db_exec_multi(db,
-                         "CREATE TEMP TABLE IF NOT EXISTS ancestor("
-                         "  rid INT UNIQUE,"
-                         "  generation INTEGER PRIMARY KEY"
-                         ");"
-                         "DELETE FROM TEMP.ancestor;");
-  if(rc) goto dberr;
+  rc = fsl__init_ancestor(f);
+  if(rc) goto end;
   rc = fsl_db_prepare(db, &ins,
                       "INSERT INTO TEMP.ancestor(rid, generation) "
                       "VALUES(?,?)");
