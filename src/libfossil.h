@@ -3724,7 +3724,10 @@ FSL_EXPORT int fsl_dline_cmp_ignore_ws(const fsl_dline * const pA,
    to the caller, who must eventually pass it to fsl_free() to free
    it.
 
-   On error, neither *pnLine nor *pOut are modified and returns one
+   If z is NULL or n is 0, the input is assumed to be empty, 0 is returned,
+   (*pOut) will be set to NULL, and (*pnLine) will be set to 0.
+
+   On error, neither (*pnLine) nor (*pOut) are modified and returns one
    of:
 
    - FSL_RC_DIFF_BINARY if the input appears to be non-text.

@@ -25211,18 +25211,12 @@ static int fsl_diff_text_impl(
   }else{
     c.cmpLine = fsl_dline_cmp;
   }
-  rc = fsl_break_into_dlines(fsl_buffer_cstr(pA), fsl_buffer_size(pA),
+  rc = fsl_break_into_dlines(fsl_buffer_cstr(pA), (fsl_int_t)fsl_buffer_size(pA),
                              (uint32_t*)&c.nFrom, &c.aFrom, diffFlags);
   if(rc) goto end;
-  rc = fsl_break_into_dlines(fsl_buffer_cstr(pB), fsl_buffer_size(pB),
+  rc = fsl_break_into_dlines(fsl_buffer_cstr(pB), (fsl_int_t)fsl_buffer_size(pB),
                              (uint32_t*)&c.nTo, &c.aTo, diffFlags);
   if(rc) goto end;
-
-  if( c.aFrom==0 || c.aTo==0 ){
-    /* Binary data */
-    rc = FSL_RC_DIFF_BINARY;
-    goto end;
-  }
 
   /* Compute the difference */
   rc = fsl__diff_all(&c);
@@ -25440,8 +25434,12 @@ int fsl_break_into_dlines(const char *z, fsl_int_t n,
   fsl_dline *a = 0;
   const char *zNL;
 
+  if(!z || !n){
+    *pnLine = 0;
+    *pOut = NULL;
+    return 0;
+  }
   if( !fsl_count_lines(z, n, &nLine) ){
-    *pOut = 0;
     return FSL_RC_DIFF_BINARY;
   }
   assert( nLine>0 || z[0]=='\0' );
