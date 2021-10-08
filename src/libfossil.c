@@ -12085,10 +12085,13 @@ const int StaticAssert_scratchpadsCounts[
              /sizeof(fsl_cx_empty.scratchpads.used[0]))))
      ? 1 : -1
 ];
+
+#if FSL_ENABLE_SQLITE_REGEXP
 /**
    Used for setup and teardown of sqlite3_auto_extension().
 */
 static volatile long sg_autoregctr = 0;
+#endif
 
 int fsl_cx_init( fsl_cx ** tgt, fsl_cx_init_opt const * param ){
   static fsl_cx_init_opt paramDefaults = fsl_cx_init_opt_default_m;
