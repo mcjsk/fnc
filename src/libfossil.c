@@ -8447,6 +8447,85 @@ int fsl_ckout_vfile_ids( fsl_cx * f, fsl_id_t vid,
   return rc;
 }
 
+int fsl_ckout_file_content(fsl_cx * const f, bool relativeToCwd, char const * zName,
+                           fsl_buffer * const dest ){
+  int rc;
+  fsl_buffer * fname;
+  if(!fsl_needs_ckout(f)) return FSL_RC_NOT_A_CKOUT;
+  fname = fsl_cx_scratchpad(f);
+  rc = fsl_file_canonical_name2( relativeToCwd
+                                 ? NULL
+                                 : fsl_cx_ckout_dir_name(f, NULL),
+                                 zName, fname, 1 );
+  if(!rc){
+    assert(fname->used);
+    if('/'==fname->mem[fname->used-1]){
+      rc = fsl_cx_err_set(f, FSL_RC_MISUSE,"Filename may not have a trailing slash.");
+      /* If we don't do this, we might end up reading a directory entry in raw form.
+         Well, we still might. */
+    }else{
+      fsl_fstat fstat = fsl_fstat_empty;
+      const char * zCanon = fsl_buffer_cstr(fname);
+      rc = fsl_stat(zCanon, &fstat, true);
+      if(rc){
+        rc = fsl_cx_err_set(f, rc, "Cannot stat file; %b", fname);
+      }else if(FSL_FSTAT_TYPE_FILE!=fstat.type){
+        rc = fsl_cx_err_set(f, FSL_RC_TYPE,
+                            "Not a regular file file; %b", fname);
+      }else{
+        dest->used =0;
+        rc = fsl_buffer_fill_from_filename(dest, fsl_buffer_cstr(fname));
+        if(rc){
+          rc = fsl_cx_err_set(f, rc, "%s error reading file; %b",
+                              fsl_rc_cstr(rc), fname);
+        }
+      }
+    }
+  }
+  fsl_cx_scratchpad_yield(f, fname);
+  return rc;
+}
+
+int fsl_card_F_ckout_mtime(fsl_cx * const f,
+                           fsl_id_t vid,
+                           fsl_card_F const * fc,
+                           fsl_time_t * repoMtime,
+                           fsl_time_t * localMtime){
+
+  int rc = 0;
+  fsl_id_t fid = 0;
+  fsl_fstat fst = fsl_fstat_empty;
+  if(!fsl_needs_ckout(f)) return FSL_RC_NOT_A_CKOUT;
+  if(0<=vid){
+    fsl_ckout_version_info(f, &vid, NULL);
+  }
+  fid = fsl_repo_filename_fnid(f, fc->name);
+  if(fid<=0){
+    rc = fsl_cx_err_get(f, NULL, NULL);
+    return rc ? rc : fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
+                                    "Could not resolve filename: %s",
+                                    fc->name);
+  }
+  else if(!fid){
+    return fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
+                          "Could not resolve filename: %s",
+                          fc->name);
+  }
+  if(localMtime){
+    rc = fsl_cx_stat(f, 0, fc->name, &fst);
+    if(rc){
+      return fsl_cx_err_set(f, rc, "Could not stat() file: %s",
+                            fc->name);
+    }
+    *localMtime = fst.mtime;
+  }
+  if(repoMtime){
+    rc = fsl_mtime_of_manifest_file(f, vid, fid, repoMtime);
+  }
+  return rc;
+}
+
+
 #undef MARKER
 /* end of file checkout.c */
 /* start of file cli.c */
@@ -13650,9 +13729,9 @@ int fsl_cx_schema_ticket(fsl_cx * f, fsl_buffer * pOut){
 }
 
 
-int fsl_cx_stat2( fsl_cx * f, bool relativeToCwd,
-                  char const * zName, fsl_fstat * tgt,
-                  fsl_buffer * nameOut, bool fullPath){
+int fsl_cx_stat2( fsl_cx * const f, bool relativeToCwd,
+                  char const * zName, fsl_fstat * const tgt,
+                  fsl_buffer * const nameOut, bool fullPath){
   int rc;
   fsl_buffer * b = 0;
   fsl_buffer * bufRel = 0;
@@ -13705,9 +13784,9 @@ int fsl_cx_stat2( fsl_cx * f, bool relativeToCwd,
   return rc;
 }
 
-int fsl_cx_stat(fsl_cx * f, bool relativeToCwd, char const * zName,
-                fsl_fstat * tgt){
-  return fsl_cx_stat2(f, relativeToCwd, zName, tgt, NULL, 0);
+int fsl_cx_stat(fsl_cx * const f, bool relativeToCwd,
+                char const * zName, fsl_fstat * const tgt){
+  return fsl_cx_stat2(f, relativeToCwd, zName, tgt, NULL, false);
 }
 
 
@@ -17639,8 +17718,8 @@ static void fsl_deck_F_sort(fsl_deck * mf){
   fsl_card_F_list_sort(&mf->F);
 }
 
-int fsl_card_F_compare( fsl_card_F const * lhs,
-                        fsl_card_F const * rhs){
+int fsl_card_F_compare_name( fsl_card_F const * const lhs,
+                             fsl_card_F const * const rhs){
   return (lhs == rhs) ? 0 : fsl_card_F_cmp( lhs, rhs );
 }
 
@@ -25860,7 +25939,7 @@ static unsigned short diff_opt_context_lines(fsl_diff_opt const * cfg){
 /*
 ** Minimum of two values
 */
-static int minInt2(int a, int b){ return a<b ? a : b; }
+static int diffMin(int a, int b){ return a<b ? a : b; }
 
 /****************************************************************************/
 /*
@@ -25924,7 +26003,7 @@ static int match_dline2(const fsl_dline *pA, const fsl_dline *pB){
   for(i=1; i<=nA-best; i++){
     c = (unsigned char)zA[i];
     for(j=aFirst[c]; j<nB-best && memcmp(&zA[i],&zB[j],best)==0; j = aNext[j]){
-      int limit = minInt2(nA-i, nB-j);
+      int limit = diffMin(nA-i, nB-j);
       for(k=best; k<=limit && zA[k+i]==zB[k+j]; k++){}
       if( k>best ) best = k;
     }
@@ -26182,6 +26261,7 @@ static int fdb__format(
   while( mxr>2 && R[mxr-1]==0 && R[mxr-2]==0 ){ mxr -= 3; }
 
   ++pCfg->fileCount;
+  pBuilder->lnLHS = pBuilder->lnRHS = 0;
   if(pBuilder->start){
     rc = pBuilder->start(pBuilder);
     RC;
@@ -26879,24 +26959,6 @@ static fsl_diff_builder * fsl__diff_builder_json1(void){
   return rc;
 }
 
-#if 0
-/*
-  If we do unified diff line numbers, or HTML-mode unified diffs,
-  we'll probably want something like this for accumulating the various
-  columns.
-*/
-struct UnifiedTxt {
-  fsl_buffer cols[5];
-};
-typedef struct UnifiedTxt UnifiedTxt;
-static const UnifiedTxt_empty = {
-{fsl_buffer_empty_m, fsl_buffer_empty_m,
- fsl_buffer_empty_m, fsl_buffer_empty_m,
- fsl_buffer_empty_m}
-};
-#define USTATE UnifiedTxt * const ust = (UnifiedTxt *)b->pimpl
-#endif
-
 static int fdb__utxt_start(fsl_diff_builder * const b){
   int rc = 0;
   if(0==(FSL_DIFF2_NOINDEX & b->cfg->diffFlags)){
@@ -26979,29 +27041,12 @@ static int fdb__utxt_edit(fsl_diff_builder * const b,
 }
 
 static void fdb__utxt_finalize(fsl_diff_builder * const b){
-#if 0
-  USTATE;
-  for( int i = 0; i < sizeof(ust->cols)/sizeof(ust->cols[0]); ++i ){
-    fsl_buffer_clear(&usr->cols[i]);
-  }
-  fsl_free(ust);
-#endif
   fsl_free(b);
 }
-#undef USTATE
 
 static fsl_diff_builder * fsl__diff_builder_utxt(void){
   fsl_diff_builder * rc = fsl__diff_builder_alloc(0);
   if(!rc) return NULL;
-  /****
-  UnifiedTxt * ust = fsl_malloc(sizeof(UnifiedTxt));
-  if(!ust){
-    fsl_free(rc);
-    return NULL;
-  }else{
-    *usr = UnifiedTxt_empty;
-  }
-  *****/
   rc->chunkHeader = fdb__utxt_chunkHeader;
   rc->start = fdb__utxt_start;
   rc->skip = fdb__utxt_skip;
@@ -27182,6 +27227,291 @@ static fsl_diff_builder * fsl__diff_builder_tcl(void){
   return rc;
 }
 
+/**
+   Column indexes for SplitText::cols.
+*/
+enum SplitTextCols {
+STC_NUM1 = 0, STC_TEXT1,
+STC_MOD,
+STC_NUM2, STC_TEXT2,
+STC_SKIP,
+STC_count
+};
+/**
+   Internal state for the text-mode split diff builder.
+
+   This builder buffers its contents in 5 buffers: 2 each for the
+   LHS/RHS line numbers and content and one for the "change marker" (a
+   center column). Each line of the diff is stored as one
+   NUL-delimited string in each of the 5 colum buffers.
+
+   The STC_SKIP column is managed differently. It is zero-filled,
+   with a non-0 value at each line of the diff which represents a
+   skipped gap.
+*/
+struct SplitTxt {
+  /**
+     Number of lines and skipped regions.
+  */
+  uint32_t entries;
+  /**
+     Output columns. We have to buffer these for the sake
+     of finding a useful width.
+  */
+  fsl_buffer cols[STC_count];
+  /**
+     Largest column width we've yet seen.
+  */
+  uint32_t maxWidths[STC_count];
+};
+typedef struct SplitTxt SplitTxt;
+static const SplitTxt SplitTxt_empty = {
+0U,
+{fsl_buffer_empty_m, fsl_buffer_empty_m,
+ fsl_buffer_empty_m, fsl_buffer_empty_m,
+ fsl_buffer_empty_m, fsl_buffer_empty_m},
+{0,0,0,0,0,0}
+};
+#define SPLITSTATE(VNAME) SplitTxt * const VNAME = (SplitTxt *)b->pimpl
+
+
+static int fdb__splittxt_out(SplitTxt * const sst, int col, char const * z, uint32_t n){
+  return fsl_buffer_append(&sst->cols[col], z, n);
+}
+static int fdb__splittxt_out0(SplitTxt * const sst, int col, char const * z, uint32_t n){
+  int const rc = fsl_buffer_append(&sst->cols[col], z, n);
+  return rc ? rc : fsl_buffer_append(&sst->cols[col], "\0", 1);
+}
+static int fdb__splittxt_outf(SplitTxt * const sst, int col, char const * fmt, ...){
+  int rc = 0;
+  va_list va;
+  va_start(va,fmt);
+  rc = fsl_buffer_appendfv(&sst->cols[col], fmt, va);
+  va_end(va);
+  return rc;
+}
+
+static int fdb__splittxt_mod(SplitTxt * const sst, char ch){
+  char lbl[4] = {' ',' ',' ',0};
+  lbl[1] = ch;
+  return fsl_buffer_append(&sst->cols[STC_MOD], lbl, 4);
+}
+
+/** Outputs line numbers to b->cfg->out. */
+static int fdb__splittxt_lineno(fsl_diff_builder * const b, uint32_t lnL, uint32_t lnR){
+  int rc = 0;
+  if(1 || (FSL_DIFF2_LINE_NUMBERS & b->cfg->diffFlags)){
+    SPLITSTATE(sst);
+    rc = lnL
+      ? fdb__splittxt_outf(sst, STC_NUM1, "%6" PRIu32 " %c", lnL, 0)
+      : fdb__splittxt_out(sst, STC_NUM1, "       \0", 8);
+    if(0==rc){
+      rc = lnR
+        ? fdb__splittxt_outf(sst, STC_NUM2, "%6" PRIu32 " %c", lnR, 0)
+        : fdb__splittxt_out(sst, STC_NUM2, "       \0", 8);
+    }
+  }
+  return rc;
+}
+
+static int fdb__splittxt_start(fsl_diff_builder * const b){
+  int rc = 0;
+  SPLITSTATE(sst);
+  sst->entries = 0;
+  for(int i = 0; i < STC_count; ++i ){
+    if(sst->cols[i].used){
+      fsl_buffer_reuse(&sst->cols[i]);
+    }else{
+      fsl_size_t n;
+      switch(i){
+        case STC_NUM1: case STC_NUM2:
+        case STC_MOD:  case STC_SKIP: n = 1024; break;
+        case STC_TEXT1: case STC_TEXT2: n = 1024 * 20; break;
+        default:
+          assert(!"cannot happen!");
+          return FSL_RC_RANGE;
+      }
+      rc = fsl_buffer_reserve(&sst->cols[i], n);
+      if(rc) return rc;
+    }
+    switch(i){
+      case STC_TEXT1: case STC_TEXT2: sst->maxWidths[i] = 20; break;
+      default: sst->maxWidths[i] = 0; break;
+    }
+  }
+#if 0
+  if(0==(FSL_DIFF2_NOINDEX & b->cfg->diffFlags)){
+    rc = fdb__outf(b,"Index: %s\n%.66c\n",
+                   b->cfg->nameLHS/*RHS?*/, '=');
+  }
+#endif
+  if(0==rc){
+    rc = fdb__outf(b, "--- %s\n+++ %s\n",
+                   b->cfg->nameLHS, b->cfg->nameRHS);
+  }
+  return rc;
+}
+
+static int fdb__splittxt_entry(SplitTxt * const sst, unsigned char isSkip){
+  int rc = 0;
+  ++sst->entries;
+  if(sst->cols[STC_SKIP].capacity < sst->entries){
+    int const rc = fsl_buffer_reserve(&sst->cols[STC_SKIP],
+                                      sst->entries
+                                      ? sst->entries*3/2 : 1024);
+    if(rc) return rc;
+  }
+  sst->cols[STC_SKIP].mem[sst->entries-1] = isSkip;
+  return rc;
+}
+
+static int fdb__splittxt_skip(fsl_diff_builder * const b, uint32_t n, bool isFinal){
+  b->lnLHS += n;
+  b->lnRHS += n;
+  return fdb__splittxt_entry((SplitTxt*)b->pimpl, isFinal ? 2 : 1);
+}
+
+static int fdb__splittxt_common(fsl_diff_builder * const b, fsl_dline const * pLine){
+  int rc = 0;
+  SPLITSTATE(sst);
+  ++b->lnLHS;
+  ++b->lnRHS;
+  if(sst->maxWidths[STC_TEXT1]<pLine->n) sst->maxWidths[STC_TEXT1] = pLine->n;
+  if(sst->maxWidths[STC_TEXT2]<pLine->n) sst->maxWidths[STC_TEXT2] = pLine->n;
+  rc = fdb__splittxt_entry(sst, 0);
+  if(0==rc) rc = fdb__splittxt_lineno(b, b->lnLHS, b->lnRHS);
+  if(0==rc) rc = fdb__splittxt_mod(sst, ' ');
+  if(0==rc) rc = fdb__splittxt_out0(sst, STC_TEXT1, pLine->z, pLine->n);
+  if(0==rc) rc = fdb__splittxt_out0(sst, STC_TEXT2, pLine->z, pLine->n);
+  return rc;
+}
+static int fdb__splittxt_insertion(fsl_diff_builder * const b, fsl_dline const * pLine){
+  int rc = 0;
+  SPLITSTATE(sst);
+  ++b->lnRHS;
+  if(sst->maxWidths[STC_TEXT1]<pLine->n) sst->maxWidths[STC_TEXT1] = pLine->n;
+  rc = fdb__splittxt_entry(sst, 0);
+  if(0==rc) rc = fdb__splittxt_lineno(b, 0, b->lnRHS);
+  if(0==rc) rc = fdb__splittxt_mod(sst, '>');
+  if(0==rc) rc = fdb__splittxt_out(sst, STC_TEXT1, "\0", 1);
+  if(0==rc) rc = fdb__splittxt_out0(sst, STC_TEXT2, pLine->z, pLine->n);
+  return rc;
+}
+static int fdb__splittxt_deletion(fsl_diff_builder * const b, fsl_dline const * pLine){
+  int rc = 0;
+  SPLITSTATE(sst);
+  ++b->lnLHS;
+  if(sst->maxWidths[STC_TEXT2]<pLine->n) sst->maxWidths[STC_TEXT2] = pLine->n;
+  rc = fdb__splittxt_entry(sst, 0);
+  if(0==rc) rc = fdb__splittxt_lineno(b, b->lnLHS, 0);
+  if(0==rc) rc = fdb__splittxt_mod(sst, '<');
+  if(0==rc) rc = fdb__splittxt_out0(sst, STC_TEXT1, pLine->z, pLine->n);
+  if(0==rc) rc = fdb__splittxt_out(sst, STC_TEXT2, "\0", 1);
+  return rc;
+}
+
+static int fdb__splittxt_replacement(fsl_diff_builder * const b,
+                                fsl_dline const * lineLhs,
+                                fsl_dline const * lineRhs) {
+#if 0
+  int rc = b->deletion(b, lineLhs);
+  if(0==rc) rc = b->insertion(b, lineRhs);
+  return rc;
+#else    
+  int rc = 0;
+  SPLITSTATE(sst);
+  ++b->lnLHS;
+  ++b->lnRHS;
+  if(sst->maxWidths[STC_TEXT1]<lineLhs->n) sst->maxWidths[STC_TEXT1] = lineLhs->n;
+  if(sst->maxWidths[STC_TEXT2]<lineRhs->n) sst->maxWidths[STC_TEXT2] = lineRhs->n;
+  rc = fdb__splittxt_entry(sst, 0);
+  if(0==rc) rc = fdb__splittxt_lineno(b, b->lnLHS, b->lnRHS);
+  if(0==rc) rc = fdb__splittxt_mod(sst, '|');
+  if(0==rc) rc = fdb__splittxt_out0(sst, STC_TEXT1, lineLhs->z, lineLhs->n);
+  if(0==rc) rc = fdb__splittxt_out0(sst, STC_TEXT2, lineRhs->z, lineRhs->n);
+  return rc;
+#endif
+}
+                 
+static int fdb__splittxt_edit(fsl_diff_builder * const b,
+                         fsl_dline const * pX,
+                         fsl_dline const * pY){
+  return fdb__splittxt_replacement(b, pX, pY);
+}
+
+static int fdb__splittxt_finish(fsl_diff_builder * const b){
+  int rc = 0;
+  char const * z;
+  uint64_t cursor[STC_count] = {0,0,0,0,0};
+  fsl_size_t slen;
+  SPLITSTATE(sst);
+  for(uint32_t r = 0; 0==rc && r<sst->entries; ++r){
+    if(sst->cols[STC_SKIP].mem[r]){
+      rc = fdb__outf(b, "%.*c %.*c   %.*c %.*c\n",
+                     6, '~',
+                     (int)sst->maxWidths[STC_TEXT1], '~',
+                     6, '~',
+                     (int)sst->maxWidths[STC_TEXT2], '~');
+      continue;
+    }
+    for(int i = 0; 0==rc && i<STC_SKIP; ++i){
+      if(0 && !(FSL_DIFF2_LINE_NUMBERS & b->cfg->diffFlags)){
+        switch(i){
+          case STC_NUM1:
+          case STC_NUM2: continue;
+        }
+      }
+      z = fsl_buffer_cstr(&sst->cols[i]) + cursor[i];
+      assert((unsigned char *)z < (sst->cols[i].mem + sst->cols[i].used));
+      slen = fsl_strlen(z);
+      cursor[i] += slen + 1/*NUL*/;
+      rc = fdb__out(b, z, slen);
+      if(rc) break;
+      switch(i){
+        case STC_TEXT1: case STC_TEXT2:
+          if(slen < sst->maxWidths[i]){
+            rc = fdb__outf(b, "%.*c", (int)(sst->maxWidths[i] - slen), ' ');
+          }
+          break;
+        default:
+          break;
+      }
+    }
+    if(0==rc) rc = fdb__out(b, "\n", 1);
+  }
+  return rc;
+}
+
+static void fdb__splittxt_finalize(fsl_diff_builder * const b){
+  SPLITSTATE(sst);
+  for(int i = 0; i < STC_count; ++i ){
+    fsl_buffer_clear(&sst->cols[i]);
+  }
+  *b = fsl_diff_builder_empty;
+  fsl_free(b);
+}
+
+static fsl_diff_builder * fsl__diff_builder_splittxt(void){
+  fsl_diff_builder * rc =
+    fsl__diff_builder_alloc((fsl_size_t)sizeof(SplitTxt));
+  if(rc){
+    rc->chunkHeader = NULL;
+    rc->start = fdb__splittxt_start;
+    rc->skip = fdb__splittxt_skip;
+    rc->common = fdb__splittxt_common;
+    rc->insertion = fdb__splittxt_insertion;
+    rc->deletion = fdb__splittxt_deletion;
+    rc->replacement = fdb__splittxt_replacement;
+    rc->edit = fdb__splittxt_edit;
+    rc->finish = fdb__splittxt_finish;
+    rc->finalize = fdb__splittxt_finalize;
+    assert(0!=rc->pimpl);
+    SplitTxt * const sst = (SplitTxt*)rc->pimpl;
+    *sst = SplitTxt_empty;
+  }
+  return rc;
+}
+
 int fsl_diff_builder_factory( fsl_diff_builder_e type,
                               fsl_diff_builder **pOut ){
   int rc = FSL_RC_TYPE;
@@ -27199,7 +27529,8 @@ int fsl_diff_builder_factory( fsl_diff_builder_e type,
     case FSL_DIFF_BUILDER_TCL:
       factory = fsl__diff_builder_tcl;
       break;
-    case FSL_DIFF_BUILDER_SBS_TEXT:
+    case FSL_DIFF_BUILDER_SPLIT_TEXT:
+      factory = fsl__diff_builder_splittxt;
       break;
   }
   if(NULL!=factory){
@@ -27220,6 +27551,7 @@ int fsl_diff_builder_factory( fsl_diff_builder_e type,
 #undef MARKER
 #undef DTCL_BUFFER
 #undef blob_to_utf8_no_bom
+#undef SPLITSTATE
 /* end of file diff2.c */
 /* start of file encode.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 

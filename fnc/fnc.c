@@ -646,8 +646,6 @@ static int		 diff_non_checkin(fsl_buffer *, struct
 static int		 diff_file_artifact(fsl_buffer *, fsl_id_t,
 			    const fsl_card_F *, fsl_id_t, const fsl_card_F *,
 			    fsl_ckout_change_e, int, int, int);
-static int		 fsl_ckout_file_content(fsl_cx *, char const *,
-			    fsl_buffer *);
 static int		 show_diff(struct fnc_view *);
 static int		 write_diff(struct fnc_view *, char *);
 static int		 match_line(const void *, const void *);
@@ -3908,7 +3906,7 @@ diff_file(fsl_buffer *buf, fsl_buffer *bminus, const char *zminus,
 	if (fsl_file_size(abspath) < 0)
 		zplus = NULL_DEVICE;
 	else if (change != FSL_CKOUT_CHANGE_REMOVED) {
-		rc = fsl_ckout_file_content(f, abspath, &bplus);
+		rc = fsl_ckout_file_content(f, false, abspath, &bplus);
 		if (rc)
 			goto end;
 		/*
@@ -4141,37 +4139,6 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
 end:
 	fsl_buffer_clear(&fbuf1);
 	fsl_buffer_clear(&fbuf2);
-	return rc;
-}
-
-static int
-fsl_ckout_file_content(fsl_cx *f, char const *path, fsl_buffer *dest)
-{
-	fsl_buffer	fname = fsl_buffer_empty;
-	int		rc;
-
-	if (!f || !path || !*path || !dest)
-		return FSL_RC_MISUSE;
-	else if (!fsl_needs_ckout(f))
-		return FSL_RC_NOT_A_CKOUT;
-
-	fname.used = 0;
-	rc = fsl_file_canonical_name2(fsl_cx_ckout_dir_name(f, NULL), path,
-	    &fname, true);
-	if (!rc) {
-		assert(fname.used);
-		if (fname.mem[fname.used - 1] == '/')
-			rc = RC(FSL_RC_MISUSE,
-			    "Filename may not have a trailing slash [%s]",
-			    fsl_buffer_cstr(&fname));
-		else {
-			dest->used = 0;
-			rc = fsl_buffer_fill_from_filename(dest,
-			    fsl_buffer_cstr(&fname));
-		}
-	}
-	fsl_buffer_clear(&fname);
-
 	return rc;
 }
 

@@ -3474,14 +3474,20 @@ FSL_DIFF2_INVERT =       0x0200,
     builders. Normally a value of 0 is treated as the built-in
     default. */
 FSL_DIFF2_CONTEXT_ZERO =  0x0400,
-/** Only calculate diff if it's not "too big." Applies to all diff
-    builders and will cause the public APIs which hit this to return
-    FSL_RC_RANGE.  */
+/**
+   Only calculate diff if it's not "too big." Applies to all diff
+   builders and will cause the public APIs which hit this to return
+   FSL_RC_RANGE.
+*/
 FSL_DIFF2_NOTTOOBIG =    0x0800,
-/** Strip trailing CR before diffing. Applies to all diff builders. */
+/**
+   Strip trailing CR before diffing. Applies to all diff builders.
+*/
 FSL_DIFF2_STRIP_EOLCR =    0x1000,
-/** More precise but slower side-by-side diff algorithm, for diffs
-    which use that. */
+/**
+   More precise but slower side-by-side diff algorithm, for diffs
+   which use that.
+*/
 FSL_DIFF2_SLOW_SBS =       0x2000,
 /**
    Tells diff builders which support it to include line numbers in
@@ -3498,16 +3504,32 @@ FSL_DIFF2_NOINDEX = 0x20000,
    Tells the TCL diff builder that the complete output and each line
    should be wrapped in {...}.
 */
-FSL_DIFF2_TCL_BRACES = 0x40000
+FSL_DIFF2_TCL_BRACES = 0x40000,
+
+/**
+   Reserved for client-defined diff builder use.
+*/
+FSL_DIFF2_CLIENT1 = 0x01000000,
+/**
+   Reserved for client-defined diff builder use.
+*/
+FSL_DIFF2_CLIENT2 = 0x02000000,
+/**
+   Reserved for client-defined diff builder use.
+*/
+FSL_DIFF2_CLIENT3 = 0x04000000,
+/**
+   Reserved for client-defined diff builder use.
+*/
+FSL_DIFF2_CLIENT4 = 0x08000000
 };
 
 /**
-   UNDER CONSTRUCTION: part of an ongoing porting effort.
-
    An instance of this class is used to convey certain state to
    fsl_diff_builder objects. Some of this state is configuration
-   provided by the client and some is persistent state used during the
-   diff generation process.
+   provided by the client and some is volatile, used for communicating
+   common state to diff builder instances during the diff rendering
+   process.
 
    Certain fsl_diff_builder implementations may require that some
    ostensibly optional fields be filled out. Documenting that is TODO,
@@ -3741,36 +3763,26 @@ FSL_EXPORT int fsl_break_into_dlines(const char *z, fsl_int_t n,
 typedef struct fsl_diff_builder fsl_diff_builder;
 
 /**
-   UNDER CONSTRUCTION: part of an ongoing porting effort to
-   include the 2021-09 fossil diff-rendering improvements.
+   This class is the basis of libfossil's port of the diff engine
+   added to fossil(1) in 2021-09.
 
    A diff builder is an object responsible for formatting low-level
    diff info another form, typically for human readability but also
-   for machine readability (patches).
+   for machine readability (patches). The library generates a
+   low-level diff then feeds that through an algorithm which
+   determines which methods of this class to call, delegating all
+   rendering of the diff to an instance of this class.
 
    The internal APIs which drive each instance of this class guaranty
    that if any method of this class returns non-0 (an error code) then
    no futher methods will be called except for finalize().
-
-   TODOs:
-
-   - The current API does not allow these objects to be re-used: each
-   one is responsible for a single diff run, and that's it. We "should"
-   add a reset() method to each. The workflow would look something like:
-
-   1. Client creates builder.
-   2. Pass it to the diff builder driver (this library).
-   3. builder->start()
-   4. ... various methods...
-   5. builder->finish()
-   6. Return to caller, who may then call builder->reset(), tweak
-      builder->cfg as needed for next set of inputs, and return to
-      step 2 for the next file.
-   7. builder->finalize()
 */
 struct fsl_diff_builder {
-  /** Config info, owned by higher-level routines. Every diff builder
-      requires one of these. */
+  /**
+     Config info, owned by higher-level routines. Every diff builder
+     requires one of these. Builders are prohibited from modifying
+     these but the diff driver will.
+  */
   fsl_diff_opt * cfg;
   /**
      If not NULL, this is called once per diff to give the builder a
@@ -3788,6 +3800,9 @@ struct fsl_diff_builder {
      Must return 0 on success, non-0 on error. If it returns non-0,
      the only other method of the instance which may be legally called
      is finalize().
+
+     The diff driver sets this->lnLHS and this->lnRHS to 0 before
+     calling this.
   */
   int (*start)(fsl_diff_builder* const);
 
@@ -3823,40 +3838,68 @@ struct fsl_diff_builder {
      skipped. How it represents this is up to the impl. If the 3rd
      argument is true, this block represents the final part of the
      diff. Must return 0 on success, non-0 on error.
+
+     Typical common implementation details:
+
+     - Increment both this->lnLHS and this->lnRHS by n.
   */
   int (*skip)(fsl_diff_builder* const, uint32_t n, bool isFinal);
   /**
      Tells the builder that the given line represents one line of
      common output. Must return 0 on success, non-0 on error.
+
+     Typical common implementation details:
+
+     - Increment both this->lnLHS and this->lnRHS by 1.
   */
   int (*common)(fsl_diff_builder* const, fsl_dline const * line);
   /**
      Tells the builder that the given line represents an "insert" into
      the RHS. Must return 0 on success, non-0 on error.
+
+     Typical common implementation details:
+
+     - Increment this->lnRHS by 1.
   */
   int (*insertion)(fsl_diff_builder* const, fsl_dline const * line);
   /**
      Tells the builder that the given line represents a "deletion" - a
      line removed from the LHS. Must return 0 on success, non-0 on
      error.
+
+     Typical common implementation details:
+
+     - Increment this->lnLHS by 1.
   */
   int (*deletion)(fsl_diff_builder* const, fsl_dline const * line);
   /**
      Tells the builder that the given line represents a replacement
      from the LHS to the RHS. Must return 0 on success, non-0 on
-     error.
+     error. This differs from an "edit" in that the line being
+     replaced seems to have on relationship to the replacement. Even
+     so, builders are free to represent replacements and edits
+     identically, and are free to represent either or both as a pair
+     of deletion/insertion operations.
+
+     Typical common implementation details:
+
+     - Increment both this->lnLHS and this->lnRHS by 1.
   */
   int (*replacement)(fsl_diff_builder* const, fsl_dline const * lineLhs,
                      fsl_dline const * lineRhs);
   /**
      Tells the builder that the given line represents an "edit" from
      the LHS to the RHS. Must return 0 on success, non-0 on
-     error. Builds are free, syntax permitting, to usse the
+     error. Builders are free, syntax permitting, to usse the
      fsl_dline_change_spans() API to elaborate on edits for display
-     purposes or to the treat this as a single pair of calls to
-     this->deletion() an dthis->insertion(). In the latter case they
+     purposes or to treat this as a single pair of calls to
+     this->deletion() and this->insertion(). In the latter case they
      simply need to pass lineLhs to this->deletion() and lineRhs to
      this->insertion().
+
+     Typical common implementation details:
+
+     - Increment both this->lnLHS and this->lnRHS by 1.
   */
   int (*edit)(fsl_diff_builder* const, fsl_dline const * lineLhs,
               fsl_dline const * lineRhs);
@@ -3868,7 +3911,7 @@ struct fsl_diff_builder {
 
      This member may be NULL.
 
-     Any given implementation is free to collect its output in an
+     Implementations are free to collect all of their output in an
      internal representation and delay flushing it until this routine
      is called.
 
@@ -3885,20 +3928,27 @@ struct fsl_diff_builder {
      either case.
   */
   void (*finalize)(fsl_diff_builder* const);
-  /** Impl-specific diff-generation state. If it is owned by this
-      instance then this->finalize() must clean it up. */
+  /**
+     Impl-specific diff-generation state. If it is owned by this
+     instance then this->finalize() must clean it up.
+  */
   void * pimpl;
-  /** Impl-specific int for tracking basic output state, e.g.  of
-      opening/closing tags. This must not be modified by clients. */
+  /**
+     Impl-specific int for tracking basic output state, e.g.  of
+     opening/closing tags. This must not be modified by clients.
+  */
   unsigned int implFlags;
-  /* Trivia: a cursory examination of the diff builders in fossil(1)
-     suggests that we cannot move the management of
-     lnLHS/lnRHS from the concrete impls into the main API. */
-  /** Number of lines seen of the LHS content. It is up to
-      the concrete builder impl to update this if it's needed. */
+  /**
+     Number of lines seen of the LHS content. It is up to the concrete
+     builder impl to update this if it's needed. The core diff driver
+     sets this to 0 before calling this->start().
+  */
   uint32_t lnLHS;
-  /** Number of lines seen of the RHS content. It is up to
-      the concrete builder impl to update this if it's needed. */
+  /**
+     Number of lines seen of the RHS content. It is up to the concrete
+     builder impl to update this if it's needed. The core diff driver
+     sets this to 0 before calling this->start().
+  */
   uint32_t lnRHS;
 };
 
@@ -3975,7 +4025,10 @@ FSL_DIFF_BUILDER_JSON1,
    at the top of each file (use the FSL_DIFF2_NOINDEX flag in its
    fsl_diff_opt::diffFlags to disable that).
 
-   This diff builder supports the FSL_DIFF2_LINE_NUMBERS flag.
+   Supported flags:
+
+   - FSL_DIFF2_LINE_NUMBERS
+   - FSL_DIFF2_NOINDEX
 */
 FSL_DIFF_BUILDER_UNIFIED_TEXT,
 
@@ -3989,8 +4042,12 @@ FSL_DIFF_BUILDER_UNIFIED_TEXT,
    library.
 */
 FSL_DIFF_BUILDER_TCL,
-//! NYI
-FSL_DIFF_BUILDER_SBS_TEXT
+/**
+   A text-mode side-by-side (a.k.a. split) diff view. This diff
+   always behaves as if the FSL_DIFF2_LINE_NUMBERS flag were set
+   because its output is fairly useless without line numbers.
+*/
+FSL_DIFF_BUILDER_SPLIT_TEXT
 };
 typedef enum fsl_diff_builder_e fsl_diff_builder_e;
 
@@ -6922,8 +6979,8 @@ FSL_EXPORT fsl_id_t fsl_cx_last_insert_id(fsl_cx *f);
 
    @see fsl_cx_stat2()
 */
-FSL_EXPORT int fsl_cx_stat( fsl_cx * f, bool relativeToCwd,
-                            char const * zName, fsl_fstat * tgt );
+FSL_EXPORT int fsl_cx_stat( fsl_cx * const f, bool relativeToCwd,
+                            char const * zName, fsl_fstat * const tgt );
 
 /**
    This works identically to fsl_cx_stat(), but provides more
@@ -6946,8 +7003,11 @@ FSL_EXPORT int fsl_cx_stat( fsl_cx * f, bool relativeToCwd,
 
    @see fsl_cx_stat()
 */
-FSL_EXPORT int fsl_cx_stat2( fsl_cx * f, bool relativeToCwd, char const * zName,
-                             fsl_fstat * tgt, fsl_buffer * nameOut, bool fullPath);
+FSL_EXPORT int fsl_cx_stat2( fsl_cx * const f, bool relativeToCwd,
+                             char const * zName,
+                             fsl_fstat * const tgt,
+                             fsl_buffer * const nameOut,
+                             bool fullPath);
 
 
 /**
@@ -10609,15 +10669,20 @@ FSL_EXPORT fsl_card_F const * fsl_deck_F_search(fsl_deck *d, const char *zName);
 
 /**
    Given two F-card instances, this function compares their names
-   (case-insensitively). Returns a negative value if lhs is
+   (case-sensitively). Returns a negative value if lhs is
    lexically less than rhs, a positive value if lhs is lexically
    greater than rhs, and 0 if they are lexically equivalent (or are
    the same pointer).
 
+
+   Though fossil repositories may be case-insensitive, the F-cards use
+   a stable casing unless a file is removed and re-added with a
+   different case, so this comparison is case-sensitive..
+
    Results are undefined if either argument is NULL.
 */
-FSL_EXPORT int fsl_card_F_compare( fsl_card_F const * lhs,
-                                   fsl_card_F const * rhs);
+FSL_EXPORT int fsl_card_F_compare_name( fsl_card_F const * const lhs,
+                                        fsl_card_F const * const rhs);
 
 /**
    If fc->uuid refers to a blob in f's repository database then that
@@ -12371,13 +12436,13 @@ FSL_EXPORT int fsl_mtime_of_F_card(fsl_cx * f, fsl_id_t vid, fsl_card_F const * 
    zeroed out. Else li->list is expanded to hold at least n
    elements. Returns 0 on success, FSL_RC_OOM on allocation error.
  */
-int fsl_card_F_list_reserve( fsl_card_F_list * li, uint32_t n );
+FSL_EXPORT int fsl_card_F_list_reserve( fsl_card_F_list * li, uint32_t n );
 
 /**
    Frees all memory owned by li and the F-cards it contains. Does not
    free the li pointer.
 */
-void fsl_card_F_list_finalize( fsl_card_F_list * li );
+FSL_EXPORT void fsl_card_F_list_finalize( fsl_card_F_list * li );
 
 /**
    Holds options for use with fsl_branch_create().
@@ -15309,6 +15374,59 @@ FSL_EXPORT int fsl_vfile_unload_except(fsl_cx * f, fsl_id_t vid);
    to automatically recover from this situation.
 */
 FSL_EXPORT int fsl_ckout_fingerprint_check(fsl_cx * f);
+
+/**
+   Looks for the given file in f's current checkout. If relativeToCwd
+   then the name is resolved from the current directory, otherwise it is
+   assumed to be relative to the checkout root or an absolute path
+   with the checkout dir as a prefix of that path.
+
+   On success, 0 is returned and dest's gets populated with the
+   content of the file.
+
+   On error, non-0 is returned and, depending on the error type, dest
+   might be partially populated. f's error state will be updated to
+   describe the error.
+
+   Results are undefined if any pointer argument is NULL.
+
+   This function currently resolves symlinks on its way to the
+   content, but that behaviour may change in the future to reflect f's
+   symlink preferences.
+*/
+FSL_EXPORT int fsl_ckout_file_content(fsl_cx * const f, bool relativeToCwd,
+                                      char const * zName,
+                                      fsl_buffer * const dest);
+
+
+/**
+   Fetches the timestamp of the given F-card's name against the
+   filesystem and/or the most recent checkin in which it was modified
+   (as reported by fsl_mtime_of_manifest()). vid is the checkin
+   version to look at. If it's 0, the current checkout will be used.
+
+   On success, returns 0 and:
+
+   - If repoMtime is not NULL then (*repoMtime) is assigned to the
+   result of fsl_mtime_of_manifest_file() for the given file.
+
+   - If localMtime is not NULL then (*localMtime) is assigned to
+   the checkout-local timestamp of the file.
+
+   Returns non-0 on error. Some of the potential results include:
+
+   - FSL_RC_NOT_A_CKOUT.
+
+   - FSL_RC_NOT_FOUND if the filename cannot be resolved in the
+     requested version or cannot be stat()'d.
+
+   - FSL_RC_OOM.
+*/
+FSL_EXPORT int fsl_card_F_ckout_mtime(fsl_cx * const f, fsl_id_t vid,
+                                      fsl_card_F const * const fc,
+                                      fsl_time_t * repoMtime,
+                                      fsl_time_t * localMtime);
+
 
 #if defined(__cplusplus)
 } /*extern "C"*/
