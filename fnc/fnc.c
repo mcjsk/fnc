@@ -1,4 +1,3 @@
-/* -*- Mode: C; tab-width: 4; indent-tabs-mode: t; c-basic-offset: 4 -*- */ 
 /*
  * Copyright (c) 2021 Mark Jamsek <mark@jamsek.com>
  * Copyright (c) 2013-2021 Stephan Beal <https://wanderinghorse.net>
@@ -885,14 +884,14 @@ end:
 static int
 map_repo_path(char **requested_path)
 {
-	fsl_cx		* const f = fcli_cx();
+	fsl_cx		*const f = fcli_cx();
 	fsl_buffer	 buf = fsl_buffer_empty;
 	char		*canonpath = NULL, *ckoutdir = NULL, *path = NULL;
-	size_t		 len;
+	fsl_size_t	 len;
 	int		 rc = 0;
 	bool		 root;
-	fsl_size_t	ckoutDirLen = 0;
-	char const *	zCkoutDir = 0;
+	const char	*ckoutdir0 = 0;
+
 	*requested_path = NULL;
 
 	/* If no path argument is supplied, default to repository root. */
@@ -910,20 +909,24 @@ map_repo_path(char **requested_path)
 	}
 
 	/*
+	 * If no checkout (e.g., 'fnc timeline -R') copy the path verbatim to
+	 * check its validity against a deck of F cards in open_timeline_view().
+	 */
+	ckoutdir0 = fsl_cx_ckout_dir_name(f, &len);
+	if (!ckoutdir0) {
+		path = fsl_strdup(canonpath);
+		goto end;
+	}
+
+	/*
 	 * Use the cwd as the virtual root to canonicalise the supplied path if
 	 * it is either: (a) relative; or (b) the root of the current checkout.
 	 * Otherwise, use the root of the current checkout.
 	 */
-
-	zCkoutDir = fsl_cx_ckout_dir_name(f, &ckoutDirLen);
-	if(!zCkoutDir){
-		rc = RC(FSL_RC_NOT_A_CKOUT,"%s", "Checkout is currently required.");
-		goto end;
-	}
 	rc = fsl_cx_getcwd(f, &buf);
 	if (rc)
 		goto end;
-	ckoutdir = fsl_mprintf("%.*s", (int)ckoutDirLen-1, zCkoutDir);
+	ckoutdir = fsl_mprintf("%.*s", len - 1, ckoutdir0);
 	root = fsl_strcmp(ckoutdir, fsl_buffer_cstr(&buf)) == 0;
 	fsl_buffer_reuse(&buf);
 	rc = fsl_ckout_filename_check(f, (canonpath[0] == '.' || !root) ?
@@ -991,17 +994,6 @@ map_repo_path(char **requested_path)
 		}
 	}
 
-	/* Make path absolute from repository root. */
-	if (path[0] != '/' && (path[0] != '.' && path[1] != '/')) {
-		char *abspath;
-		if ((abspath = fsl_mprintf("/%s", path)) == NULL) {
-			rc = RC(FSL_RC_ERROR, "%s", "fsl_mprintf");
-			goto end;
-		}
-		fsl_free(path);
-		path = abspath;
-	}
-
 	/* Trim trailing slash if it exists. */
 	if (path[fsl_strlen(path) - 1] == '/')
 		path[fsl_strlen(path) - 1] = '\0';
@@ -1012,8 +1004,20 @@ end:
 	fsl_free(ckoutdir);
 	if (rc)
 		fsl_free(path);
-	else
+	else {
+		/* Make path absolute from repository root. */
+		if (path[0] != '/' && (path[0] != '.' && path[1] != '/')) {
+			char *abspath;
+			if ((abspath = fsl_mprintf("/%s", path)) == NULL) {
+				rc = RC(FSL_RC_ERROR, "%s", "fsl_mprintf");
+				goto end;
+			}
+			fsl_free(path);
+			path = abspath;
+		}
+
 		*requested_path = path;
+	}
 	return rc;
 }
 
@@ -1189,6 +1193,37 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 		    "WHERE objid=%d)", rid);
 	else
 		fsl_ckout_version_info(f, NULL, &s->curr_ckout_uuid);
+
+	/*
+	 * In 'fnc timeline -R repo.fossil path' case, check that path is a
+	 * valid repository path in the repository tree as at either the
+	 * latest check-in or the specified commit.
+	 */
+	if (s->curr_ckout_uuid == NULL && path[1]) {
+		fsl_deck d = fsl_deck_empty;
+		bool ispath = false;
+		rc = fsl_deck_load_sym(f, &d, fnc_init.sym ? fnc_init.sym :
+		    "tip", FSL_SATYPE_CHECKIN);
+		fsl_deck_F_rewind(&d);
+		if (fsl_deck_F_search(&d, path + 1 /* Slash */) == NULL) {
+			const fsl_card_F *cf;
+			do {
+				fsl_deck_F_next(&d, &cf);
+				if (cf == NULL)
+					break;
+				if (!fsl_strncmp(path + 1 /* Slash */, cf->name,
+				    fsl_strlen(path) - 1)) {
+					ispath = true;
+					break;
+				}
+			} while (cf);
+		} else
+			ispath = true;
+		fsl_deck_finalize(&d);
+		if (!ispath)
+			return RC(FSL_RC_NOT_FOUND, "'%s' invalid path in [%s]",
+			    path + 1, fnc_init.sym ? fnc_init.sym : "tip");
+	}
 
 	if ((rc = pthread_cond_init(&s->thread_cx.commit_consumer, NULL))) {
 		RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
