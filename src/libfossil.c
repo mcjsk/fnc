@@ -25927,10 +25927,10 @@ static int smallGap2(const int *R, int ma, int mb){
   return m<=2 || m<=(R[1]+R[2]+R[4]+R[5])/8;
 }
 
-static unsigned short diff_opt_context_lines(fsl_diff_opt const * cfg){
+static unsigned short diff_opt_context_lines(fsl_diff_opt const * opt){
   const unsigned short dflt = 5;
-  unsigned short n = cfg ? cfg->nContext : dflt;
-  if( !n && (cfg->diffFlags & FSL_DIFF2_CONTEXT_ZERO)==0 ){
+  unsigned short n = opt ? opt->nContext : dflt;
+  if( !n && (opt->diffFlags & FSL_DIFF2_CONTEXT_ZERO)==0 ){
     n = dflt;
   }
   return n;
@@ -26046,7 +26046,7 @@ static int match_dline2(const fsl_dline *pA, const fsl_dline *pB){
 static int diffBlockAlignment(
   const fsl_dline *aLeft, int nLeft,     /* Text on the left */
   const fsl_dline *aRight, int nRight,   /* Text on the right */
-  fsl_diff_opt *pCfg,                  /* Configuration options */
+  fsl_diff_opt *pOpt,                  /* Configuration options */
   unsigned char **pResult, /* Raw result */
   unsigned *pNResult               /* OUTPUT: length of result */
 ){
@@ -26081,7 +26081,7 @@ static int diffBlockAlignment(
   ** trade-off for reduced precision.
   */
   if( nLeft*nRight>DIFF_ALIGN_MX
-      && (pCfg->diffFlags & FSL_DIFF2_SLOW_SBS)==0 ){
+      && (pOpt->diffFlags & FSL_DIFF2_SLOW_SBS)==0 ){
     const fsl_dline *aSmall;   /* The smaller of aLeft and aRight */
     const fsl_dline *aBig;     /* The larger of aLeft and aRight */
     int nSmall, nBig;      /* Size of aSmall and aBig.  nSmall<=nBig */
@@ -26119,11 +26119,11 @@ static int diffBlockAlignment(
       iDivLeft = iDivSmall;
     }
     rc = diffBlockAlignment(aLeft,iDivLeft,aRight, iDivRight,
-                            pCfg, &a1, &n1);
+                            pOpt, &a1, &n1);
     if(!rc){
       rc = diffBlockAlignment(aLeft+iDivLeft, nLeft-iDivLeft,
                               aRight+iDivRight, nRight-iDivRight,
-                              pCfg, &a2, &n2);
+                              pOpt, &a2, &n2);
     }
     if(rc) goto bail;
     void * a1Re = fsl_realloc(a1, n1+n2 );
@@ -26237,7 +26237,7 @@ static int fdb__format(
 ){
   const fsl_dline *A;        /* Left side of the diff */
   const fsl_dline *B;        /* Right side of the diff */
-  fsl_diff_opt * const pCfg = pBuilder->cfg;
+  fsl_diff_opt * const pOpt = pBuilder->opt;
   const int *R;          /* Array of COPY/DELETE/INSERT triples */
   unsigned int a = 0;    /* Index of next line in A[] */
   unsigned int b = 0;    /* Index of next line in B[] */
@@ -26252,7 +26252,7 @@ static int fdb__format(
   int rc = 0;
 
 #define RC if(rc) goto end
-  nContext = diff_opt_context_lines(pCfg);
+  nContext = diff_opt_context_lines(pOpt);
   A = cx->aFrom;
   B = cx->aTo;
   R = cx->aEdit;
@@ -26260,7 +26260,7 @@ static int fdb__format(
   //MARKER(("nContext=%u, nEdit = %d, mxr=%u\n", nContext, cx->nEdit, mxr));
   while( mxr>2 && R[mxr-1]==0 && R[mxr-2]==0 ){ mxr -= 3; }
 
-  ++pCfg->fileCount;
+  ++pOpt->fileCount;
   pBuilder->lnLHS = pBuilder->lnRHS = 0;
   if(pBuilder->start){
     rc = pBuilder->start(pBuilder);
@@ -26279,15 +26279,15 @@ static int fdb__format(
     ** Only display the block if one side matches but the other side does
     ** not.
     */
-    if( pCfg->pRe ){
+    if( pOpt->pRe ){
       int hideBlock = 1;
       int xa = a, xb = b;
       for(i=0; hideBlock && i<nr; i++){
         int c1, c2;
         xa += R[r+i*3];
         xb += R[r+i*3];
-        c1 = re_dline_match(pCfg->pRe, &A[xa], R[r+i*3+1]);
-        c2 = re_dline_match(pCfg->pRe, &B[xb], R[r+i*3+2]);
+        c1 = re_dline_match(pOpt->pRe, &A[xa], R[r+i*3+1]);
+        c2 = re_dline_match(pOpt->pRe, &B[xb], R[r+i*3+2]);
         hideBlock = c1==c2;
         xa += R[r+i*3+1];
         xb += R[r+i*3+2];
@@ -26398,7 +26398,7 @@ static int fdb__format(
       }
 
       /* Try to find an alignment for the lines within this one block */
-      rc = diffBlockAlignment(&A[a], ma, &B[b], mb, pCfg,
+      rc = diffBlockAlignment(&A[a], ma, &B[b], mb, pOpt,
                               &alignment, &nAlign);
       RC;
       for(j=0; ma+mb>0; j++){
@@ -26504,41 +26504,44 @@ static int fdb__format(
    it. On error, *outRaw is not modified but pBuilder may have emitted
    partial output. That is not knowable for the general
    case. Ownership of pBuilder is not changed. If pBuilder is not NULL
-   then pBuilder->cfg must be non-NULL.
+   then pBuilder->opt must be non-NULL.
 */
 static int fsl_diff2_text_impl(fsl_buffer const *pA,
                                fsl_buffer const *pB,
                                fsl_diff_builder * const pBuilder,
-                               fsl_diff_opt const * const cfg,
+                               fsl_diff_opt const * const opt_,
                                int ** outRaw){
   int rc = 0;
   fsl_diff_cx c = fsl_diff_cx_empty;
   bool ignoreWs = false;
-  assert(cfg);
-  if(!pA || !pB || (pBuilder && outRaw)
-     || (!cfg && !outRaw)) return FSL_RC_MISUSE;
+  fsl_diff_opt opt = *opt_
+    /*we need a copy for the sake of the FSL_DIFF2_INVERT flag*/;
+  if(!pA || !pB || (pBuilder && outRaw)) return FSL_RC_MISUSE;
 
   blob_to_utf8_no_bom(pA, 0);
   blob_to_utf8_no_bom(pB, 0);
 
-  if( cfg->diffFlags & FSL_DIFF2_INVERT ){
+  if( opt.diffFlags & FSL_DIFF2_INVERT ){
+    char const * z;
     fsl_buffer const *pTemp = pA;
     pA = pB;
     pB = pTemp;
+    z = opt.hashRHS; opt.hashRHS = opt.hashLHS; opt.hashLHS = z;
+    z = opt.nameRHS; opt.nameRHS = opt.nameLHS; opt.nameLHS = z;
   }
 
-  ignoreWs = (cfg->diffFlags & FSL_DIFF2_IGNORE_ALLWS)!=0;
-  if(FSL_DIFF2_IGNORE_ALLWS==(cfg->diffFlags & FSL_DIFF2_IGNORE_ALLWS)){
+  ignoreWs = (opt.diffFlags & FSL_DIFF2_IGNORE_ALLWS)!=0;
+  if(FSL_DIFF2_IGNORE_ALLWS==(opt.diffFlags & FSL_DIFF2_IGNORE_ALLWS)){
     c.cmpLine = fsl_dline_cmp_ignore_ws;
   }else{
     c.cmpLine = fsl_dline_cmp;
   }
  
   rc = fsl_break_into_dlines(fsl_buffer_cstr(pA), (fsl_int_t)pA->used,
-                             (uint32_t*)&c.nFrom, &c.aFrom, cfg->diffFlags);
+                             (uint32_t*)&c.nFrom, &c.aFrom, opt.diffFlags);
   if(rc) goto end;
   rc = fsl_break_into_dlines(fsl_buffer_cstr(pB), (fsl_int_t)pB->used,
-                             (uint32_t*)&c.nTo, &c.aTo, cfg->diffFlags);
+                             (uint32_t*)&c.nTo, &c.aTo, opt.diffFlags);
   if(rc) goto end;
   if( c.aFrom==0 || c.aTo==0 ){
     /* Binary data */
@@ -26553,7 +26556,7 @@ static int fsl_diff2_text_impl(fsl_buffer const *pA,
     rc = FSL_RC_DIFF_WS_ONLY;
     goto end;
   }
-  if( (cfg->diffFlags & FSL_DIFF2_NOTTOOBIG)!=0 ){
+  if( (opt.diffFlags & FSL_DIFF2_NOTTOOBIG)!=0 ){
     int i, m, n;
     int const * const a = c.aEdit;
     int const mx = c.nEdit;
@@ -26565,7 +26568,7 @@ static int fsl_diff2_text_impl(fsl_buffer const *pA,
     }
   }
   //fsl__dump_triples(&c, __FILE__, __LINE__);
-  if( (cfg->diffFlags & FSL_DIFF2_NOOPT)==0 ){
+  if( (opt.diffFlags & FSL_DIFF2_NOOPT)==0 ){
     fsl__diff_optimize(&c);
   }
   //fsl__dump_triples(&c, __FILE__, __LINE__);
@@ -26587,7 +26590,10 @@ static int fsl_diff2_text_impl(fsl_buffer const *pA,
   */
 
   if(pBuilder){
+    fsl_diff_opt * const oldOpt = pBuilder->opt;
+    pBuilder->opt = &opt;
     rc = fdb__format(&c, pBuilder);
+    pBuilder->opt = oldOpt;
   }
   end:
   if(0==rc && outRaw){
@@ -26601,14 +26607,14 @@ static int fsl_diff2_text_impl(fsl_buffer const *pA,
 int fsl_diff_v2(fsl_buffer const * pv1,
                 fsl_buffer const * pv2,
                 fsl_diff_builder * const pBuilder){
-  return fsl_diff2_text_impl(pv1, pv2, pBuilder, pBuilder->cfg, NULL);
+  return fsl_diff2_text_impl(pv1, pv2, pBuilder, pBuilder->opt, NULL);
 }
 
 int fsl_diff_v2_raw(fsl_buffer const * pv1,
                     fsl_buffer const * pv2,
-                    fsl_diff_opt const * const cfg,
+                    fsl_diff_opt const * const opt,
                     int **outRaw ){
-  return fsl_diff2_text_impl(pv1, pv2, NULL, cfg, outRaw);
+  return fsl_diff2_text_impl(pv1, pv2, NULL, opt, outRaw);
 }
 
 
@@ -26631,15 +26637,15 @@ static fsl_diff_builder * fsl__diff_builder_alloc(fsl_size_t extra){
 
 static int fdb__out(fsl_diff_builder *const b,
                     char const *z, fsl_size_t n){
-  return b->cfg->out(b->cfg->outState, z, n);
+  return b->opt->out(b->opt->outState, z, n);
 }
 static int fdb__outf(fsl_diff_builder * const b,
                      char const *fmt, ...){
   int rc = 0;
   va_list va;
-  assert(b->cfg->out);
+  assert(b->opt->out);
   va_start(va,fmt);
-  rc = fsl_appendfv(b->cfg->out, b->cfg->outState, fmt, va);
+  rc = fsl_appendfv(b->opt->out, b->opt->outState, fmt, va);
   va_end(va);
   return rc;
 }
@@ -26647,17 +26653,17 @@ static int fdb__outf(fsl_diff_builder * const b,
 
 static int fdb__debug_start(fsl_diff_builder * const b){
   int rc = fdb__outf(b, "DEBUG builder starting up.\n");
-  if(0==rc && b->cfg->nameLHS){
-    rc = fdb__outf(b,"LHS: %s\n", b->cfg->nameLHS);
+  if(0==rc && b->opt->nameLHS){
+    rc = fdb__outf(b,"LHS: %s\n", b->opt->nameLHS);
   }
-  if(0==rc && b->cfg->nameRHS){
-    rc = fdb__outf(b,"RHS: %s\n", b->cfg->nameRHS);
+  if(0==rc && b->opt->nameRHS){
+    rc = fdb__outf(b,"RHS: %s\n", b->opt->nameRHS);
   }
-  if(0==rc && b->cfg->hashLHS){
-    rc = fdb__outf(b,"LHS hash: %s\n", b->cfg->hashLHS);
+  if(0==rc && b->opt->hashLHS){
+    rc = fdb__outf(b,"LHS hash: %s\n", b->opt->hashLHS);
   }
-  if(0==rc && b->cfg->hashRHS){
-    rc = fdb__outf(b,"RHS hash: %s\n", b->cfg->hashRHS);
+  if(0==rc && b->opt->hashRHS){
+    rc = fdb__outf(b,"RHS hash: %s\n", b->opt->hashRHS);
   }
   return rc;
 }
@@ -26817,7 +26823,7 @@ static fsl_diff_builder * fsl__diff_builder_debug(void){
     assert(0==rc->implFlags);
     assert(0==rc->lnLHS);
     assert(0==rc->lnRHS);
-    assert(NULL==rc->cfg);
+    assert(NULL==rc->opt);
   }
   return rc;
 }
@@ -26854,12 +26860,12 @@ static int fdb__outj(fsl_diff_builder * const b,
 
 static int fdb__json1_start(fsl_diff_builder * const b){
   int rc = fdb__outf(b, "{\"hashLHS\": %!j, \"hashRHS\": %!j, ",
-                     b->cfg->hashLHS, b->cfg->hashRHS);
-  if(0==rc && b->cfg->nameLHS){
-    rc = fdb__outf(b, "\"nameLHS\": %!j, ", b->cfg->nameLHS);
+                     b->opt->hashLHS, b->opt->hashRHS);
+  if(0==rc && b->opt->nameLHS){
+    rc = fdb__outf(b, "\"nameLHS\": %!j, ", b->opt->nameLHS);
   }
-  if(0==rc && b->cfg->nameRHS){
-    rc = fdb__outf(b, "\"nameRHS\": %!j, ", b->cfg->nameRHS);
+  if(0==rc && b->opt->nameRHS){
+    rc = fdb__outf(b, "\"nameRHS\": %!j, ", b->opt->nameRHS);
   }
   if(0==rc){
     rc = fdb__out(b, "\"diff\":[", 8);
@@ -26954,20 +26960,20 @@ static fsl_diff_builder * fsl__diff_builder_json1(void){
     assert(0==rc->implFlags);
     assert(0==rc->lnLHS);
     assert(0==rc->lnRHS);
-    assert(NULL==rc->cfg);
+    assert(NULL==rc->opt);
   }
   return rc;
 }
 
 static int fdb__utxt_start(fsl_diff_builder * const b){
   int rc = 0;
-  if(0==(FSL_DIFF2_NOINDEX & b->cfg->diffFlags)){
+  if(0==(FSL_DIFF2_NOINDEX & b->opt->diffFlags)){
     rc = fdb__outf(b,"Index: %s\n%.66c\n",
-                   b->cfg->nameLHS/*RHS?*/, '=');
+                   b->opt->nameLHS/*RHS?*/, '=');
   }
   if(0==rc){
     rc = fdb__outf(b, "--- %s\n+++ %s\n",
-                   b->cfg->nameLHS, b->cfg->nameRHS);
+                   b->opt->nameLHS, b->opt->nameRHS);
   }
   return rc;
 }
@@ -26988,10 +26994,10 @@ static int fdb__utxt_skip(fsl_diff_builder * const b, uint32_t n, bool isFinal){
   return 0;
 }
 
-/** Outputs line numbers to b->cfg->out. */
+/** Outputs line numbers to b->opt->out. */
 static int fdb__utxt_lineno(fsl_diff_builder * const b, uint32_t lnL, uint32_t lnR){
   int rc = 0;
-  if(FSL_DIFF2_LINE_NUMBERS & b->cfg->diffFlags){
+  if(FSL_DIFF2_LINE_NUMBERS & b->opt->diffFlags){
     rc = lnL
       ? fdb__outf(b, "%6" PRIu32 " ", lnL)
       : fdb__out(b, "       ", 7);
@@ -27067,9 +27073,9 @@ struct DiBuTcl {
 typedef struct DiBuTcl DiBuTcl;
 static const DiBuTcl DiBuTcl_empty = {fsl_buffer_empty_m};
 
-#define BR_OPEN if(FSL_DIFF2_TCL_BRACES & b->cfg->diffFlags) \
+#define BR_OPEN if(FSL_DIFF2_TCL_BRACES & b->opt->diffFlags) \
     rc = fdb__out(b, "{", 1)
-#define BR_CLOSE if(FSL_DIFF2_TCL_BRACES & b->cfg->diffFlags) \
+#define BR_CLOSE if(FSL_DIFF2_TCL_BRACES & b->opt->diffFlags) \
     rc = fdb__out(b, "}", 1)
 
 #define DTCL_BUFFER(B) &((DiBuTcl*)(B)->pimpl)->str
@@ -27090,13 +27096,13 @@ static int fdb__tcl_start(fsl_diff_builder * const b){
   fsl_buffer_reuse(DTCL_BUFFER(b));
   BR_OPEN;
   if(0==rc) rc = fdb__out(b, "\n", 1);
-  if(0==rc && b->cfg->nameLHS){
+  if(0==rc && b->opt->nameLHS){
     char const * zRHS =
-      b->cfg->nameRHS ? b->cfg->nameRHS : b->cfg->nameLHS;
+      b->opt->nameRHS ? b->opt->nameRHS : b->opt->nameLHS;
     BR_OPEN;
     if(0==rc) rc = fdb__out(b, "FILE ", 5);
-    if(0==rc) rc = fdb__outtcl(b, b->cfg->nameLHS,
-                               (unsigned)fsl_strlen(b->cfg->nameLHS), ' ');
+    if(0==rc) rc = fdb__outtcl(b, b->opt->nameLHS,
+                               (unsigned)fsl_strlen(b->opt->nameLHS), ' ');
     if(0==rc) rc = fdb__outtcl(b, zRHS,
                                (unsigned)fsl_strlen(zRHS), 0);
     if(0==rc) {BR_CLOSE;}
@@ -27188,7 +27194,7 @@ static int fdb__tcl_edit(fsl_diff_builder * const b,
 static int fdb__tcl_finish(fsl_diff_builder * const b){
   int rc = 0;
   BR_CLOSE;
-  if(0==rc && FSL_DIFF2_TCL_BRACES & b->cfg->diffFlags){
+  if(0==rc && FSL_DIFF2_TCL_BRACES & b->opt->diffFlags){
     rc = fdb__out(b, "\n", 1);
   }
   return rc;
@@ -27297,10 +27303,10 @@ static int fdb__splittxt_mod(SplitTxt * const sst, char ch){
   return fsl_buffer_append(&sst->cols[STC_MOD], lbl, 4);
 }
 
-/** Outputs line numbers to b->cfg->out. */
+/** Outputs line numbers to b->opt->out. */
 static int fdb__splittxt_lineno(fsl_diff_builder * const b, uint32_t lnL, uint32_t lnR){
   int rc = 0;
-  if(1 || (FSL_DIFF2_LINE_NUMBERS & b->cfg->diffFlags)){
+  if(1 || (FSL_DIFF2_LINE_NUMBERS & b->opt->diffFlags)){
     SPLITSTATE(sst);
     rc = lnL
       ? fdb__splittxt_outf(sst, STC_NUM1, "%6" PRIu32 " %c", lnL, 0)
@@ -27340,14 +27346,19 @@ static int fdb__splittxt_start(fsl_diff_builder * const b){
     }
   }
 #if 0
-  if(0==(FSL_DIFF2_NOINDEX & b->cfg->diffFlags)){
+  if(0==(FSL_DIFF2_NOINDEX & b->opt->diffFlags)){
     rc = fdb__outf(b,"Index: %s\n%.66c\n",
-                   b->cfg->nameLHS/*RHS?*/, '=');
+                   b->opt->nameLHS/*RHS?*/, '=');
   }
 #endif
   if(0==rc){
-    rc = fdb__outf(b, "--- %s\n+++ %s\n",
-                   b->cfg->nameLHS, b->cfg->nameRHS);
+    rc = fdb__outf(b, "--- %s%s%s\n+++ %s%s%s\n",
+                   b->opt->nameLHS,
+                   b->opt->hashLHS ? " " : "",
+                   b->opt->hashLHS ? b->opt->hashLHS : "",
+                   b->opt->nameRHS,
+                   b->opt->hashRHS ? " " : "",
+                   b->opt->hashRHS ? b->opt->hashRHS : "");
   }
   return rc;
 }
@@ -27455,7 +27466,7 @@ static int fdb__splittxt_finish(fsl_diff_builder * const b){
       continue;
     }
     for(int i = 0; 0==rc && i<STC_SKIP; ++i){
-      if(0 && !(FSL_DIFF2_LINE_NUMBERS & b->cfg->diffFlags)){
+      if(0 && !(FSL_DIFF2_LINE_NUMBERS & b->opt->diffFlags)){
         switch(i){
           case STC_NUM1:
           case STC_NUM2: continue;

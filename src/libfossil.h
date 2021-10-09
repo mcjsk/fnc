@@ -3429,6 +3429,7 @@ FSL_DIFF_ANSI_COLOR =     0x2000
    to facilitate/enable the creation of custom diff formats.
 
    @see fsl_diff_v2()
+   @deprecated Prefer fsl_diff_v2() for new code.
 */
 FSL_EXPORT int fsl_diff_text(fsl_buffer const *pA, fsl_buffer const *pB,
                              fsl_output_f out, void * outState,
@@ -3444,6 +3445,9 @@ FSL_EXPORT int fsl_diff_text(fsl_buffer const *pA, fsl_buffer const *pB,
    @endcode
 
    Except that it returns FSL_RC_MISUSE if !pOut.
+
+   @see fsl_diff_v2()
+   @deprecated Prefer fsl_diff_v2() for new code.
 */
 FSL_EXPORT int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
                                        fsl_buffer *pOut, short contextLines,
@@ -3546,7 +3550,9 @@ struct fsl_diff_opt {
   */
   unsigned short nContext;
   /**
-     Column width for side-by-side, a.k.a. split, diffs.
+     Column width for side-by-side, a.k.a. split, diffs. Not currently
+     honored by FSL_DIFF_BUILDER_SPLIT_TEXT: it uses as much width as
+     is necessary to render whole lines.
   */
   short columnWidth;
   /**
@@ -3782,8 +3788,15 @@ struct fsl_diff_builder {
      Config info, owned by higher-level routines. Every diff builder
      requires one of these. Builders are prohibited from modifying
      these but the diff driver will.
+
+     Note that the diff driver may make a bitwise copy of this object
+     and use _that_ one for the actual diff generation. That is,
+     methods of this class must never assume that this member's
+     pointer refers to a specific object. (This leeway is necessary in
+     order to implement diff inversion (swapping the LHS/RHS of a
+     diff).)
   */
-  fsl_diff_opt * cfg;
+  fsl_diff_opt * opt;
   /**
      If not NULL, this is called once per diff to give the builder a
      chance to perform any bootstrapping initialization or header
