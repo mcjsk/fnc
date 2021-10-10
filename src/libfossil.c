@@ -8567,8 +8567,9 @@ int fsl_card_F_ckout_mtime(fsl_cx * const f,
   {/*transient*/      \
     NULL/*repoDb*/,      \
     NULL/*userArg*/, \
-    0/*helpRequested*/                   \
-  },                                                            \
+    0/*helpRequested*/, \
+    false/*versionRequested*/\
+  },                    \
   {/*config*/      \
     -1/*traceSql*/,      \
     fsl_outputer_empty_m      \
@@ -8754,6 +8755,8 @@ static const fcli_cliflag FCliFlagsGlobal[] = {
   FCLI_FLAG_BOOL_X("?","help",NULL,
                    fcli_flag_f_help,
                    "Show app help. Also triggered if the first non-flag is \"help\"."),
+  FCLI_FLAG_BOOL(0,"lib-version", &fcli.transient.versionRequested,
+                 "Show app version number."),
   FCLI_FLAG("R","repo","REPO-FILE",&fcli.transient.repoDbArg,
             "Selects a specific repository database, ignoring the one "
             "used by the current directory's checkout (if any)."),
@@ -9290,6 +9293,12 @@ static int fcli_setup2(int argc, char const * const * argv,
        for display in the help text. */
     fcli_help();
     rc = FCLI_RC_HELP;
+  }else if(fcli.transient.versionRequested){
+    f_out("libfossil version: %s\nCheckin: %s\nCheckin timestamp: %s\n",
+          fsl_library_version(),
+          FSL_LIB_VERSION_HASH,
+          FSL_LIB_VERSION_TIMESTAMP);
+    rc = FCLI_RC_HELP;
   }else{
     rc = fcli_process_flags(flags);
     if(rc) assert(fcli__error->msg.used);
@@ -9726,6 +9735,27 @@ char const * fcli_progname(){
     }
   }
   return zEnd;
+}
+
+void fcli_diff_colors(fsl_diff_opt * const tgt, fcli_diff_colors_e theme){
+  char const * zIns = 0;
+  char const * zEdit = 0;
+  char const * zDel = 0;
+  char const * zReset = 0;
+  switch(theme){
+    case FCLI_DIFF_COLORS_RG:
+          zIns = "\x1b[32m";
+          zEdit = "\x1b[36m";
+          zDel = "\x1b[31m";
+          zReset = "\x1b[0m";
+          break;
+    case FCLI_DIFF_COLORS_NONE:
+    default: break;
+  }
+  tgt->ansiColor.insertion = zIns;
+  tgt->ansiColor.edit = zEdit;
+  tgt->ansiColor.deletion = zDel;
+  tgt->ansiColor.reset = zReset;
 }
 
 #undef FCLI_V3
@@ -14251,6 +14281,11 @@ int fsl_ckout_fingerprint_check(fsl_cx * f){
                       "fingerprints.");
   goto end;
 }
+
+bool fsl_cx_has_ckout(fsl_cx const * const f ){
+  return f->ckout.dir ? true : false;
+}
+
 
 #if 0
 struct tm * fsl_cx_localtime( fsl_cx const * f, const time_t * clock ){
@@ -25929,7 +25964,7 @@ static int smallGap2(const int *R, int ma, int mb){
 
 static unsigned short diff_opt_context_lines(fsl_diff_opt const * opt){
   const unsigned short dflt = 5;
-  unsigned short n = opt ? opt->nContext : dflt;
+  unsigned short n = opt ? opt->contextLines : dflt;
   if( !n && (opt->diffFlags & FSL_DIFF2_CONTEXT_ZERO)==0 ){
     n = dflt;
   }
@@ -26239,37 +26274,41 @@ static int fdb__format(
   const fsl_dline *B;        /* Right side of the diff */
   fsl_diff_opt * const pOpt = pBuilder->opt;
   const int *R;          /* Array of COPY/DELETE/INSERT triples */
-  unsigned int a = 0;    /* Index of next line in A[] */
-  unsigned int b = 0;    /* Index of next line in B[] */
+  unsigned int a;    /* Index of next line in A[] */
+  unsigned int b;    /* Index of next line in B[] */
   unsigned int r;        /* Index into R[] */
   unsigned int nr;       /* Number of COPY/DELETE/INSERT triples to process */
   unsigned int mxr;      /* Maximum value for r */
   unsigned int na, nb;   /* Number of lines shown from A and B */
   unsigned int i, j;     /* Loop counters */
   unsigned int m, ma, mb;/* Number of lines to output */
-  signed int skip = 0;   /* Number of lines to skip */
-  unsigned int nContext; /* Lines of context above and below each change */
+  signed int skip;   /* Number of lines to skip */
+  unsigned int contextLines; /* Lines of context above and below each change */
+  unsigned short passNumber = 0;
   int rc = 0;
 
 #define RC if(rc) goto end
-  nContext = diff_opt_context_lines(pOpt);
+  pass_again:
+  contextLines = diff_opt_context_lines(pOpt);
+  skip = 0;
+  a = b = 0;
   A = cx->aFrom;
   B = cx->aTo;
   R = cx->aEdit;
   mxr = cx->nEdit;
-  //MARKER(("nContext=%u, nEdit = %d, mxr=%u\n", nContext, cx->nEdit, mxr));
+  //MARKER(("contextLines=%u, nEdit = %d, mxr=%u\n", contextLines, cx->nEdit, mxr));
   while( mxr>2 && R[mxr-1]==0 && R[mxr-2]==0 ){ mxr -= 3; }
 
-  ++pOpt->fileCount;
   pBuilder->lnLHS = pBuilder->lnRHS = 0;
   if(pBuilder->start){
+    pBuilder->passNumber = ++passNumber;
     rc = pBuilder->start(pBuilder);
     RC;
   }
 
   for(r=0; r<mxr; r += 3*nr){
     /* Figure out how many triples to show in a single block */
-    for(nr=1; R[r+nr*3]>0 && R[r+nr*3]<(int)nContext*2; nr++){}
+    for(nr=1; R[r+nr*3]>0 && R[r+nr*3]<(int)contextLines*2; nr++){}
 
 #if 0
     /* MISSING: this "should" be replaced by a stateful predicate
@@ -26303,9 +26342,9 @@ static int fdb__format(
     /* Figure out how many lines of A and B are to be displayed
     ** for this change block.
     */
-    if( R[r]>(int)nContext ){
-      na = nb = nContext;
-      skip = R[r] - nContext;
+    if( R[r]>(int)contextLines ){
+      na = nb = contextLines;
+      skip = R[r] - contextLines;
     }else{
       na = nb = R[r];
       skip = 0;
@@ -26314,9 +26353,9 @@ static int fdb__format(
       na += R[r+i*3+1];
       nb += R[r+i*3+2];
     }
-    if( R[r+nr*3]>(int)nContext ){
-      na += nContext;
-      nb += nContext;
+    if( R[r+nr*3]>(int)contextLines ){
+      na += contextLines;
+      nb += contextLines;
     }else{
       na += R[r+nr*3];
       nb += R[r+nr*3];
@@ -26326,9 +26365,15 @@ static int fdb__format(
       nb += R[r+i*3];
     }
 
-
     //MARKER(("Chunk header... a=%u, b=%u, na=%u, nb=%u, skip=%d\n", a, b, na, nb, skip));
-    if(pBuilder->chunkHeader){
+    if(pBuilder->chunkHeader
+#if 0
+       /* The following two bits are a kludge to keep from injecting
+          a chunk header between chunks which are directly adjacent */
+       && pBuilder->lnLHS != (uint32_t)(na ? a+skip+1 : a+skip)-1
+       && pBuilder->lnRHS != (uint32_t)(nb ? b+skip+1 : b+skip)-1
+#endif
+       ){
       rc = pBuilder->chunkHeader(pBuilder,
                                  (uint32_t)(na ? a+skip+1 : a+skip),
                                  (uint32_t)na,
@@ -26341,11 +26386,11 @@ static int fdb__format(
     a += skip;
     b += skip;
     m = R[r] - skip;
-    if( r ) skip -= nContext;
+    if( r ) skip -= contextLines;
 
     //MARKER(("Show the initial common... a=%u, b=%u, m=%u, r=%u, skip=%d\n", a, b, m, r, skip));
     if( skip>0 ){
-      if( NULL==pBuilder->chunkHeader && skip<(int)nContext ){
+      if( NULL==pBuilder->chunkHeader && skip<(int)contextLines ){
         /* 2021-09-27: BUG: this is incompatible with unified diff
            format. The generated header lines say we're skipping X
            lines but we then end up including lines which that header
@@ -26360,14 +26405,14 @@ static int fdb__format(
         */
         /* If the amount to skip is less that the context band, then
         ** go ahead and show the skip band as it is not worth eliding */
-        //MARKER(("skip %d < nContext %d\n", skip, nContext));
+        //MARKER(("skip %d < contextLines %d\n", skip, contextLines));
         /* from fossil(1) from formatDiff() */
         for(j=0; 0==rc && j<(unsigned)skip; j++){
           //MARKER(("(A) COMMON\n"));
           rc = pBuilder->common(pBuilder, &A[a+j-skip]);
         }
       }else{
-        rc = pBuilder->skip(pBuilder, skip, 0);
+        rc = pBuilder->skip(pBuilder, skip);
       }
       RC;
     }
@@ -26424,7 +26469,6 @@ static int fdb__format(
           case 3: {
             /* The left line is changed into the right line */
             if( cx->cmpLine(&A[a], &B[b])==0 ){
-              //MARKER(("C common\n"));
               rc = pBuilder->common(pBuilder, &A[a]);
             }else{
               rc = pBuilder->edit(pBuilder, &A[a], &B[b]);
@@ -26471,20 +26515,23 @@ static int fdb__format(
     /* Show the final common area */
     assert( nr==i );
     m = R[r+nr*3];
-    if( m>nContext ) m = nContext;
-    for(j=0; 0==rc && j<m && j<nContext; j++){
+    if( m>contextLines ) m = contextLines;
+    for(j=0; 0==rc && j<m && j<contextLines; j++){
       //MARKER(("E common\n"));
       rc = pBuilder->common(pBuilder, &A[a+j]);
     }
     RC;
   }
-  if( R[r]>(int)nContext ){
-    rc = pBuilder->skip(pBuilder, R[r] - nContext, true);
+  if( R[r]>(int)contextLines ){
+    rc = pBuilder->skip(pBuilder, R[r] - contextLines);
   }
   end:
 #undef RC
-  if(0==rc && pBuilder->finish){
-    pBuilder->finish(pBuilder);
+  if(0==rc){
+    if(pBuilder->finish) pBuilder->finish(pBuilder);
+    if(pBuilder->twoPass && 1==passNumber){
+      goto pass_again;
+    }
   }
   return rc;
 }
@@ -26514,6 +26561,7 @@ static int fsl_diff2_text_impl(fsl_buffer const *pA,
   int rc = 0;
   fsl_diff_cx c = fsl_diff_cx_empty;
   bool ignoreWs = false;
+  int ansiOptCount = 0;
   fsl_diff_opt opt = *opt_
     /*we need a copy for the sake of the FSL_DIFF2_INVERT flag*/;
   if(!pA || !pB || (pBuilder && outRaw)) return FSL_RC_MISUSE;
@@ -26529,7 +26577,18 @@ static int fsl_diff2_text_impl(fsl_buffer const *pA,
     z = opt.hashRHS; opt.hashRHS = opt.hashLHS; opt.hashLHS = z;
     z = opt.nameRHS; opt.nameRHS = opt.nameLHS; opt.nameLHS = z;
   }
-
+#define AOPT(OPT) \
+  if(opt.ansiColor.OPT) ansiOptCount += (*opt.ansiColor.OPT) ? 1 : 0; \
+  else opt.ansiColor.OPT = ""
+  AOPT(insertion);
+  AOPT(edit);
+  AOPT(deletion);
+#undef AOPT
+  if(0==ansiOptCount){
+    opt.ansiColor.reset = "";
+  }else if(!opt.ansiColor.reset || !*opt.ansiColor.reset){
+    opt.ansiColor.reset = "\x1b[0m";
+  }
   ignoreWs = (opt.diffFlags & FSL_DIFF2_IGNORE_ALLWS)!=0;
   if(FSL_DIFF2_IGNORE_ALLWS==(opt.diffFlags & FSL_DIFF2_IGNORE_ALLWS)){
     c.cmpLine = fsl_dline_cmp_ignore_ws;
@@ -26543,11 +26602,6 @@ static int fsl_diff2_text_impl(fsl_buffer const *pA,
   rc = fsl_break_into_dlines(fsl_buffer_cstr(pB), (fsl_int_t)pB->used,
                              (uint32_t*)&c.nTo, &c.aTo, opt.diffFlags);
   if(rc) goto end;
-  if( c.aFrom==0 || c.aTo==0 ){
-    /* Binary data */
-    rc = FSL_RC_DIFF_BINARY;
-    goto end;
-  }
 
   /* Compute the difference */
   rc = fsl__diff_all(&c);
@@ -26588,7 +26642,6 @@ static int fsl_diff2_text_impl(fsl_buffer const *pA,
 
      That last point makes this impl tiny compared to the original!
   */
-
   if(pBuilder){
     fsl_diff_opt * const oldOpt = pBuilder->opt;
     pBuilder->opt = &opt;
@@ -26681,10 +26734,9 @@ static int fdb__debug_chunkHeader(fsl_diff_builder* const b,
 #endif
 }
 
-static int fdb__debug_skip(fsl_diff_builder * const p, uint32_t n, bool isFinal){
-  const int rc = fdb__outf(p, "SKIP %u (%u..%u left and %u..%u right)%s\n",
-                           n, p->lnLHS+1, p->lnLHS+n, p->lnRHS+1, p->lnRHS+n,
-                           isFinal ? " FINAL" : "");
+static int fdb__debug_skip(fsl_diff_builder * const p, uint32_t n){
+  const int rc = fdb__outf(p, "SKIP %u (%u..%u left and %u..%u right)\n",
+                           n, p->lnLHS+1, p->lnLHS+n, p->lnRHS+1, p->lnRHS+n);
   p->lnLHS += n;
   p->lnRHS += n;
   return rc;
@@ -26873,7 +26925,7 @@ static int fdb__json1_start(fsl_diff_builder * const b){
   return rc;
 }
 
-static int fdb__json1_skip(fsl_diff_builder * const b, uint32_t n, bool isFinal){
+static int fdb__json1_skip(fsl_diff_builder * const b, uint32_t n){
   return fdb__outf(b, "1,%" PRIu32 ",\n", n);
 }
 static int fdb__json1_common(fsl_diff_builder * const b, fsl_dline const * pLine){
@@ -26981,13 +27033,17 @@ static int fdb__utxt_start(fsl_diff_builder * const b){
 static int fdb__utxt_chunkHeader(fsl_diff_builder* const b,
                                  uint32_t lnnoLHS, uint32_t linesLHS,
                                  uint32_t lnnoRHS, uint32_t linesRHS ){
-  return fdb__outf(b, "@@ -%" PRIu32 ",%" PRIu32
-                   " +%" PRIu32 ",%" PRIu32 " @@\n",
-                   lnnoLHS, linesLHS, lnnoRHS, linesRHS);
+  if(FSL_DIFF2_LINE_NUMBERS & b->opt->diffFlags){
+    return fdb__outf(b, "%.40c\n", '~');
+  }else{
+    return fdb__outf(b, "@@ -%" PRIu32 ",%" PRIu32
+                     " +%" PRIu32 ",%" PRIu32 " @@\n",
+                     lnnoLHS, linesLHS, lnnoRHS, linesRHS);
+  }
 }
 
 
-static int fdb__utxt_skip(fsl_diff_builder * const b, uint32_t n, bool isFinal){
+static int fdb__utxt_skip(fsl_diff_builder * const b, uint32_t n){
   //MARKER(("SKIP\n"));
   b->lnLHS += n;
   b->lnRHS += n;
@@ -26999,11 +27055,17 @@ static int fdb__utxt_lineno(fsl_diff_builder * const b, uint32_t lnL, uint32_t l
   int rc = 0;
   if(FSL_DIFF2_LINE_NUMBERS & b->opt->diffFlags){
     rc = lnL
-      ? fdb__outf(b, "%6" PRIu32 " ", lnL)
+      ? fdb__outf(b, "%s%6" PRIu32 "%s ",
+                  (lnR ? "" : b->opt->ansiColor.deletion),
+                  lnL,
+                  (lnR ? "" : b->opt->ansiColor.reset))
       : fdb__out(b, "       ", 7);
     if(0==rc){
       rc = lnR
-      ? fdb__outf(b, "%6" PRIu32 " ", lnR)
+      ? fdb__outf(b, "%s%6" PRIu32 "%s ",
+                  (lnL ? "" : b->opt->ansiColor.insertion),
+                  lnR,
+                  (lnL ? "" : b->opt->ansiColor.reset))
       : fdb__out(b, "       ", 7);
     }
   }
@@ -27021,13 +27083,19 @@ static int fdb__utxt_insertion(fsl_diff_builder * const b, fsl_dline const * pLi
   //MARKER(("INSERT\n"));
   ++b->lnRHS;
   const int rc = fdb__utxt_lineno(b, 0, b->lnRHS);
-  return rc ? rc : fdb__outf(b, "+%.*s\n", (int)pLine->n, pLine->z);
+  return rc ? rc : fdb__outf(b, "%s+%.*s%s\n",
+                             b->opt->ansiColor.insertion,
+                             (int)pLine->n, pLine->z,
+                             b->opt->ansiColor.reset);
 }
 static int fdb__utxt_deletion(fsl_diff_builder * const b, fsl_dline const * pLine){
   //MARKER(("DELETE\n"));
   ++b->lnLHS;
   const int rc = fdb__utxt_lineno(b, b->lnLHS, 0);
-  return rc ? rc : fdb__outf(b, "-%.*s\n", (int)pLine->n, pLine->z);
+  return rc ? rc : fdb__outf(b, "%s-%.*s%s\n",
+                             b->opt->ansiColor.deletion,
+                             (int)pLine->n, pLine->z,
+                             b->opt->ansiColor.reset);
 }
 static int fdb__utxt_replacement(fsl_diff_builder * const b,
                                  fsl_dline const * lineLhs,
@@ -27111,7 +27179,7 @@ static int fdb__tcl_start(fsl_diff_builder * const b){
   return rc;
 }
 
-static int fdb__tcl_skip(fsl_diff_builder * const b, uint32_t n, bool isFinal){
+static int fdb__tcl_skip(fsl_diff_builder * const b, uint32_t n){
   int rc = 0;
   BR_OPEN;
   if(0==rc) rc = fdb__outf(b, "SKIP %" PRIu32, n);
@@ -27240,7 +27308,6 @@ enum SplitTextCols {
 STC_NUM1 = 0, STC_TEXT1,
 STC_MOD,
 STC_NUM2, STC_TEXT2,
-STC_SKIP,
 STC_count
 };
 /**
@@ -27248,138 +27315,144 @@ STC_count
 
    This builder buffers its contents in 5 buffers: 2 each for the
    LHS/RHS line numbers and content and one for the "change marker" (a
-   center column). Each line of the diff is stored as one
-   NUL-delimited string in each of the 5 colum buffers.
+   center column). Each of the STC_NUM1, STC_NUM2, STC_TEXT1, and
+   STC_TEXT2 columns is stored as one NUL-delimited string in each of
+   the corresponding column buffers. STC_MOD is a simple byte array,
+   with each byte corresponding two one line of the diff and marking
+   what type of linle it is (common, insertion, deletion, or
+   edit/replacement).
 
    The STC_SKIP column is managed differently. It is zero-filled,
    with a non-0 value at each line of the diff which represents a
-   skipped gap.
+   skipped gap. Potential TODO: combine this and STC_MOD.
 */
 struct SplitTxt {
   /**
-     Number of lines and skipped regions.
-  */
-  uint32_t entries;
-  /**
-     Output columns. We have to buffer these for the sake
-     of finding a useful width.
-  */
-  fsl_buffer cols[STC_count];
-  /**
-     Largest column width we've yet seen.
+     Largest column width we've yet seen. These are only updated for
+     STC_TEXT1 and STC_TEXT2. The others currently have fixed widths.
+
+     FIXME: these are in bytes, not text columns. The current code may
+     truncate multibyte characters.
   */
   uint32_t maxWidths[STC_count];
 };
 typedef struct SplitTxt SplitTxt;
-static const SplitTxt SplitTxt_empty = {
-0U,
-{fsl_buffer_empty_m, fsl_buffer_empty_m,
- fsl_buffer_empty_m, fsl_buffer_empty_m,
- fsl_buffer_empty_m, fsl_buffer_empty_m},
-{0,0,0,0,0,0}
-};
+static const SplitTxt SplitTxt_empty = {{1,10,3,1,10}};
 #define SPLITSTATE(VNAME) SplitTxt * const VNAME = (SplitTxt *)b->pimpl
 
-
-static int fdb__splittxt_out(SplitTxt * const sst, int col, char const * z, uint32_t n){
-  return fsl_buffer_append(&sst->cols[col], z, n);
-}
-static int fdb__splittxt_out0(SplitTxt * const sst, int col, char const * z, uint32_t n){
-  int const rc = fsl_buffer_append(&sst->cols[col], z, n);
-  return rc ? rc : fsl_buffer_append(&sst->cols[col], "\0", 1);
-}
-static int fdb__splittxt_outf(SplitTxt * const sst, int col, char const * fmt, ...){
-  int rc = 0;
-  va_list va;
-  va_start(va,fmt);
-  rc = fsl_buffer_appendfv(&sst->cols[col], fmt, va);
-  va_end(va);
-  return rc;
-}
-
-static int fdb__splittxt_mod(SplitTxt * const sst, char ch){
-  char lbl[4] = {' ',' ',' ',0};
-  lbl[1] = ch;
-  return fsl_buffer_append(&sst->cols[STC_MOD], lbl, 4);
-}
-
-/** Outputs line numbers to b->opt->out. */
-static int fdb__splittxt_lineno(fsl_diff_builder * const b, uint32_t lnL, uint32_t lnR){
-  int rc = 0;
-  if(1 || (FSL_DIFF2_LINE_NUMBERS & b->opt->diffFlags)){
-    SPLITSTATE(sst);
-    rc = lnL
-      ? fdb__splittxt_outf(sst, STC_NUM1, "%6" PRIu32 " %c", lnL, 0)
-      : fdb__splittxt_out(sst, STC_NUM1, "       \0", 8);
-    if(0==rc){
-      rc = lnR
-        ? fdb__splittxt_outf(sst, STC_NUM2, "%6" PRIu32 " %c", lnR, 0)
-        : fdb__splittxt_out(sst, STC_NUM2, "       \0", 8);
-    }
+static int maxColWidth(fsl_diff_builder const * const b,
+                       SplitTxt const * const sst,
+                       int mwIndex){
+  static const short minColWidth =
+    10/*b->opt.columnWidth values smaller than this are treated as
+        this value*/;
+  switch(mwIndex){
+    case STC_NUM1:
+    case STC_NUM2:
+    case STC_MOD: return sst->maxWidths[mwIndex];
+    case STC_TEXT1: case STC_TEXT2: break;
+    default:
+      assert(!"internal API misuse: invalid column index.");
+      break;
   }
-  return rc;
+  int const y =
+    (b->opt->columnWidth>0
+     && b->opt->columnWidth<=sst->maxWidths[mwIndex])
+    ? (int)b->opt->columnWidth
+    : (int)sst->maxWidths[mwIndex];
+  return minColWidth > y ? minColWidth : y;
+}
+
+static int fdb__splittxt_mod(fsl_diff_builder * const b, char ch){
+  assert(2==b->passNumber);
+  return fdb__outf(b, " %c ", ch);
+}
+
+static int fdb__splittxt_lineno(fsl_diff_builder * const b,
+                                SplitTxt const * const sst,
+                                bool isLeft, uint32_t n){
+  assert(2==b->passNumber);
+  int const col = isLeft ? STC_NUM1 : STC_NUM2;
+  return n
+    ? fdb__outf(b, "%*" PRIu32 " ", sst->maxWidths[col], n)
+    : fdb__outf(b, "%.*c ", sst->maxWidths[col], ' ');
 }
 
 static int fdb__splittxt_start(fsl_diff_builder * const b){
   int rc = 0;
-  SPLITSTATE(sst);
-  sst->entries = 0;
-  for(int i = 0; i < STC_count; ++i ){
-    if(sst->cols[i].used){
-      fsl_buffer_reuse(&sst->cols[i]);
-    }else{
-      fsl_size_t n;
-      switch(i){
-        case STC_NUM1: case STC_NUM2:
-        case STC_MOD:  case STC_SKIP: n = 1024; break;
-        case STC_TEXT1: case STC_TEXT2: n = 1024 * 20; break;
-        default:
-          assert(!"cannot happen!");
-          return FSL_RC_RANGE;
-      }
-      rc = fsl_buffer_reserve(&sst->cols[i], n);
-      if(rc) return rc;
-    }
-    switch(i){
-      case STC_TEXT1: case STC_TEXT2: sst->maxWidths[i] = 20; break;
-      default: sst->maxWidths[i] = 0; break;
-    }
+  if(1==b->passNumber){
+    SPLITSTATE(sst);
+    *sst = SplitTxt_empty;
+    ++b->fileCount;
+    return rc;
   }
-#if 0
-  if(0==(FSL_DIFF2_NOINDEX & b->opt->diffFlags)){
-    rc = fdb__outf(b,"Index: %s\n%.66c\n",
-                   b->opt->nameLHS/*RHS?*/, '=');
+  if(b->fileCount>1){
+    rc = fdb__out(b, "\n", 1);
   }
-#endif
   if(0==rc){
-    rc = fdb__outf(b, "--- %s%s%s\n+++ %s%s%s\n",
-                   b->opt->nameLHS,
-                   b->opt->hashLHS ? " " : "",
-                   b->opt->hashLHS ? b->opt->hashLHS : "",
-                   b->opt->nameRHS,
-                   b->opt->hashRHS ? " " : "",
-                   b->opt->hashRHS ? b->opt->hashRHS : "");
+    fsl_diff_opt const * const o = b->opt;
+    if(o->nameLHS || o->nameRHS
+       || o->hashLHS || o->hashRHS){
+      rc = fdb__outf(b, "--- %s%s%s\n+++ %s%s%s\n",
+                     o->nameLHS ? o->nameLHS : "",
+                     (o->nameLHS && o->hashLHS) ? " " : "",
+                     o->hashLHS ? o->hashLHS : "",
+                     o->nameRHS ? o->nameRHS : "",
+                     (o->nameRHS && o->hashRHS) ? " " : "",
+                     o->hashRHS ? o->hashRHS : "");
+    }
   }
   return rc;
 }
 
-static int fdb__splittxt_entry(SplitTxt * const sst, unsigned char isSkip){
-  int rc = 0;
-  ++sst->entries;
-  if(sst->cols[STC_SKIP].capacity < sst->entries){
-    int const rc = fsl_buffer_reserve(&sst->cols[STC_SKIP],
-                                      sst->entries
-                                      ? sst->entries*3/2 : 1024);
-    if(rc) return rc;
-  }
-  sst->cols[STC_SKIP].mem[sst->entries-1] = isSkip;
-  return rc;
-}
-
-static int fdb__splittxt_skip(fsl_diff_builder * const b, uint32_t n, bool isFinal){
+static int fdb__splittxt_skip(fsl_diff_builder * const b, uint32_t n){
   b->lnLHS += n;
   b->lnRHS += n;
-  return fdb__splittxt_entry((SplitTxt*)b->pimpl, isFinal ? 2 : 1);
+  if(1==b->passNumber) return 0;
+  SPLITSTATE(sst);
+  int const maxWidth1 = maxColWidth(b, sst, STC_TEXT1);
+  int const maxWidth2 = maxColWidth(b, sst, STC_TEXT2);
+  return fdb__outf(b, "%.*c %.*c   %.*c %.*c\n",
+                 sst->maxWidths[STC_NUM1], '~',
+                 maxWidth1, '~',
+                 sst->maxWidths[STC_NUM2], '~',
+                 maxWidth2, '~');
+}
+
+static int fdb__splittxt_color(fsl_diff_builder * const b,
+                               int modType){
+  char const *z = 0;
+  switch(modType){
+    case (int)'i': z = b->opt->ansiColor.insertion; break;
+    case (int)'d': z = b->opt->ansiColor.deletion; break;
+    case (int)'r'/*replacement*/: 
+    case (int)'e': z = b->opt->ansiColor.edit; break;
+    case 0: z = b->opt->ansiColor.reset; break;
+    default:
+      assert(!"invalid color op!");
+  }
+  return z&&*z ? fdb__outf(b, "%s", z) : 0;
+}
+
+static int fdb__splittxt_side(fsl_diff_builder * const b,
+                              SplitTxt * const sst,
+                              bool isLeft,
+                              fsl_dline const * pLine){
+  int rc = fdb__splittxt_lineno(b, sst, isLeft,
+                                pLine ? (isLeft ? b->lnLHS : b->lnRHS) : 0U);
+  if(0==rc){
+    uint32_t const w = maxColWidth(b, sst, isLeft ? STC_TEXT1 : STC_TEXT2);
+    if(pLine){
+      rc = fdb__out(b, pLine->z, w < pLine->n ? w : pLine->n);
+      if(0==rc && w>pLine->n){
+        rc = fdb__outf(b, "%.*c", (int)(w - pLine->n), ' ');
+      }
+    }else{
+      rc = fdb__outf(b, "%.*c", (int)w, ' ');
+    }
+    if(0==rc && !isLeft) rc = fdb__out(b, "\n", 1);
+  }
+  return rc;
 }
 
 static int fdb__splittxt_common(fsl_diff_builder * const b, fsl_dline const * pLine){
@@ -27387,43 +27460,52 @@ static int fdb__splittxt_common(fsl_diff_builder * const b, fsl_dline const * pL
   SPLITSTATE(sst);
   ++b->lnLHS;
   ++b->lnRHS;
-  if(sst->maxWidths[STC_TEXT1]<pLine->n) sst->maxWidths[STC_TEXT1] = pLine->n;
-  if(sst->maxWidths[STC_TEXT2]<pLine->n) sst->maxWidths[STC_TEXT2] = pLine->n;
-  rc = fdb__splittxt_entry(sst, 0);
-  if(0==rc) rc = fdb__splittxt_lineno(b, b->lnLHS, b->lnRHS);
-  if(0==rc) rc = fdb__splittxt_mod(sst, ' ');
-  if(0==rc) rc = fdb__splittxt_out0(sst, STC_TEXT1, pLine->z, pLine->n);
-  if(0==rc) rc = fdb__splittxt_out0(sst, STC_TEXT2, pLine->z, pLine->n);
+  if(1==b->passNumber){
+    if(sst->maxWidths[STC_TEXT1]<pLine->n) sst->maxWidths[STC_TEXT1] = pLine->n;
+    if(sst->maxWidths[STC_TEXT2]<pLine->n) sst->maxWidths[STC_TEXT2] = pLine->n;
+    return 0;
+  }
+  rc = fdb__splittxt_side(b, sst, true, pLine);
+  if(0==rc) rc = fdb__splittxt_mod(b, ' ');
+  if(0==rc) rc = fdb__splittxt_side(b, sst, false, pLine);
   return rc;
 }
+
 static int fdb__splittxt_insertion(fsl_diff_builder * const b, fsl_dline const * pLine){
   int rc = 0;
   SPLITSTATE(sst);
   ++b->lnRHS;
-  if(sst->maxWidths[STC_TEXT1]<pLine->n) sst->maxWidths[STC_TEXT1] = pLine->n;
-  rc = fdb__splittxt_entry(sst, 0);
-  if(0==rc) rc = fdb__splittxt_lineno(b, 0, b->lnRHS);
-  if(0==rc) rc = fdb__splittxt_mod(sst, '>');
-  if(0==rc) rc = fdb__splittxt_out(sst, STC_TEXT1, "\0", 1);
-  if(0==rc) rc = fdb__splittxt_out0(sst, STC_TEXT2, pLine->z, pLine->n);
+  if(1==b->passNumber){
+    if(sst->maxWidths[STC_TEXT1]<pLine->n) sst->maxWidths[STC_TEXT1] = pLine->n;
+    return rc;
+  }
+  rc = fdb__splittxt_color(b, 'i');
+  if(0==rc) rc = fdb__splittxt_side(b, sst, true, NULL);
+  if(0==rc) rc = fdb__splittxt_mod(b, '>');
+  if(0==rc) rc = fdb__splittxt_side(b, sst, false, pLine);
+  if(0==rc) rc = fdb__splittxt_color(b, 0);
   return rc;
 }
+
 static int fdb__splittxt_deletion(fsl_diff_builder * const b, fsl_dline const * pLine){
   int rc = 0;
   SPLITSTATE(sst);
   ++b->lnLHS;
-  if(sst->maxWidths[STC_TEXT2]<pLine->n) sst->maxWidths[STC_TEXT2] = pLine->n;
-  rc = fdb__splittxt_entry(sst, 0);
-  if(0==rc) rc = fdb__splittxt_lineno(b, b->lnLHS, 0);
-  if(0==rc) rc = fdb__splittxt_mod(sst, '<');
-  if(0==rc) rc = fdb__splittxt_out0(sst, STC_TEXT1, pLine->z, pLine->n);
-  if(0==rc) rc = fdb__splittxt_out(sst, STC_TEXT2, "\0", 1);
+  if(1==b->passNumber){
+    if(sst->maxWidths[STC_TEXT2]<pLine->n) sst->maxWidths[STC_TEXT2] = pLine->n;
+    return rc;
+  }
+  rc = fdb__splittxt_color(b, 'd');
+  if(0==rc) rc = fdb__splittxt_side(b, sst, true, pLine);
+  if(0==rc) rc = fdb__splittxt_mod(b, '<');
+  if(0==rc) rc = fdb__splittxt_side(b, sst, false, NULL);
+  if(0==rc) rc = fdb__splittxt_color(b, 0);
   return rc;
 }
 
 static int fdb__splittxt_replacement(fsl_diff_builder * const b,
-                                fsl_dline const * lineLhs,
-                                fsl_dline const * lineRhs) {
+                                     fsl_dline const * lineLhs,
+                                     fsl_dline const * lineRhs) {
 #if 0
   int rc = b->deletion(b, lineLhs);
   if(0==rc) rc = b->insertion(b, lineRhs);
@@ -27433,71 +27515,34 @@ static int fdb__splittxt_replacement(fsl_diff_builder * const b,
   SPLITSTATE(sst);
   ++b->lnLHS;
   ++b->lnRHS;
-  if(sst->maxWidths[STC_TEXT1]<lineLhs->n) sst->maxWidths[STC_TEXT1] = lineLhs->n;
-  if(sst->maxWidths[STC_TEXT2]<lineRhs->n) sst->maxWidths[STC_TEXT2] = lineRhs->n;
-  rc = fdb__splittxt_entry(sst, 0);
-  if(0==rc) rc = fdb__splittxt_lineno(b, b->lnLHS, b->lnRHS);
-  if(0==rc) rc = fdb__splittxt_mod(sst, '|');
-  if(0==rc) rc = fdb__splittxt_out0(sst, STC_TEXT1, lineLhs->z, lineLhs->n);
-  if(0==rc) rc = fdb__splittxt_out0(sst, STC_TEXT2, lineRhs->z, lineRhs->n);
+  if(1==b->passNumber){
+    if(sst->maxWidths[STC_TEXT1]<lineLhs->n) sst->maxWidths[STC_TEXT1] = lineLhs->n;
+    if(sst->maxWidths[STC_TEXT2]<lineRhs->n) sst->maxWidths[STC_TEXT2] = lineRhs->n;
+    return 0;
+  }
+  rc = fdb__splittxt_color(b, 'e');
+  if(0==rc) rc = fdb__splittxt_side(b, sst, true, lineLhs);
+  if(0==rc) rc = fdb__splittxt_mod(b, '|');
+  if(0==rc) rc = fdb__splittxt_side(b, sst, false, lineRhs);
+  if(0==rc) rc = fdb__splittxt_color(b, 0);
   return rc;
 #endif
 }
                  
-static int fdb__splittxt_edit(fsl_diff_builder * const b,
-                         fsl_dline const * pX,
-                         fsl_dline const * pY){
-  return fdb__splittxt_replacement(b, pX, pY);
-}
-
 static int fdb__splittxt_finish(fsl_diff_builder * const b){
   int rc = 0;
-  char const * z;
-  uint64_t cursor[STC_count] = {0,0,0,0,0};
-  fsl_size_t slen;
-  SPLITSTATE(sst);
-  for(uint32_t r = 0; 0==rc && r<sst->entries; ++r){
-    if(sst->cols[STC_SKIP].mem[r]){
-      rc = fdb__outf(b, "%.*c %.*c   %.*c %.*c\n",
-                     6, '~',
-                     (int)sst->maxWidths[STC_TEXT1], '~',
-                     6, '~',
-                     (int)sst->maxWidths[STC_TEXT2], '~');
-      continue;
-    }
-    for(int i = 0; 0==rc && i<STC_SKIP; ++i){
-      if(0 && !(FSL_DIFF2_LINE_NUMBERS & b->opt->diffFlags)){
-        switch(i){
-          case STC_NUM1:
-          case STC_NUM2: continue;
-        }
-      }
-      z = fsl_buffer_cstr(&sst->cols[i]) + cursor[i];
-      assert((unsigned char *)z < (sst->cols[i].mem + sst->cols[i].used));
-      slen = fsl_strlen(z);
-      cursor[i] += slen + 1/*NUL*/;
-      rc = fdb__out(b, z, slen);
-      if(rc) break;
-      switch(i){
-        case STC_TEXT1: case STC_TEXT2:
-          if(slen < sst->maxWidths[i]){
-            rc = fdb__outf(b, "%.*c", (int)(sst->maxWidths[i] - slen), ' ');
-          }
-          break;
-        default:
-          break;
-      }
-    }
-    if(0==rc) rc = fdb__out(b, "\n", 1);
+  if(1==b->passNumber){
+    SPLITSTATE(sst);
+    uint32_t ln = b->lnLHS;
+    sst->maxWidths[STC_NUM1] = sst->maxWidths[STC_NUM2] = 1;
+    for(; ln>=10; ln/=10) ++sst->maxWidths[STC_NUM1];
+    ln = b->lnRHS;
+    for(; ln>=10; ln/=10) ++sst->maxWidths[STC_NUM2];
   }
   return rc;
 }
 
 static void fdb__splittxt_finalize(fsl_diff_builder * const b){
-  SPLITSTATE(sst);
-  for(int i = 0; i < STC_count; ++i ){
-    fsl_buffer_clear(&sst->cols[i]);
-  }
   *b = fsl_diff_builder_empty;
   fsl_free(b);
 }
@@ -27506,6 +27551,7 @@ static fsl_diff_builder * fsl__diff_builder_splittxt(void){
   fsl_diff_builder * rc =
     fsl__diff_builder_alloc((fsl_size_t)sizeof(SplitTxt));
   if(rc){
+    rc->twoPass = true;
     rc->chunkHeader = NULL;
     rc->start = fdb__splittxt_start;
     rc->skip = fdb__splittxt_skip;
@@ -27513,7 +27559,7 @@ static fsl_diff_builder * fsl__diff_builder_splittxt(void){
     rc->insertion = fdb__splittxt_insertion;
     rc->deletion = fdb__splittxt_deletion;
     rc->replacement = fdb__splittxt_replacement;
-    rc->edit = fdb__splittxt_edit;
+    rc->edit = fdb__splittxt_replacement;
     rc->finish = fdb__splittxt_finish;
     rc->finalize = fdb__splittxt_finalize;
     assert(0!=rc->pimpl);
@@ -36802,7 +36848,7 @@ int fsl_tag_insert( fsl_cx * f, fsl_tagtype_e tagtype,
     if( tagid==FSL_TAGID_COMMENT ){
       char *zCopy = fsl_strdup(zValue);
       wiki_extract_links(zCopy, rid, 0, mtime, 1, WIKI_INLINE);
-      free(zCopy);
+      fsl_free(zCopy);
     }
 #endif
   }

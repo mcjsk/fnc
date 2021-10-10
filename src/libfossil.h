@@ -1017,13 +1017,13 @@ FSL_EXPORT const fsl_error fsl_error_empty;
    @see fsl_error_move()
 */
 FSL_EXPORT int fsl_error_set( fsl_error * err, int code, char const * fmt,
-                   ... );
+                              ... );
 
 /**
    va_list counterpart to fsl_error_set().
 */
 FSL_EXPORT int fsl_error_setv( fsl_error * err, int code, char const * fmt,
-                    va_list args );
+                               va_list args );
 
 /**
    Fetches the error state from err. If !err it returns
@@ -1036,7 +1036,7 @@ FSL_EXPORT int fsl_error_setv( fsl_error * err, int code, char const * fmt,
    invalidated by any calls which take err as a non-const parameter
    OR which might modify it indirectly through a container object,
    so the client is required to copy it if it is needed for later
-   on.
+   reference.
 
    If len is not NULL then *len will be assigned to the length of
    the returned string (in bytes).
@@ -3346,6 +3346,8 @@ FSL_EXPORT fsl_size_t fsl_htmlize_xlate(int c, char const ** xlate);
    Maintenance reminder: these values are holy and must not be
    changed without also changing the corresponding code in
    diff.c.
+
+   @deprecated in favor of fsl_diff2_flag_e and fsl_diff_v2()
 */
 enum fsl_diff_flag_e {
 /** Ignore end-of-line whitespace */
@@ -3458,9 +3460,8 @@ FSL_EXPORT int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *p
    (fsl_diff_builder and friends). This set of flags may still change
    considerably.
 
-   Maintenance reminder: these values are holy and must not be
-   changed without also changing the corresponding code in
-   diff2.c.
+   Maintenance reminder: some of these values are holy and must not be
+   changed without also changing the corresponding code in diff2.c.
 */
 enum fsl_diff2_flag_e {
 /** Ignore end-of-line whitespace. Applies to
@@ -3548,23 +3549,24 @@ struct fsl_diff_opt {
      Number of lines of diff context (number of lines common to the
      LHS and RHS of the diff). Library-wide default is 5.
   */
-  unsigned short nContext;
+  unsigned short contextLines;
   /**
-     Column width for side-by-side, a.k.a. split, diffs. Not currently
-     honored by FSL_DIFF_BUILDER_SPLIT_TEXT: it uses as much width as
-     is necessary to render whole lines.
+     Maximum column width for side-by-side, a.k.a. split, diffs.
+
+     FSL_DIFF_BUILDER_SPLIT_TEXT truncates its content columns (as
+     opposed to line numbers and its modification marker) to, at most,
+     this width. By default it uses as much width as is necessary to
+     render whole lines.
+
+     This is a hint, not a rule. A given diff builder is free to
+     ignore it or to ignore values which are arbitrarily deemed "too
+     small" or "too large."
   */
-  short columnWidth;
-  /**
-     Number of files seen in the diff so far (incremented by routines
-     which delegate to fsl_diff_builder instances).
-  */
-  uint32_t fileCount;
+  unsigned short columnWidth;
   /**
      The filename of the object represented by the LHS of the
      diff. This is intentended for, e.g., generating header-style
-     output. This
-     may be NULL.
+     output. This may be NULL.
   */
   const char * nameLHS;
   /**
@@ -3599,6 +3601,44 @@ struct fsl_diff_opt {
      higher-level code.
   */
   void * outState;
+
+  /**
+     EXPERIMENTAL AND SUBJECT TO CHANGE.
+
+     Optional ANSI color control sequences to be injected into
+     text-mode diff output by diff builders which support them. All
+     members of this struct must either be NULL, an empty string, or a
+     valid ANSI escape sequence. The reset option must be the escape
+     sequence to reset either just the color or to reset all ANSI
+     control attributes, depending on how the other members are
+     set. If any member other than reset is set, all must be set.
+
+     The diff driver will treat any members of this which are NULL as
+     empty strings to simplify diff builder color integration. The
+     exception is the reset member - see its docs for details.
+  */
+  struct fsl_diff_opt_ansi {
+    /**
+       Color escape sequence for inserted lines.
+    */
+    char const * insertion;
+    /**
+       Color escape sequence for edited or replaced lines. This option
+       might be ignored, depending on how the renderer works. Some
+       will render edits as a deletion/insertion pair.
+    */
+    char const * edit;
+    /**
+       Color escape sequence for inserted lines.
+    */
+    char const * deletion;
+    /**
+       Escape sequence to reset colors. If reset is empty or NULL and
+       any others are not then reset is automatically treated as if it
+       were the ANSI code to reset all color attributes.
+    */
+    char const * reset;
+  } ansiColor;
 };
 
 /** Convenience typedef. */
@@ -3607,9 +3647,12 @@ typedef struct fsl_diff_opt fsl_diff_opt;
 /** Initialized-with-defaults fsl_diff_opt structure, intended for
     const-copy initialization. */
 #define fsl_diff_opt_empty_m {\
-  0/*diffFlags*/, 5/*nContext*/, 0/*columnWidth*/,\
-  0/*fileCount*/, NULL/*hashLHS*/, NULL/*hashRHS*/,\
-  NULL/*out*/, NULL/*outState*/ \
+  0/*diffFlags*/, 5/*contextLines*/, 0/*columnWidth*/,\
+  NULL/*nameLHS*/,NULL/*hashLHS*/,                       \
+  NULL/*nameRHS*/, NULL/*hashRHS*/,                      \
+  NULL/*out*/, NULL/*outState*/,                          \
+  {/*ansiColor*/ ""/*insertion*/,""/*edit*/,""/*deletion*/,\
+    ""/*reset*/}                                                \
 }
 
 /** Initialized-with-defaults fsl_diff_opt structure, intended for
@@ -3617,28 +3660,33 @@ typedef struct fsl_diff_opt fsl_diff_opt;
 extern const fsl_diff_opt fsl_diff_opt_empty;
 
 /**
-   UNDER CONSTRUCTION: part of an ongoing porting effort.
-
    Information about each line of a file being diffed.
 
    This type is only in the public API for use by the fsl_diff_builder
-   interface. It is not otherwise intended for public use.
+   interface, specifically for use with fsl_dline_change_spans(). It
+   is not otherwise intended for public use. None of its members are
+   considered even remotely public except for this->z and this->n.
 */
 struct fsl_dline {
-  /**  The text of the line. Owned by higher-level code. */
+  /** 
+      The text of the line. Owned by higher-level code.  Not
+      necessarily NUL-terminated: this->n holds its length.
+  */
   const char *z;
+  /** Number of bytes of z which belong to this line. */
+  unsigned short n;
+  // All members after this point are strictly for internal use only.
+  /** Indent of the line. Only !=0 with certain options. */
+  unsigned short indent;
   /** Hash of the line. Lower X bits are the length. */
   uint64_t h;
-  /** Indent of the line. Only !=0 with certain options */
-  unsigned short indent;
-  /** number of bytes */
-  unsigned short n;
   /** 1+(Index of next line with same the same hash) */
   unsigned int iNext;
   /**
-     an array of fsl_dline elements serves two purposes.  The fields
+     An array of fsl_dline elements serves two purposes.  The fields
      above are one per line of input text.  But each entry is also
-     a bucket in a hash table, as follows: */
+     a bucket in a hash table, as follows:
+  */
   unsigned int iHash;   /* 1+(first entry in the hash chain) */
 };
 
@@ -3782,6 +3830,17 @@ typedef struct fsl_diff_builder fsl_diff_builder;
    The internal APIs which drive each instance of this class guaranty
    that if any method of this class returns non-0 (an error code) then
    no futher methods will be called except for finalize().
+
+   Potential TODO: add a two-phase option to this interface. If
+   builder->passes is greater than 0, builder->currentPass gets set to
+   the current pass number (1 or 2) then it gets passed the diff once
+   for each pass the builder needs, updating the currentPass flag
+   between runs. The first phase is simply for it to analyze what
+   needs to be done and the second is to do it. That would allow,
+   e.g. the split-mode impl to avoid buffering all of the output
+   because the first pass would allow it to calculate the width it
+   needs for outputing the text columns. It would also allow for it to
+   dynamically resize the line number columns more easily.
 */
 struct fsl_diff_builder {
   /**
@@ -3848,15 +3907,14 @@ struct fsl_diff_builder {
 
   /**
      Tells the builder that n lines of common output are to be
-     skipped. How it represents this is up to the impl. If the 3rd
-     argument is true, this block represents the final part of the
-     diff. Must return 0 on success, non-0 on error.
+     skipped. How it represents this is up to the impl. Must return 0
+     on success, non-0 on error.
 
      Typical common implementation details:
 
      - Increment both this->lnLHS and this->lnRHS by n.
   */
-  int (*skip)(fsl_diff_builder* const, uint32_t n, bool isFinal);
+  int (*skip)(fsl_diff_builder* const, uint32_t n);
   /**
      Tells the builder that the given line represents one line of
      common output. Must return 0 on success, non-0 on error.
@@ -3905,10 +3963,10 @@ struct fsl_diff_builder {
      the LHS to the RHS. Must return 0 on success, non-0 on
      error. Builders are free, syntax permitting, to usse the
      fsl_dline_change_spans() API to elaborate on edits for display
-     purposes or to treat this as a single pair of calls to
-     this->deletion() and this->insertion(). In the latter case they
-     simply need to pass lineLhs to this->deletion() and lineRhs to
-     this->insertion().
+     purposes, to treat it identically to this->replacement(), or to
+     treat this as a single pair of calls to this->deletion() and
+     this->insertion(). In the latter case they simply need to pass
+     lineLhs to this->deletion() and lineRhs to this->insertion().
 
      Typical common implementation details:
 
@@ -3941,6 +3999,23 @@ struct fsl_diff_builder {
      either case.
   */
   void (*finalize)(fsl_diff_builder* const);
+
+  /**
+     If true, this builder gets passed through the diff generation
+     process twice. See this->passNumber for details.
+  */
+  bool twoPass;
+
+  /**
+     Gets set to the "pass number" immediately before this->start() is
+     called, starting with pass number 1. This value is only relevant
+     for two-pass builders, which can use this to control their mode
+     of operation, e.g. data collection in pass 1 and actual work in
+     pass 2. Note that all of the diff-building API methods are call
+     for both passes, including start() and finish().  Only finalize()
+     is not affected by this.
+  */
+  unsigned short passNumber;
   /**
      Impl-specific diff-generation state. If it is owned by this
      instance then this->finalize() must clean it up.
@@ -3951,6 +4026,13 @@ struct fsl_diff_builder {
      opening/closing tags. This must not be modified by clients.
   */
   unsigned int implFlags;
+  /**
+     A place to store the number of files seen by this builder so far,
+     for builders which need to distinguish that somehow (e.g. adding
+     a separator before each file after the first). Implementations
+     which use this should increment it in their start() method.
+  */
+  uint32_t fileCount;
   /**
      Number of lines seen of the LHS content. It is up to the concrete
      builder impl to update this if it's needed. The core diff driver
@@ -3972,7 +4054,8 @@ struct fsl_diff_builder {
   NULL/*start()*/,NULL/*chunkHeader()*/,NULL/*skip()*/, NULL/*common()*/, \
   NULL/*insertion()*/,NULL/*deletion()*/, NULL/*replacement()*/, \
   NULL/*edit()*/, NULL/*finish()*/, NULL/*finalize()*/,        \
-  NULL/*pimpl*/, 0U/*implFlags*/,\
+  false/*twoPass*/,0U/*passNumber*/, \
+  NULL/*pimpl*/, 0U/*implFlags*/,0U/*fileCount*/,         \
   0/*lnLHS*/,0/*lnRHS*/ \
 }
 
@@ -4040,7 +4123,7 @@ FSL_DIFF_BUILDER_JSON1,
 
    Supported flags:
 
-   - FSL_DIFF2_LINE_NUMBERS
+   - FSL_DIFF2_LINE_NUMBERS (makes it incompatible with patch(1))
    - FSL_DIFF2_NOINDEX
 */
 FSL_DIFF_BUILDER_UNIFIED_TEXT,
@@ -4056,9 +4139,10 @@ FSL_DIFF_BUILDER_UNIFIED_TEXT,
 */
 FSL_DIFF_BUILDER_TCL,
 /**
-   A text-mode side-by-side (a.k.a. split) diff view. This diff
-   always behaves as if the FSL_DIFF2_LINE_NUMBERS flag were set
-   because its output is fairly useless without line numbers.
+   A pain-text side-by-side (a.k.a. split) diff view. This diff always
+   behaves as if the FSL_DIFF2_LINE_NUMBERS flag were set because its
+   output is fairly useless without line numbers. It optionally
+   supports ANSI coloring.
 */
 FSL_DIFF_BUILDER_SPLIT_TEXT
 };
@@ -6064,12 +6148,12 @@ struct fsl_cx_config {
      If true, all SQL which goes through the fossil engine
      will be traced to the fsl_output()-configured channel.
   */
-  int traceSql;
+  bool traceSql;
   /**
      If true, the fsl_print() SQL function will output its output to the
      fsl_output()-configured channel, else it is a no-op.
   */
-  int sqlPrint;
+  bool sqlPrint;
 
   /**
      Specifies the default hash policy.
@@ -6884,17 +6968,29 @@ FSL_EXPORT fsl_db * fsl_cx_db_ckout( fsl_cx * const f );
    @see fsl_cx_db()
    @see fsl_cx_db_repo()
    @see fsl_needs_ckout()
+   @see fsl_cx_has_ckout()
 */
 FSL_EXPORT fsl_db * fsl_needs_repo(fsl_cx * const f);
 
 /**
-   The checkout-db counterpart of fsl_needs_repo().
+   The checkout-db counterpart of fsl_needs_repo(). If no checkout is
+   opened, f's error state is updated with a FSL_RC_NOT_A_CKOUT code
+   and description of the problem.
 
    @see fsl_cx_db()
    @see fsl_needs_repo()
    @see fsl_cx_db_ckout()
+   @see fsl_cx_has_ckout()
 */
 FSL_EXPORT fsl_db * fsl_needs_ckout(fsl_cx * const f);
+
+/**
+   Returns true if the given context has a checkout opened, else
+   false.
+
+   @see fsl_needs_ckout()
+*/
+FSL_EXPORT bool fsl_cx_has_ckout(fsl_cx const * const f );
 
 /**
    Opens the given database file as f's configuration database. If f
@@ -19061,9 +19157,9 @@ int fsl_repo_install_schema_forum(fsl_cx *f);
   Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
 
   *****************************************************************************
-  This file provides a basis for basic libfossil-using apps. It is intended
-  to be used as the basis for test/demo apps, and not necessarily full-featured
-  applications.
+  This file provides a basis for basic libfossil-using apps. It
+  attempts to provide basic services required by a wide variety of
+  fossil-using apps, with the intent of simplifying their creation.
 */
 
 /* Force assert() to always work... */
@@ -19533,6 +19629,11 @@ struct fcli_t {
        argument list, or if the first non-flag argument is "help".
     */
     short helpRequested;
+    /**
+       True if the --lib-version CLI flag was used. This causes
+       fcli setup to exit as if --help had been invoked.
+    */
+    bool versionRequested;
   } transient;
   /**
      Holds bits which can/should be configured by clients BEFORE
@@ -20085,6 +20186,30 @@ FSL_EXPORT int fcli_fingerprint_check(bool reportImmediately);
    final '/' or '\\' character.
 */
 FSL_EXPORT char const * fcli_progname();
+
+/**
+   Color theme IDs for use with fcli_diff_colors.
+ */
+enum fcli_diff_colors_e{
+/**
+   Tells fcli_diff_colors() to NULL out the ANSI color state of its
+   target object.
+*/
+FCLI_DIFF_COLORS_NONE = 0,
+/**
+   Basic red (deletion) and green (insertion) diff colors.
+*/
+FCLI_DIFF_COLORS_RG,
+FCLI_DIFF_COLORS_DEFAULT = FCLI_DIFF_COLORS_RG
+};
+typedef enum fcli_diff_colors_e fcli_diff_colors_e;
+
+/**
+   Populates the given fsl_diff_opt::ansiColors state with values
+   dependend on the second argument.
+*/
+FSL_EXPORT void fcli_diff_colors(fsl_diff_opt * const tgt,
+                                 fcli_diff_colors_e theme);
 
 #if defined(__cplusplus)
 } /*extern "C"*/

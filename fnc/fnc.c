@@ -3650,8 +3650,12 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 			fsl_deck_F_next(&d1, &fc1);
 			fsl_deck_F_next(&d2, &fc2);
 		}
-		if (rc == FSL_RC_RANGE || rc == FSL_RC_TYPE ||
-		    rc == FSL_RC_DIFF_BINARY) {
+		if (rc == FSL_RC_RANGE) {
+			fsl_buffer_append(buf,
+			    "\nDiff has too many changes\n", -1);
+			rc = 0;
+			fsl_cx_err_reset(f);
+		} else if (rc == FSL_RC_DIFF_BINARY) {
 			fsl_buffer_append(buf,
 			    "\nBinary files cannot be diffed\n", -1);
 			rc = 0;
@@ -3824,8 +3828,12 @@ diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
 		fsl_buffer_reuse(&abspath);
 		fsl_free(xminus);
 		xminus = NULL;
-		if (rc == FSL_RC_RANGE || rc == FSL_RC_TYPE ||
-		    rc == FSL_RC_DIFF_BINARY) {
+		if (rc == FSL_RC_RANGE) {
+			fsl_buffer_append(buf,
+			    "\nDiff has too many changes\n", -1);
+			rc = 0;
+			fsl_cx_err_reset(f);
+		} else if (rc == FSL_RC_DIFF_BINARY) {
 			fsl_buffer_append(buf,
 			    "\nBinary files cannot be diffed\n", -1);
 			rc = 0;
