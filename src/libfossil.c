@@ -2384,6 +2384,54 @@ static int StrNLen32(const char *z, int N){
   return n;
 }
 
+#if 0
+/**
+   Given the first byte of an assumed-to-be well-formed UTF8
+   character, returns the length of that character. Results are
+   undefined with non-UTF8 inputs. Returns 0 if the character is 0 or
+   appears to be an invalid UTF8 character, else returns its length,
+   in bytes (1-4).
+*/
+static int utf8__char_length( unsigned char const * const c ){
+  switch(0xF0 & *c) {
+    case 0xF0: return (c[1]&0x80 && c[2]&0x80 && c[3]&0x80) ? 4 : 0;
+    case 0xE0: return (c[1]&0x80 && c[2]&0x80) ? 3 : 0;
+    case 0xC0: return (c[1]&0x80) ? 2 : 0;
+    case 0x80: return 0;
+    default: return 1;
+      /* See also: https://stackoverflow.com/questions/4884656/utf-8-encoding-size */
+  }
+}
+#endif
+
+/**
+   Internal helper for %#W.Ps format.
+*/
+static void appendf__utf8_altform(char const * z, int * pLength,
+                                  int * pPrecision, int * pWidth){
+  /* Treat %#W.Ps as a width/precision limit of W resp. P UTF8
+     characters instead of bytes. */
+  int pC = 0/*precision, chars*/, pB = 0/*precision, bytes*/,
+    wC = 0/*width, chars*/, wB = 0/*width, bytes*/;
+  char const * const zEnd = z + *pLength;
+  int lc;
+  while( z < zEnd ){
+    switch(0xF0 & *z) {
+      case 0xF0: lc = (z[1]&0x80 && z[2]&0x80 && z[3]&0x80) ? 4 : 0; break;
+      case 0xE0: lc = (z[1]&0x80 && z[2]&0x80) ? 3 : 0; break;
+      case 0xC0: lc = (z[1]&0x80) ? 2 : 0; break;
+      case 0x80: lc = 0; break;
+      default: lc = 1; break;
+    }
+    if(!lc) break;
+    else if(wC<*pWidth && (*pPrecision<=0 || pC<*pPrecision)){ ++wC; wB+=lc;}
+    if(pC<*pPrecision){ ++pC; pB+=lc;}
+    z+=lc;
+  }
+  if(*pPrecision>0) *pLength = pB;
+  if(*pWidth>0) *pWidth = *pWidth - wC + wB;
+}
+
 /*
   The root printf program.  All variations call this core.  It
   implements most of the common printf behaviours plus (optionally)
@@ -2391,9 +2439,9 @@ static int StrNLen32(const char *z, int N){
 
   INPUTS:
 
-  pfAppend : The is a fsl_appendf_f function which is responsible
-  for accumulating the output. If pfAppend returns a negative integer
-  then processing stops immediately.
+  pfAppend : The is a fsl_output_f function which is responsible for
+  accumulating the output. If pfAppend returns non-0 then processing
+  stops immediately.
 
   pfAppendArg : is ignored by this function but passed as the first
   argument to pfAppend. pfAppend will presumably use it as a data
@@ -2406,19 +2454,19 @@ static int StrNLen32(const char *z, int N){
 
   OUTPUTS:
 
-  The return value is the total number value from all calls to
-  pfAppend.
-
-  Note that the order in which automatic variables are declared below
-  seems to make a big difference in determining how fast this beast
-  will run.
+  The return value is 0 on success, non-0 on error. Historically it
+  returned the total number bytes reported appended by pfAppend, but
+  those semantics (A) are only very, very rarely useful and (B) they
+  make sensibly reporting errors via the generic callback interface
+  next to impossible. e.g. the callback may encounter I/O or allocation
+  errors.
 
   Much of this code dates back to the early 1980's, supposedly.
 
   Known change history (most historic info has been lost):
 
   10 Feb 2008 by Stephan Beal: refactored to remove the 'useExtended'
-  flag (which is now always on). Added the fsl_appendf_f typedef to
+  flag (which is now always on). Added the fsl_output_f typedef to
   make this function generic enough to drop into other source trees
   without much work.
 
@@ -2773,7 +2821,7 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
               static char Inf[4] = {'I','n','f','\0'};
               bufpt = Inf;
             }
-            length = strlen(bufpt);
+            length = (int)strlen(bufpt);
             break;
           }
         }
@@ -2926,21 +2974,37 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
       }
       case etSTRING: {
         bufpt = va_arg(ap,char*);
-        length = bufpt ? strlen(bufpt) : 0;
-        if( precision>=0 && precision<length ) length = precision;
+        length = bufpt
+          ? StrNLen32(bufpt,
+                      (precision>0 && flag_alternateform)
+                      ? precision*4/*max bytes per char*/
+                      : (precision ? precision : -1))
+          : (int)0;
+        if(flag_alternateform && length && (precision>0 || width>0)){
+          appendf__utf8_altform(bufpt, &length, &precision, &width);
+        }else if( length && precision>=0 && precision<length ){
+          length = precision;
+        }
         break;
       }
       case etDYNSTRING: {
         /* etDYNSTRING needs to be handled separately because it
            free()s its argument (which isn't available outside this
-           block). This means, though, that %-#z does not work.
-        */
+           block). This means, though, that %-#z does not work. */
         bufpt = va_arg(ap,char*);
-        length = bufpt ? strlen(bufpt) : 0;
+        length = bufpt
+          ? StrNLen32(bufpt,
+                      (precision>0 && flag_alternateform)
+                      ? precision*4/*max bytes per char*/
+                      : (precision ? precision : -1))
+          : (int)0;
+        if(flag_alternateform && length && (precision>0 || width>0)){
+          appendf__utf8_altform(bufpt, &length, &precision, &width);
+        }else if( length && precision>=0 && precision<length ){
+          length = precision;
+        }
         pfrc = spech_dynstring( pfAppend, pfAppendArg,
-                                (precision>=0 && precision<length)
-                                ? precision : length,
-                                bufpt );
+                                length, bufpt );
         bufpt = NULL;
         FSLPRINTF_CHECKERR;
         length = 0;
@@ -23428,7 +23492,6 @@ typedef void ReCompiled /* porting crutch. i would strongly prefer to
                            replace the regex support with a stateful
                            predicate callback.
                         */;
-#define TO_BE_STATIC /* Porting crutch for unused static funcs */
 
 #define DIFF_CONTEXT_MASK ((u64)0x0000ffff) /* Lines of context. Default if 0 */
 #define DIFF_WIDTH_MASK   ((u64)0x00ff0000) /* side-by-side column width */
@@ -23448,12 +23511,6 @@ typedef void ReCompiled /* porting crutch. i would strongly prefer to
 /* Annotation flags (any DIFF flag can be used as Annotation flag as well) */
 #define ANN_FILE_VERS   (((u64)0x20)<<32) /* Show file vers rather than commit vers */
 #define ANN_FILE_ANCEST (((u64)0x40)<<32) /* Prefer check-ins in the ANCESTOR table */
-
-/**
-    Maximum length of a line in a text file, in bytes.  (2**13 = 8192 bytes)
- */
-#define LENGTH_MASK_SZ  15
-#define LENGTH_MASK     ((1<<LENGTH_MASK_SZ)-1)
 
 
 /*
@@ -25306,8 +25363,10 @@ static int fsl_diff_text_impl(
                          older (ported-in) code. */;
   if(!pA || !pB || (out && outRaw) || (!out && !outRaw)) return FSL_RC_MISUSE;
   else if(contextLines<0) contextLines = 5;
-  else if(contextLines & ~LENGTH_MASK) contextLines = (int)LENGTH_MASK;
-  diffFlags |= (LENGTH_MASK & contextLines);
+  else if(contextLines & ~FSL_LINE_LENGTH_MASK){
+    contextLines = (int)FSL_LINE_LENGTH_MASK;
+  }
+  diffFlags |= (FSL_LINE_LENGTH_MASK & contextLines);
   /* Encode SBS width... */
   if(sbsWidth<0
      || ((DIFF_SIDEBYSIDE & diffFlags) && !sbsWidth) ) sbsWidth = 80;
@@ -25406,9 +25465,6 @@ int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
 }
 
 #undef MARKER
-#undef TO_BE_STATIC
-#undef LENGTH_MASK
-#undef LENGTH_MASK_SZ
 #undef LENGTH
 #undef DIFF_CONTEXT_MASK
 #undef DIFF_WIDTH_MASK
@@ -25492,14 +25548,6 @@ const fsl_dline fsl_dline_empty = fsl_dline_empty_m;
 const fsl_dline_change fsl_dline_change_empty = fsl_dline_change_empty_m;
 const fsl_diff_cx fsl_diff_cx_empty = fsl_diff_cx_empty_m;
 
-/* Porting crutch for to-be-static functions */
-
-/*
-** Maximum length of a line in a text file, in bytes.  (2**15 = 32768 bytes)
-*/
-#define LENGTH_MASK_SZ  15
-#define LENGTH_MASK     ((1<<LENGTH_MASK_SZ)-1)
-
 void fsl__diff_cx_clean(fsl_diff_cx * const cx){
   fsl_free(cx->aFrom);
   fsl_free(cx->aTo);
@@ -25572,7 +25620,7 @@ int fsl_break_into_dlines(const char *z, fsl_int_t n,
     zNL = strchr(z,'\n');
     if( zNL==0 ) zNL = z+n;
     nn = (uint32_t)(zNL - z);
-    if( nn>LENGTH_MASK ){
+    if( nn>FSL_LINE_LENGTH_MASK ){
       fsl_free(a);
       *pOut = 0;
       *pnLine = 0;
@@ -25613,7 +25661,7 @@ int fsl_break_into_dlines(const char *z, fsl_int_t n,
       h ^= m;
     }
     a[i].indent = s;
-    a[i].h = h = ((h%281474976710597LL)<<LENGTH_MASK_SZ) | (k-s);
+    a[i].h = h = ((h%281474976710597LL)<<FSL_LINE_LENGTH_MASK_SZ) | (k-s);
     h2 = h % nLine;
     a[i].iNext = a[h2].iHash;
     a[h2].iHash = i+1;
@@ -25630,7 +25678,7 @@ int fsl_break_into_dlines(const char *z, fsl_int_t n,
 int fsl_dline_cmp(const fsl_dline * const pA,
                   const fsl_dline * const pB){
   if( pA->h!=pB->h ) return 1;
-  return memcmp(pA->z,pB->z, pA->h&LENGTH_MASK);
+  return memcmp(pA->z,pB->z, pA->h&FSL_LINE_LENGTH_MASK);
 }
 
 int fsl_dline_cmp_ignore_ws(const fsl_dline * const pA,
@@ -27437,15 +27485,18 @@ static int fdb__splittxt_color(fsl_diff_builder * const b,
 static int fdb__splittxt_side(fsl_diff_builder * const b,
                               SplitTxt * const sst,
                               bool isLeft,
-                              fsl_dline const * pLine){
+                              fsl_dline const * const pLine){
   int rc = fdb__splittxt_lineno(b, sst, isLeft,
                                 pLine ? (isLeft ? b->lnLHS : b->lnRHS) : 0U);
   if(0==rc){
     uint32_t const w = maxColWidth(b, sst, isLeft ? STC_TEXT1 : STC_TEXT2);
     if(pLine){
-      rc = fdb__out(b, pLine->z, w < pLine->n ? w : pLine->n);
-      if(0==rc && w>pLine->n){
-        rc = fdb__outf(b, "%.*c", (int)(w - pLine->n), ' ');
+      fsl_size_t const nU =
+        /* Measure column width in UTF8 characters, not bytes! */
+        fsl_strlen_utf8(pLine->z, (fsl_int_t)pLine->n);
+      rc = fdb__outf(b, "%#.*s", (int)(w < nU ? w : nU), pLine->z);
+      if(0==rc && w>nU){
+        rc = fdb__outf(b, "%.*c", (int)(w - nU), ' ');
       }
     }else{
       rc = fdb__outf(b, "%.*c", (int)w, ' ');
@@ -27455,14 +27506,29 @@ static int fdb__splittxt_side(fsl_diff_builder * const b,
   return rc;
 }
 
-static int fdb__splittxt_common(fsl_diff_builder * const b, fsl_dline const * pLine){
+static void fdb__splittext_update_maxlen(SplitTxt * const sst,
+                                         int col,
+                                         char const * const z,
+                                         uint32_t n){
+  if(sst->maxWidths[col]<n){
+#if 0
+    sst->maxWidths[col] = n;
+#else
+    n = (uint32_t)fsl_strlen_utf8(z, (fsl_int_t)n);
+    if(sst->maxWidths[col]<n) sst->maxWidths[col] = n;
+#endif
+  }
+}
+
+static int fdb__splittxt_common(fsl_diff_builder * const b,
+                                fsl_dline const * const pLine){
   int rc = 0;
   SPLITSTATE(sst);
   ++b->lnLHS;
   ++b->lnRHS;
   if(1==b->passNumber){
-    if(sst->maxWidths[STC_TEXT1]<pLine->n) sst->maxWidths[STC_TEXT1] = pLine->n;
-    if(sst->maxWidths[STC_TEXT2]<pLine->n) sst->maxWidths[STC_TEXT2] = pLine->n;
+    fdb__splittext_update_maxlen(sst, STC_TEXT1, pLine->z, pLine->n);
+    fdb__splittext_update_maxlen(sst, STC_TEXT2, pLine->z, pLine->n);
     return 0;
   }
   rc = fdb__splittxt_side(b, sst, true, pLine);
@@ -27471,12 +27537,13 @@ static int fdb__splittxt_common(fsl_diff_builder * const b, fsl_dline const * pL
   return rc;
 }
 
-static int fdb__splittxt_insertion(fsl_diff_builder * const b, fsl_dline const * pLine){
+static int fdb__splittxt_insertion(fsl_diff_builder * const b,
+                                   fsl_dline const * const pLine){
   int rc = 0;
   SPLITSTATE(sst);
   ++b->lnRHS;
   if(1==b->passNumber){
-    if(sst->maxWidths[STC_TEXT1]<pLine->n) sst->maxWidths[STC_TEXT1] = pLine->n;
+    fdb__splittext_update_maxlen(sst, STC_TEXT1, pLine->z, pLine->n);
     return rc;
   }
   rc = fdb__splittxt_color(b, 'i');
@@ -27487,12 +27554,13 @@ static int fdb__splittxt_insertion(fsl_diff_builder * const b, fsl_dline const *
   return rc;
 }
 
-static int fdb__splittxt_deletion(fsl_diff_builder * const b, fsl_dline const * pLine){
+static int fdb__splittxt_deletion(fsl_diff_builder * const b,
+                                  fsl_dline const * const pLine){
   int rc = 0;
   SPLITSTATE(sst);
   ++b->lnLHS;
   if(1==b->passNumber){
-    if(sst->maxWidths[STC_TEXT2]<pLine->n) sst->maxWidths[STC_TEXT2] = pLine->n;
+    fdb__splittext_update_maxlen(sst, STC_TEXT2, pLine->z, pLine->n);
     return rc;
   }
   rc = fdb__splittxt_color(b, 'd');
@@ -27504,8 +27572,8 @@ static int fdb__splittxt_deletion(fsl_diff_builder * const b, fsl_dline const * 
 }
 
 static int fdb__splittxt_replacement(fsl_diff_builder * const b,
-                                     fsl_dline const * lineLhs,
-                                     fsl_dline const * lineRhs) {
+                                     fsl_dline const * const lineLhs,
+                                     fsl_dline const * const lineRhs) {
 #if 0
   int rc = b->deletion(b, lineLhs);
   if(0==rc) rc = b->insertion(b, lineRhs);
@@ -27516,8 +27584,8 @@ static int fdb__splittxt_replacement(fsl_diff_builder * const b,
   ++b->lnLHS;
   ++b->lnRHS;
   if(1==b->passNumber){
-    if(sst->maxWidths[STC_TEXT1]<lineLhs->n) sst->maxWidths[STC_TEXT1] = lineLhs->n;
-    if(sst->maxWidths[STC_TEXT2]<lineRhs->n) sst->maxWidths[STC_TEXT2] = lineRhs->n;
+    fdb__splittext_update_maxlen(sst, STC_TEXT1, lineLhs->z, lineLhs->n);
+    fdb__splittext_update_maxlen(sst, STC_TEXT2, lineRhs->z, lineRhs->n);
     return 0;
   }
   rc = fdb__splittxt_color(b, 'e');
@@ -27534,6 +27602,7 @@ static int fdb__splittxt_finish(fsl_diff_builder * const b){
   if(1==b->passNumber){
     SPLITSTATE(sst);
     uint32_t ln = b->lnLHS;
+    /* Calculate width of line number columns. */
     sst->maxWidths[STC_NUM1] = sst->maxWidths[STC_NUM2] = 1;
     for(; ln>=10; ln/=10) ++sst->maxWidths[STC_NUM1];
     ln = b->lnRHS;
@@ -27602,8 +27671,6 @@ int fsl_diff_builder_factory( fsl_diff_builder_e type,
 #undef DIFF_CANNOT_COMPUTE_SYMLINK
 #undef DIFF_TOO_MANY_CHANGES
 #undef DIFF_WHITESPACE_ONLY
-#undef LENGTH_MASK
-#undef LENGTH_MASK_SZ
 #undef fsl_dline_empty_m
 #undef MARKER
 #undef DTCL_BUFFER
@@ -30103,6 +30170,154 @@ fsl_int_t fsl_list_index_of_cstr( fsl_list const * li,
   return fsl_list_index_of(li, key, fsl_strcmp_cmp);
 }
 /* end of file list.c */
+/* start of file lookslike.c */
+/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
+/* vim: set ts=2 et sw=2 tw=80: */
+/*
+  Copyright 2021 The Libfossil Authors, see LICENSES/BSD-2-Clause.txt
+
+  SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+  SPDX-FileCopyrightText: 2021 The Libfossil Authors
+  SPDX-ArtifactOfProjectName: Libfossil
+  SPDX-FileType: Code
+
+  Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
+*/
+
+#include <string.h> /* memcmp() */
+
+
+/* definitions for various UTF-8 sequence lengths, encoded as start value
+ * and size of each valid range belonging to some lead byte*/
+#define US2A  0x80, 0x01 /* for lead byte 0xC0 */
+#define US2B  0x80, 0x40 /* for lead bytes 0xC2-0xDF */
+#define US3A  0xA0, 0x20 /* for lead byte 0xE0 */
+#define US3B  0x80, 0x40 /* for lead bytes 0xE1-0xEF */
+#define US4A  0x90, 0x30 /* for lead byte 0xF0 */
+#define US4B  0x80, 0x40 /* for lead bytes 0xF1-0xF3 */
+#define US4C  0x80, 0x10 /* for lead byte 0xF4 */
+#define US0A  0x00, 0x00 /* for any other lead byte */
+
+/* a table used for quick lookup of the definition that goes with a
+ * particular lead byte */
+static const unsigned char lb_tab[] = {
+  US0A, US0A, US0A, US0A, US0A, US0A, US0A, US0A,
+  US0A, US0A, US0A, US0A, US0A, US0A, US0A, US0A,
+  US0A, US0A, US0A, US0A, US0A, US0A, US0A, US0A,
+  US0A, US0A, US0A, US0A, US0A, US0A, US0A, US0A,
+  US0A, US0A, US0A, US0A, US0A, US0A, US0A, US0A,
+  US0A, US0A, US0A, US0A, US0A, US0A, US0A, US0A,
+  US0A, US0A, US0A, US0A, US0A, US0A, US0A, US0A,
+  US0A, US0A, US0A, US0A, US0A, US0A, US0A, US0A,
+  US2A, US0A, US2B, US2B, US2B, US2B, US2B, US2B,
+  US2B, US2B, US2B, US2B, US2B, US2B, US2B, US2B,
+  US2B, US2B, US2B, US2B, US2B, US2B, US2B, US2B,
+  US2B, US2B, US2B, US2B, US2B, US2B, US2B, US2B,
+  US3A, US3B, US3B, US3B, US3B, US3B, US3B, US3B,
+  US3B, US3B, US3B, US3B, US3B, US3B, US3B, US3B,
+  US4A, US4B, US4B, US4B, US4C, US0A, US0A, US0A,
+  US0A, US0A, US0A, US0A, US0A, US0A, US0A, US0A
+};
+
+#undef US2A
+#undef US2B
+#undef US3A
+#undef US3B
+#undef US4A
+#undef US4B
+#undef US4C
+#undef US0A
+
+int fsl_looks_like_utf8(fsl_buffer const * const b, int stopFlags){
+  fsl_size_t n;
+  const char *z = fsl_buffer_cstr2(b, &n);
+  int j, c, flags = FSL_LOOKSLIKE_NONE;  /* Assume UTF-8 text, prove otherwise */
+
+  if( n==0 ) return flags;  /* Empty file -> text */
+  c = *z;
+  if( c==0 ){
+    flags |= FSL_LOOKSLIKE_NUL;  /* NUL character in a file -> binary */
+  }else if( c=='\r' ){
+    flags |= FSL_LOOKSLIKE_CR;
+    if( n<=1 || z[1]!='\n' ){
+      flags |= FSL_LOOKSLIKE_LONE_CR;  /* Not enough chars or next char not LF */
+    }
+  }
+  j = (c!='\n');
+  if( !j ) flags |= (FSL_LOOKSLIKE_LF | FSL_LOOKSLIKE_LONE_LF);  /* Found LF as first char */
+  while( !(flags&stopFlags) && --n>0 ){
+    int c2 = c;
+    c = *++z; ++j;
+    if( c==0 ){
+      flags |= FSL_LOOKSLIKE_NUL;  /* NUL character in a file -> binary */
+    }else if( c=='\n' ){
+      flags |= FSL_LOOKSLIKE_LF;
+      if( c2=='\r' ){
+        flags |= (FSL_LOOKSLIKE_CR | FSL_LOOKSLIKE_CRLF);  /* Found LF preceded by CR */
+      }else{
+        flags |= FSL_LOOKSLIKE_LONE_LF;
+      }
+      if( j>FSL_LINE_LENGTH_MASK ){
+        flags |= FSL_LOOKSLIKE_LONG;  /* Very long line -> binary */
+      }
+      j = 0;
+    }else if( c=='\r' ){
+      flags |= FSL_LOOKSLIKE_CR;
+      if( n<=1 || z[1]!='\n' ){
+        flags |= FSL_LOOKSLIKE_LONE_CR;  /* Not enough chars or next char not LF */
+      }
+    }
+  }
+  if( n ){
+    flags |= FSL_LOOKSLIKE_SHORT;  /* The whole blob was not examined */
+  }
+  if( j>FSL_LINE_LENGTH_MASK ){
+    flags |= FSL_LOOKSLIKE_LONG;  /* Very long line -> binary */
+  }
+  return flags;
+}
+
+unsigned char const *fsl_utf8_bom(unsigned int *pnByte){
+  static const unsigned char bom[] = {
+    0xef, 0xbb, 0xbf, 0x00, 0x00, 0x00
+  };
+  if( pnByte ) *pnByte = 3;
+  return bom;
+}
+
+bool fsl_starts_with_bom_utf8(fsl_buffer const * const b,
+                              unsigned int *pBomSize){
+  unsigned int bomSize;
+  const char * const z = fsl_buffer_cstr(b);
+  const unsigned char * const bom = fsl_utf8_bom(&bomSize);
+  if( pBomSize ) *pBomSize = bomSize;
+  return fsl_buffer_size(b)<bomSize
+    ? false
+    : memcmp(z, bom, bomSize)==0;
+}
+
+bool fsl_invalid_utf8(fsl_buffer const * const b){
+  fsl_size_t n;
+  const unsigned char *z = (unsigned char *) fsl_buffer_cstr2(b, &n);
+  unsigned char c; /* lead byte to be handled. */
+  if( n==0 ) return false;  /* Empty file -> OK */
+  c = *z;
+  while( --n>0 ){
+    if( c>=0x80 ){
+      const unsigned char *def; /* pointer to range table*/
+      c <<= 1; /* multiply by 2 and get rid of highest bit */
+      def = &lb_tab[c]; /* search fb's valid range in table */
+      if( (unsigned int)(*++z-def[0])>=def[1] ){
+        return false/*FSL_LOOKSLIKE_INVALID*/;
+      }
+      c = (c>=0xC0) ? (c|3) : ' '; /* determine next lead byte */
+    } else {
+      c = *++z;
+    }
+  }
+  return c<0x80 /* Final lead byte must be ASCII. */;
+}
+/* end of file lookslike.c */
 /* start of file md5.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /*
@@ -37531,6 +37746,37 @@ char *fsl_getenv(const char *zName){
 #endif
   if( zValue ) zValue = fsl_filename_to_utf8(zValue);
   return zValue;
+}
+
+fsl_size_t fsl_strlen_utf8( char const * str, fsl_int_t len ){
+  if( !str || !len ) return 0;
+  else if(len<0){
+    len = (fsl_int_t)fsl_strlen(str);
+  }
+  {
+    char unsigned const * x = (char unsigned const *)str;
+    char unsigned const * end = x + len;
+    fsl_size_t rc = 0;
+    /* Derived from:
+       http://www.daemonology.net/blog/2008-06-05-faster-utf8-strlen.html
+    */
+    for( ; x < end; ++x, ++rc ){
+      switch(0xF0 & *x) {
+        case 0xF0: /* length 4 */
+          x += 3;
+          break;
+        case 0xE0: /* length 3 */
+          x+= 2;
+          break;
+        case 0xC0: /* length 2 */
+          x += 1;
+          break;
+        default:
+          break;
+      }
+    }
+    return rc;
+  }
 }
 /* end of file utf8.c */
 /* start of file vfile.c */

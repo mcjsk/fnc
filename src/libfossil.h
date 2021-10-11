@@ -1711,6 +1711,18 @@ FSL_EXPORT char * fsl_strndup( char const * src, fsl_int_t len );
 FSL_EXPORT fsl_size_t fsl_strlen( char const * src );
 
 /**
+   Returns the number of UTF8 characters which begin within the first
+   n bytes of str (noting that it's possible that a multi-byte
+   character starts 1-3 bytes away from the end and overlaps past the
+   end of (str+len)). If len is negative then fsl_strlen() is used to
+   calculate it.
+
+   Results are undefined if str is not UTF8 input or if str contains a
+   BOM marker.
+*/
+FSL_EXPORT fsl_size_t fsl_strlen_utf8( char const * str, fsl_int_t n );
+
+/**
    Like strcmp(3) except that it accepts NULL pointers.  NULL sorts
    before all non-NULL string pointers.  Also, this routine
    performs a binary comparison that does not consider locale.
@@ -1779,7 +1791,7 @@ FSL_EXPORT bool fsl_str_bool( char const * s );
 /**
    Flags for use with fsl_db_open() and friends.
 */
-enum fsl_open_flags {
+enum fsl_open_flags_e {
 /**
    The "no flags" value.
 */
@@ -1828,10 +1840,10 @@ FSL_OPEN_F_TRACE_SQL = 0x40
    the mode string: stdout is returned if 'w' or '+' appear,
    otherwise stdin.
 
-   If it returns NULL, the errno "should" contain a description of
-   the problem unless the problem was argument validation. Pass it
-   to fsl_errno_to_rc() to convert that into an API-conventional
-   error code.
+   If it returns NULL, the global errno "should" contain a description
+   of the problem unless the problem was argument validation. Pass it
+   to fsl_errno_to_rc() to convert that into an API-conventional error
+   code.
 
    If at all possible, use fsl_close() (as opposed to fclose()) to
    close these handles, as it has logic to skip closing the
@@ -1905,13 +1917,23 @@ FSL_EXPORT void fsl_fclose(FILE * f);
    each pair refers to only a single percent sign in the format
    string.)
 
-   %%z works like %%s, but takes a non-const (char *) and deletes
-   the string (using fsl_free()) after appending it to the output.
+   %%s works like conventional printf %%s except that any precision
+   value can be modified via the '#' flag to counts in UTF8 characters
+   instead of bytes! That is, if an "%%#.10s" argument has a byte
+   length of 20, a precision of 10, and contains only 8 UTF8, its
+   precision will allow it to output all 8 characters, even though
+   they total 20 bytes. The '#' flag works this way for both width and
+   precision.
 
-   %%h (HTML) works like %%s but converts certain characters (namely
-   '<' and '&') to their HTML escaped equivalents.
+   %%z works exactly like %%s, but takes a non-const (char *) and
+   deletes the string (using fsl_free()) after appending it to the
+   output.
 
-   %%t (URL encode) works like %%s but converts certain characters
+   %%h (HTML) works like %%s but (A) does not support the '#' flag and
+   (B) converts certain characters (namely '<' and '&') to their HTML
+   escaped equivalents.
+
+   %%t (URL encode) works like %%h but converts certain characters
    into a representation suitable for use in an HTTP URL. (e.g. ' ' 
    gets converted to %%20)
 
@@ -1943,11 +1965,11 @@ FSL_EXPORT void fsl_fclose(FILE * f);
    storing that option in global state, which is not an option for
    this implementation.)
 
-   %%/: works like %%s but normalizes path-like strings by
+   %%/: works mostly like %%s but normalizes path-like strings by
    replacing backslashes with the One True Slash.
 
    %%b: works like %%s but takes its input from a (fsl_buffer
-   const*) argument.
+   const*) argument. It does not support the '#' flag.
 
    %%B: works like %%Q but takes its input from a (fsl_buffer
    const*) argument.
@@ -1956,7 +1978,7 @@ FSL_EXPORT void fsl_fclose(FILE * f);
    fsl_bytes_fossilize().  This requires dynamic memory allocation, so
    is less efficient than re-using a client-provided buffer with
    fsl_bytes_fossilize() if the client needs to fossilize more than
-   one element.
+   one element. Does not support the '#' flag.
 
    %%j: works like %%s but JSON-encodes the string. It does not
    include the outer quotation marks by default, but using the '!'
@@ -2564,7 +2586,6 @@ FSL_EXPORT void fsl_mbcs_free(char * mbcs);
    proper finalizer for its returned memory.
 */
 FSL_EXPORT void fsl_unicode_free(void *);
-
 
 /**
    Translate UTF-8 to Unicode for use in system calls. Returns a
@@ -3556,7 +3577,8 @@ struct fsl_diff_opt {
      FSL_DIFF_BUILDER_SPLIT_TEXT truncates its content columns (as
      opposed to line numbers and its modification marker) to, at most,
      this width. By default it uses as much width as is necessary to
-     render whole lines.
+     render whole lines. It treats this limit as UTF8 characters, not
+     bytes.
 
      This is a hint, not a rule. A given diff builder is free to
      ignore it or to ignore values which are arbitrarily deemed "too
@@ -5571,6 +5593,138 @@ FSL_EXPORT void fsl_buffer_strip_slashes(fsl_buffer * b);
 */
 FSL_EXPORT int fsl_id_bag_to_buffer(fsl_id_bag const * bag, fsl_buffer * b,
                                     char const * separator);
+
+/**
+   Flags for use with the fsl_looks family of functions.
+*/
+enum fsl_lookslike_e {
+/* Nothing special was found. */
+FSL_LOOKSLIKE_NONE    = 0x00000000,
+/* One or more NUL chars were found. */
+FSL_LOOKSLIKE_NUL     = 0x00000001,
+/* One or more CR chars were found. */
+FSL_LOOKSLIKE_CR      = 0x00000002,
+/* An unpaired CR char was found. */
+FSL_LOOKSLIKE_LONE_CR = 0x00000004,
+/* One or more LF chars were found. */
+FSL_LOOKSLIKE_LF      = 0x00000008,
+/* An unpaired LF char was found. */
+FSL_LOOKSLIKE_LONE_LF = 0x00000010,
+/* One or more CR/LF pairs were found. */
+FSL_LOOKSLIKE_CRLF    = 0x00000020,
+/* An over length line was found. */
+FSL_LOOKSLIKE_LONG    = 0x00000040,
+/* An odd number of bytes was found. */
+FSL_LOOKSLIKE_ODD     = 0x00000080,
+/* Unable to perform full check. */
+FSL_LOOKSLIKE_SHORT   = 0x00000100,
+/* Invalid sequence was found. */
+FSL_LOOKSLIKE_INVALID = 0x00000200,
+/* Might be binary. */
+FSL_LOOKSLIKE_BINARY  = FSL_LOOKSLIKE_NUL | FSL_LOOKSLIKE_LONG | FSL_LOOKSLIKE_SHORT,
+ /* Line separators. */
+FSL_LOOKSLIKE_EOL     = (FSL_LOOKSLIKE_LONE_CR | FSL_LOOKSLIKE_LONE_LF | FSL_LOOKSLIKE_CRLF)
+};
+
+/**
+   Returns true if b appears to contain "binary" (non-UTF8/16) content,
+   else returns true.
+*/
+FSL_EXPORT bool fsl_looks_like_binary(fsl_buffer const * const b);
+
+/**
+   If b appears to contain any non-UTF8 content, returns a truthy
+   value: one or more values from the fsl_lookslike_e enum indicating
+   which sort of data was seen which triggered its conclusion:
+
+   - FSL_LOOKSLIKE_BINARY means the content appears to be binary
+     because it contains embedded NUL bytes or an "extremely long"
+     line. This function may diagnose UTF-16 as binary.
+
+   - !FSL_LOOKSLIKE_BINARY means the content is non-binary but may
+     not necessarily be valid UTF-8.
+
+   - 0 means the contents appear to be valid UTF-8.
+
+   It b's content is empty, returns 0.
+
+   The 2nd argument can be a mask of any values from fsl_lookslike_e
+   and will cause this routine to stop inspecting the input once it
+   encounters any content described by those flags.
+
+   The contents are examined until the end is reached or a condition
+   described by the 2nd parameter's flags is encountered.
+
+   WARNINGS:
+
+   - This function does not validate that the blob content is properly
+     formed UTF-8.  It assumes that all code points are the same size.
+     It does not validate any code points.  It makes no attempt to
+     detect if any [invalid] switches between UTF-8 and other
+     encodings occur.
+
+    - The only code points that this function cares about are the NUL
+      character, carriage-return, and line-feed.
+*/
+FSL_EXPORT int fsl_looks_like_utf8(fsl_buffer const * const b, int stopFlags);
+
+/**
+   Returns true if b's contents appear to contain anything other than valid
+   UTF8.
+
+   It uses the approach described at:
+
+   http://en.wikipedia.org/wiki/UTF-8#Invalid_byte_sequences
+
+   except for the "overlong form" of \\u0000 which is not considered
+   invalid here: Some languages, like Java and Tcl, use it. This function
+   also considers valid the derivatives CESU-8 & WTF-8.
+*/
+FSL_EXPORT bool fsl_invalid_utf8(fsl_buffer const * const b);
+
+/**
+   Returns a static pointer to bytes of a UTF8 BOM. If the argument is
+   not NULL, it is set to the strlen of those bytes (always 3).
+*/
+FSL_EXPORT unsigned char const *fsl_utf8_bom(unsigned int *pnByte);
+
+/**
+   Returns true if b starts with a UTF8 BOM. If the 2nd argument is
+   not NULL, *pBomSize is set to the number of bytes in the BOM
+   (always 3), regardless of whether or not the function returns true
+   or false.
+*/
+FSL_EXPORT bool fsl_starts_with_bom_utf8(fsl_buffer const * const b, unsigned int *pBomSize);
+
+#if 0
+/**
+   The UTF16 counterpart of fsl_looks_like_utf8(), with the addition that the
+   2nd argument, if true, specifies that the 2nd argument is true then
+   the contents of the buffer are byte-swapped for checking purposes.
+
+   This is not validate that the blob is valid UTF16. It assumes that all
+   code points are the same size and does not validate any of them, nor does
+   it attempt to detect (invalid) switches between big-endian and little-endian.
+ */
+FSL_EXPORT int fsl_looks_like_utf16(fsl_buffer const * const pContent,
+                                    bool reverse, int stopFlags);
+
+/**
+   Returns true if b'c contents begin with a UTF-16 BOM. If pBomSize is not NULL
+   then it is set to the byte length of the UTF-16 BOM (2 bytes). If isReversed
+   is not NULL, it gets assigned to true if the input appears to be in little-endian
+   format and false if it appears to be in big-endian format.
+*/
+FSL_EXPORT bool fsl_starts_with_bom_utf16(fsl_buffer const * const b, unsigned int *pBomSize,
+                                          bool * isReversed);
+/**
+   Returns true if b's content _might_ be valid UTF-16. If the 2nd argument is not NULL,
+   it gets set to true if the input appears to be little-endian and false if it appears
+   to be big-endian.
+*/
+FSL_EXPORT bool fsl_might_be_utf16(fsl_buffer const * const b, bool * isReversed);
+#endif
+/* ^^^^ UTF-16 interfaces */
 
 #if defined(__cplusplus)
 } /*extern "C"*/
@@ -18240,6 +18394,16 @@ void fsl__diff_cx_clean(fsl_diff_cx * const cx);
  */
 void fsl__dump_triples(fsl_diff_cx const * const p,
                        char const * zFile, int ln );
+
+/** @internal
+
+    Maximum length of a line in a text file, in bytes.  (2**13 = 8192 bytes)
+*/
+#define FSL_LINE_LENGTH_MASK_SZ  15
+/** @internal
+
+ */
+#define FSL_LINE_LENGTH_MASK     ((1<<FSL_LINE_LENGTH_MASK_SZ)-1)
 
 #if defined(__cplusplus)
 } /*extern "C"*/
