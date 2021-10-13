@@ -78,6 +78,8 @@
 #define nitems(a)	(sizeof((a)) / sizeof((a)[0]))
 #define STRINGIFYOUT(s)	#s
 #define STRINGIFY(s)	STRINGIFYOUT(s)
+#define CONCATOUT(a, b)	a ## b
+#define CONCAT(a, b)	CONCATOUT(a, b)
 #define FILE_POSITION	__FILE__ ":" STRINGIFY(__LINE__)
 
 /* Application macros. */
@@ -114,6 +116,16 @@
 		(var) != (NULL) && ((tmp) = TAILQ_NEXT(var, field), 1);	\
 		(var) = (tmp))
 #endif
+
+/*
+ * STAILQ was added to OpenBSD 6.9; fallback to SIMPLEQ for prior versions.
+ * XXX This is an ugly hack; replace with a better solution.
+ */
+#ifdef __OpenBSD__
+# ifndef STAILQ_HEAD
+#  define STAILQ SIMPLEQ
+# endif /* STAILQ_HEAD */
+#endif /* OpenBSD */
 
 #if defined __linux__
 # ifndef strlcat
@@ -169,6 +181,9 @@ static struct fnc_setup {
 	bool		 quiet;		/* Disable verbose diff output. */
 	bool		 invert;	/* Toggle inverted diff output. */
 
+	/* Blame options. */
+	bool		 reverse;	/* Reverse annotation; requires sym. */
+
 	/* Command line flags and help. */
 	fcli_help_info	  fnc_help;			/* Global help. */
 	fcli_cliflag	  cliflags_global[3];		/* Global options. */
@@ -177,7 +192,7 @@ static struct fnc_setup {
 	fcli_cliflag	  cliflags_timeline[10];	/* Timeline options. */
 	fcli_cliflag	  cliflags_diff[7];		/* Diff options. */
 	fcli_cliflag	  cliflags_tree[4];		/* Tree options. */
-	fcli_cliflag	  cliflags_blame[2];		/* Blame options. */
+	fcli_cliflag	  cliflags_blame[5];		/* Blame options. */
 } fnc_init = {
 	NULL,		/* cmdarg copy of argv[1] to aid usage/error report. */
 	NULL,		/* sym(bolic name) of commit to open defaults to tip. */
@@ -197,6 +212,7 @@ static struct fnc_setup {
 	false,		/* nocolour defaults to off (i.e., use diff colours). */
 	false,		/* quiet defaults to off (i.e., verbose diff is on). */
 	false,		/* invert diff defaults to off. */
+	false,		/* reverse annotation defaults to off. */
 
 	{ /* fnc_help global app help details. */
 	    "A read-only ncurses browser for Fossil repositories in the "
@@ -311,8 +327,28 @@ static struct fnc_setup {
 	}, /* End cliflags_tree. */
 
 	{ /* cliflags_blame blame command related options. */
+	    FCLI_FLAG("c", "commit", "<commit>", &fnc_init.sym,
+            "Start blame of specified file from <commit>. Common symbols are:\n"
+            "\tSHA{1,3} hash\n"
+            "\tSHA{1,3} unique prefix\n"
+            "\tbranch\n"
+            "\ttag:TAG\n"
+            "\troot:BRANCH\n"
+            "\tISO8601 date\n"
+            "\tISO8601 timestamp\n"
+            "\t{tip,current,prev,next}\n    "
+            "For a complete list of symbols see Fossil's Check-in Names:\n    "
+            "https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki"),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
             "Display blame command help and usage."),
+            FCLI_FLAG("n", "limit", "<n>", &fnc_init.nrecords.zlimit,
+	    "Limit depth of blame history to <n> commits. Useful for large "
+	    "files\n    with extensive history."),
+            FCLI_FLAG_BOOL("r", "reverse", &fnc_init.reverse,
+	    "Reverse annotate the file starting from a historical commit. "
+	    "Rather\n    than show the most recent change of each line, show "
+	    "the first time\n    each line was modified after the specified "
+	    "commit. Requires -c|--commit."),
 	    fcli_cliflag_empty_m
 	}, /* End cliflags_blame. */
 };
@@ -505,6 +541,8 @@ struct fnc_diff_view_state {
 	fsl_buffer			 buf;
 	fsl_list			 colours;
 	FILE				*f;
+	fsl_uuid_str			 id1;
+	fsl_uuid_str			 id2;
 	int				 first_line_onscreen;
 	int				 last_line_onscreen;
 	int				 diff_flags;
@@ -517,6 +555,7 @@ struct fnc_diff_view_state {
 	off_t				*line_offsets;
 	bool				 eof;
 	bool				 colour;
+	bool				 showmeta;
 };
 
 TAILQ_HEAD(fnc_parent_trees, fnc_parent_tree);
@@ -540,6 +579,52 @@ struct fnc_tree_view_state {			  /* Parent trees of the- */
 	bool				 show_id;
 };
 
+struct fnc_blame_line {
+	fsl_uuid_str	id;
+	bool		annotated;
+};
+
+struct fnc_blame {
+	struct fnc_view		*view;
+	FILE			*f;		/* Output of fsl_annotate() */
+	FILE			*f0;		/* Non-annotated copy of file */
+	struct fnc_blame_line	*lines;
+	fsl_annotate_opt	 blame_opt;
+	const char		*path;		/* File path being blamed. */
+	fsl_uuid_str		 commit_id;	/* Commit to begin blame. */
+	off_t			*line_offsets;
+	off_t			 filesz;
+	fsl_id_t		 origin;	/* Tip rid for reverse blame. */
+	int			 nlines;
+	int			 nannotated;
+	int			 ndepth;	/* Limit depth traversal. */
+	bool			*complete;
+	bool			*quit;
+};
+
+CONCAT(STAILQ, _HEAD)(fnc_commit_id_queue, fnc_commit_qid);
+struct fnc_commit_qid {
+	CONCAT(STAILQ, _ENTRY)(fnc_commit_qid) entry;
+	fsl_uuid_str	 id;
+};
+
+struct fnc_blame_view_state {
+	struct fnc_blame		 blame;
+	struct fnc_commit_id_queue	 blamed_commits;
+	struct fnc_commit_qid		*blamed_commit;
+	struct fnc_commit_artifact	*selected_commit;
+	fsl_list			 colours;
+	fsl_uuid_str			 commit_id;
+	char				*path;
+	int				 first_line_onscreen;
+	int				 last_line_onscreen;
+	int				 selected_line;
+	int				 matched_line;
+	bool				 done;
+	bool				 blame_complete;
+	bool				 eof;
+};
+
 TAILQ_HEAD(view_tailhead, fnc_view);
 struct fnc_view {
 	TAILQ_ENTRY(fnc_view)	 entries;
@@ -551,7 +636,7 @@ struct fnc_view {
 		struct fnc_diff_view_state	diff;
 		struct fnc_tl_view_state	timeline;
 		struct fnc_tree_view_state	tree;
-		/* struct fnc_blame_view_state	blame; */
+		struct fnc_blame_view_state	blame;
 	} state;
 	enum fnc_view_id	 vid;
 	enum fnc_search_state	 search_status;
@@ -602,7 +687,8 @@ static int		 write_commit_line(struct fnc_view *,
 static int		 view_input(struct fnc_view **, int *,
 			    struct fnc_view *, struct view_tailhead *);
 static void		 help(struct fnc_view *);
-static void		 padpopup(struct fnc_view *, const char **, const char *);
+static void		 padpopup(struct fnc_view *, const char **,
+			    const char *);
 static void		 centerprint(WINDOW *, int, int, int, const char *,
 			    chtype);
 static int		 tl_input_handler(struct fnc_view **, struct fnc_view *,
@@ -623,7 +709,7 @@ static int		 init_diff_commit(struct fnc_view **, int,
 			    struct fnc_commit_artifact *, struct fnc_view *);
 static int		 open_diff_view(struct fnc_view *,
 			    struct fnc_commit_artifact *, int, bool, bool, bool,
-			    struct fnc_view *);
+			    struct fnc_view *, bool);
 static void		 show_diff_status(struct fnc_view *);
 static int		 create_diff(struct fnc_diff_view_state *);
 static int		 create_changeset(struct fnc_commit_artifact *);
@@ -640,8 +726,8 @@ static int		 write_diff_meta(fsl_buffer *, const char *,
 static int		 diff_file(fsl_buffer *, fsl_buffer *, const char *,
 			    fsl_uuid_str, const char *, enum fsl_ckout_change_e,
 			    int, int, bool);
-static int		 diff_non_checkin(fsl_buffer *, struct
-			    fnc_commit_artifact *, int, int, int);
+static int		 diff_non_checkin(fsl_buffer *,
+			    struct fnc_commit_artifact *, int, int, int);
 static int		 diff_file_artifact(fsl_buffer *, fsl_id_t,
 			    const fsl_card_F *, fsl_id_t, const fsl_card_F *,
 			    fsl_ckout_change_e, int, int, int);
@@ -680,6 +766,9 @@ static int		 link_tree_node(struct fnc_repository_tree *,
 static int		 show_tree_view(struct fnc_view *);
 static int		 tree_input_handler(struct fnc_view **,
 			    struct fnc_view *, int);
+static int		 blame_tree_entry(struct fnc_view **, int,
+			    struct fnc_tree_entry *, struct fnc_parent_trees *,
+			    fsl_uuid_str);
 static int		 tree_search_init(struct fnc_view *);
 static int		 tree_search_next(struct fnc_view *);
 static int		 tree_entry_path(char **, struct fnc_parent_trees *,
@@ -696,6 +785,25 @@ static int		 tree_entry_get_symlink_target(char **,
 static int		 match_tree_entry(struct fnc_tree_entry *, regex_t *);
 static void		 fnc_object_tree_close(struct fnc_tree_object *);
 static void		 fnc_close_repository_tree(struct fnc_repository_tree *);
+static int		 open_blame_view(struct fnc_view *, char *,
+			    fsl_uuid_str, fsl_id_t, int);
+static int		 run_blame(struct fnc_view *);
+static int		 fnc_dump_buffer_to_file(off_t *, int *, off_t **,
+			    FILE *, fsl_buffer *);
+static int		 show_blame_view(struct fnc_view *);
+static int		 fnc_blame(struct fnc_blame *);
+static int		 draw_blame(struct fnc_view *);
+static int		 blame_input_handler(struct fnc_view **,
+			    struct fnc_view *, int);
+static int		 blame_search_init(struct fnc_view *);
+static int		 blame_search_next(struct fnc_view *);
+static fsl_uuid_cstr	 get_selected_commit_id(struct fnc_blame_line *,
+			    int, int, int);
+static int		 fnc_commit_qid_alloc(struct fnc_commit_qid **,
+			    fsl_uuid_cstr);
+static int		 close_blame_view(struct fnc_view *);
+static int		 stop_blame(struct fnc_blame *);
+static void		 fnc_commit_qid_free(struct fnc_commit_qid *);
 static void		 view_set_child(struct fnc_view *, struct fnc_view *);
 static int		 view_close_child(struct fnc_view *);
 static int		 close_tree_view(struct fnc_view *);
@@ -764,30 +872,27 @@ main(int argc, const char **argv)
 
 	if (argc == 1)
 		cmd = &fnc_init.cmd_args[FNC_VIEW_TIMELINE];
-	else if ((rc = fcli_dispatch_commands(fnc_init.cmd_args, false)
-	    == FSL_RC_NOT_FOUND) && argc == 2) {
-		/*
-		 * Check if user entered 'fnc path/in/repo' and if a valid path
-		 * is found, assume 'fnc timeline path/in/repo' was meant.
-		 */
-		rc = map_repo_path(&path);
-		if (rc == FSL_RC_NOT_FOUND || !path) {
-			rc = RC(rc, "'%s' is not a valid command or path",
-			    argv[1]);
-			fnc_init.err = rc;
+	else if (fcli_dispatch_commands(fnc_init.cmd_args, false)) {
+		if (argc == 2) {
+			/*
+			 * Check if user entered fnc path/in/repo; if valid path
+			 * is found, assume fnc timeline path/in/repo was meant.
+			 */
+			rc = map_repo_path(&path);
+			if (rc == FSL_RC_NOT_FOUND || !path) {
+				rc = RC(rc, "'%s' is not a valid command or "
+				    "path", argv[1]);
+				fnc_init.err = rc;
+				usage();
+				/* NOT REACHED */
+			} else if (rc)
+				goto end;
+			cmd = &fnc_init.cmd_args[FNC_VIEW_TIMELINE];
+			fnc_init.path = path;
+			fcli_err_reset(); /* cmd_timeline::fcli_process_flags */
+		} else
 			usage();
 			/* NOT REACHED */
-		} else if (rc)
-			goto end;
-		cmd = &fnc_init.cmd_args[FNC_VIEW_TIMELINE];
-		fnc_init.path = path;
-		fcli_err_reset(); /* For cmd_timeline::fcli_process_flags(). */
-	}
-
-	if ((rc = fcli_has_unused_args(false))) {
-		fnc_init.err = rc;
-		usage();
-		/* NOT REACHED */
 	}
 
 	f = fcli_cx();
@@ -887,10 +992,10 @@ map_repo_path(char **requested_path)
 	fsl_cx		*const f = fcli_cx();
 	fsl_buffer	 buf = fsl_buffer_empty;
 	char		*canonpath = NULL, *ckoutdir = NULL, *path = NULL;
+	const char	*ckoutdir0 = NULL;
 	fsl_size_t	 len;
 	int		 rc = 0;
 	bool		 root;
-	const char	*ckoutdir0 = 0;
 
 	*requested_path = NULL;
 
@@ -1098,6 +1203,7 @@ init_curses(void)
 	intrflush(stdscr, FALSE);
 	keypad(stdscr, TRUE);
 	curs_set(0);
+	set_escdelay(0);  /* ESC should return immediately. */
 #ifndef __linux__
 	typeahead(-1);	/* Don't disrupt screen update operations. */
 #endif
@@ -1207,12 +1313,11 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 		fsl_deck_F_rewind(&d);
 		if (fsl_deck_F_search(&d, path + 1 /* Slash */) == NULL) {
 			const fsl_card_F *cf;
+			fsl_deck_F_next(&d, &cf);
 			do {
 				fsl_deck_F_next(&d, &cf);
-				if (cf == NULL)
-					break;
-				if (!fsl_strncmp(path + 1 /* Slash */, cf->name,
-				    fsl_strlen(path) - 1)) {
+				if (cf && !fsl_strncmp(path + 1 /* Slash */,
+				    cf->name, fsl_strlen(path) - 1)) {
 					ispath = true;
 					break;
 				}
@@ -1652,7 +1757,6 @@ build_commits(struct fnc_tl_thread_cx *cx)
 			return RC(FSL_RC_ERROR, "%s", "fsl_malloc");
 
 		entry->commit = commit;
-		fsl_stmt_cached_yield(cx->q);
 
 		rc = pthread_mutex_lock(&fnc_mutex);
 		if (rc)
@@ -1682,8 +1786,9 @@ build_commits(struct fnc_tl_thread_cx *cx)
 }
 
 /*
- * Given SQL statement q and, optionally, record ID rid, build the commit from
- * the corresponding result set.
+ * Given prepared SQL statement q _XOR_ record ID rid, allocate and build the
+ * corresponding commit artifact from the result set. The commit must
+ * eventually be disposed of with fnc_commit_artifact_close().
  */
 static int
 commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
@@ -1694,6 +1799,25 @@ commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
 	fsl_buffer			 buf = fsl_buffer_empty;
 	const char			*comment, *prefix, *type;
 	int				 rc = 0;
+
+	if (rid) {
+		rc = fsl_db_prepare_cached(db, &q, "SELECT "
+		    /* 0 */"uuid, "
+		    /* 1 */"datetime(event.mtime%s), "
+		    /* 2 */"coalesce(euser, user), "
+		    /* 3 */"rid AS rid, "
+		    /* 4 */"event.type AS eventtype, "
+		    /* 5 */"(SELECT group_concat(substr(tagname,5), ',') "
+		    "FROM tag, tagxref WHERE tagname GLOB 'sym-*' "
+		    "AND tag.tagid=tagxref.tagid AND tagxref.rid=blob.rid "
+		    "AND tagxref.tagtype > 0) as tags, "
+		    /*6*/"coalesce(ecomment, comment) AS comment "
+		    "FROM event JOIN blob WHERE blob.rid=%d AND event.objid=%d",
+		    fnc_init.utc ? "" : ", 'localtime'", rid, rid);
+		if (rc)
+			return RC(FSL_RC_DB, "%s", "fsl_db_prepare_cached");
+		fsl_stmt_step(q);
+	}
 
 	type = fsl_stmt_g_text(q, 4, NULL);
 	comment = fsl_stmt_g_text(q, 6, NULL);
@@ -1741,16 +1865,22 @@ commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
 	};
 	if (!rc)
 		rc = fsl_buffer_append(&buf, comment, -1);
-	if (rc)
-		return RC(rc, "%s", "fsl_buffer_append");
+	if (rc) {
+		rc = RC(rc, "%s", "fsl_buffer_append");
+		goto end;
+	}
 
 	commit = calloc(1, sizeof(*commit));
-	if (commit == NULL)
-		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR), "%s", "calloc");
+	if (commit == NULL) {
+		rc = RC(fsl_errno_to_rc(errno, FSL_RC_ERROR), "%s", "calloc");
+		goto end;
+	}
 
 
-	if (!rid && (rc = fsl_stmt_get_id(q, 3, &rid)))
-		return RC(rc, "%s", "fsl_stmt_get_id");
+	if (!rid && (rc = fsl_stmt_get_id(q, 3, &rid))) {
+		rc = RC(rc, "%s", "fsl_stmt_get_id");
+		goto end;
+	}
 	/* Is there a more efficient way to get the parent? */
 	commit->puuid = fsl_db_g_text(db, NULL,
 	    "SELECT uuid FROM plink, blob WHERE plink.cid=%d "
@@ -1765,6 +1895,8 @@ commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
 	fsl_buffer_clear(&buf);
 
 	*ptr = commit;
+end:
+	fsl_stmt_cached_yield(q);
 	return rc;
 }
 
@@ -3178,8 +3310,8 @@ init_diff_commit(struct fnc_view **new_view, int start_col,
 	if (diff_view == NULL)
 		return RC(FSL_RC_ERROR, "%s", "view_open");
 
-	rc = open_diff_view(diff_view, commit, 5, fnc_init.ws,
-	    fnc_init.invert, !fnc_init.quiet, timeline_view);
+	rc = open_diff_view(diff_view, commit, DIFF_DEF_CTXT, fnc_init.ws,
+	    fnc_init.invert, !fnc_init.quiet, timeline_view, true);
 	if (!rc)
 		*new_view = diff_view;
 
@@ -3189,7 +3321,7 @@ init_diff_commit(struct fnc_view **new_view, int start_col,
 static int
 open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
     int context, bool ignore_ws, bool invert, bool verbosity,
-    struct fnc_view *timeline_view)
+    struct fnc_view *timeline_view, bool showmeta)
 {
 	struct fnc_diff_view_state	*s = &view->state.diff;
 	int				 rc = 0;
@@ -3207,6 +3339,7 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	s->timeline_view = timeline_view;
 	s->colours = fsl_list_empty;
 	s->colour = !fnc_init.nocolour && has_colors();
+	s->showmeta = showmeta;
 
 	if (s->colour)
 		set_colours(&s->colours, FNC_VIEW_DIFF);
@@ -3218,8 +3351,13 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	s->nlines = 0;
 	s->ncols = view->ncols;
 	rc = create_diff(s);
-	if (rc)
+	if (rc) {
+		if (s->colour) {
+			struct fsl_list_state st = { FNC_COLOUR_OBJ };
+			fsl_list_clear(&s->colours, fsl_list_object_free, &st);
+		}
 		return rc;
+	}
 
 	view->show = show_diff;
 	view->input = diff_input_handler;
@@ -3281,15 +3419,32 @@ create_diff(struct fnc_diff_view_state *s)
 		diff_non_checkin(&s->buf, s->selected_commit, s->diff_flags,
 		    s->context, s->sbs);
 
+	/*
+	 * Delay assigning diff headline labels (i.e., diff id1 id2) till now
+	 * because wiki parent commits are obtained in diff_non_checkin().
+	 */
+	if (s->selected_commit->puuid) {
+		s->id1 = fsl_strdup(s->selected_commit->puuid);
+		if (s->id1 == NULL) {
+			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+			goto end;
+		}
+	} else
+		s->id1 = NULL;	/* Initial commit, tag, technote, etc. */
+	if (s->selected_commit->uuid) {
+		s->id2 = fsl_strdup(s->selected_commit->uuid);
+		if (s->id2 == NULL) {
+			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+			goto end;
+		}
+	} else
+		s->id2 = NULL;	/* Local work tree. */
+
 	rc = add_line_offset(&s->line_offsets, &s->nlines, 0);
 	if (rc)
 		goto end;
 
-	/*
-	 * If we don't have a timeline view, we arrived here via cmd_diff()
-	 * (i.e., 'fnc diff' on the CLI), so don't display commit metadata.
-	 */
-	if (s->timeline_view)
+	if (s->showmeta)
 		write_commit_meta(s);
 
 	/*
@@ -4191,13 +4346,31 @@ static int
 show_diff(struct fnc_view *view)
 {
 	struct fnc_diff_view_state	*s = &view->state.diff;
-	char				*headln;
+	char				*headln, *id2, *id1 = NULL;
 
-	if ((headln = fsl_mprintf("diff %.40s %.40s",
-	    s->selected_commit->puuid ? s->selected_commit->puuid : "/dev/null",
-	    s->selected_commit->uuid)) == NULL)
+	/* Some diffs (e.g., technote, tag) have no parent hash to display. */
+	id1 = fsl_strdup(s->id1 ? s->id1 : "/dev/null");
+	if (id1 == NULL)
+		return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+
+	/*
+	 * If diffing the work tree, we have no hash to display for it.
+	 * XXX Display "work tree" or "checkout" or "/dev/null" for clarity?
+	 */
+	id2 = fsl_strdup(s->id2 ? s->id2 : "");
+	if (id2 == NULL) {
+		fsl_free(id1);
+		return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+	}
+
+	if ((headln = fsl_mprintf("diff %.40s %.40s", id1, id2)) == NULL) {
+		fsl_free(id1);
+		fsl_free(id2);
 		return RC(FSL_RC_RANGE, "%s", "fsl_mprintf");
+	}
 
+	fsl_free(id1);
+	fsl_free(id2);
 	return write_diff(view, headln);
 }
 
@@ -4583,6 +4756,12 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 static int
 set_selected_commit(struct fnc_diff_view_state *s, struct commit_entry *entry)
 {
+	fsl_free(s->id2);
+	s->id2 = fsl_strdup(entry->commit->uuid);
+	if (s->id2 == NULL)
+		return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+	fsl_free(s->id1);
+	s->id1 = entry->commit->puuid ? fsl_strdup(entry->commit->puuid) : NULL;
 	s->selected_commit = entry->commit;
 
 	return 0;
@@ -4675,7 +4854,11 @@ close_diff_view(struct fnc_view *view)
 
 	if (s->f && fclose(s->f) == EOF)
 		rc = RC(fsl_errno_to_rc(errno, FSL_RC_IO), "%s", "fclose");
-	free(s->line_offsets);
+	fsl_free(s->id1);
+	s->id1 = NULL;
+	fsl_free(s->id2);
+	s->id2 = NULL;
+	fsl_free(s->line_offsets);
 	fsl_list_clear(&s->colours, fsl_list_object_free, &st);
 	s->line_offsets = NULL;
 	s->nlines = 0;
@@ -4871,7 +5054,7 @@ static void
 usage_blame(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " %s blame [-h|--help] [-c commit] artifact\n"
+	    " %s blame [-c commit [-r]] [-h|--help] [-n n] path\n"
 	    "  e.g.: %s blame -c d34db33f src/foo.c\n\n" ,
 	    fcli_progname(), fcli_progname());
 }
@@ -4979,7 +5162,7 @@ cmd_diff(fcli_command const *argv)
 	}
 
 	rc = open_diff_view(view, commit, context, fnc_init.ws,
-	    fnc_init.invert, !fnc_init.quiet, NULL);
+	    fnc_init.invert, !fnc_init.quiet, NULL, false);
 	if (!rc)
 		rc = view_loop(view);
 end:
@@ -5906,16 +6089,13 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 				fnc_object_tree_close(subtree);
 				break;
 			}
-		}
-#if 0	/* NYI: If selected entry is versioned file, open blame view. */
 		} else if (S_ISREG(s->selected_entry->mode)) {
 			struct fnc_view *blame_view;
 			int start_col = view_is_parent(view) ?
 			    view_split_start_col(view->start_col) : 0;
 
 			rc = blame_tree_entry(&blame_view, start_col,
-			    s->selected_entry, &s->parents, s->commit_id,
-			    s->repo);
+			    s->selected_entry, &s->parents, s->commit_id);
 			if (rc)
 				break;
 			view->active = false;
@@ -5925,11 +6105,10 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 				if (rc)
 					return rc;
 				view_set_child(view, blame_view);
-				view->focus_child = 1;
+				view->focus_child = true;
 			} else
 				*new_view = blame_view;
 		}
-#endif
 		break;
 	case KEY_RESIZE:
 		if (view->nlines >= 4 && s->selected_idx >= view->nlines - 3)
@@ -6037,11 +6216,10 @@ visit_subtree(struct fnc_tree_view_state *s, struct fnc_tree_object *subtree)
 	return 0;
 }
 
-#if 0 /* NYI */
 static int
 blame_tree_entry(struct fnc_view **new_view, int start_col,
     struct fnc_tree_entry *te, struct fnc_parent_trees *parents,
-    fsl_uuid_str *commit_id)
+    fsl_uuid_str commit_id)
 {
 	struct fnc_view	*blame_view;
 	char		*path;
@@ -6059,7 +6237,7 @@ blame_tree_entry(struct fnc_view **new_view, int start_col,
 		goto end;
 	}
 
-	rc = open_blame_view(blame_view, path, commit_id, repo);
+	rc = open_blame_view(blame_view, path, commit_id, 0, 0);
 	if (rc)
 		view_close(blame_view);
 	else
@@ -6068,7 +6246,6 @@ end:
 	fsl_free(path);
 	return rc;
 }
-#endif
 
 static int
 tree_search_init(struct fnc_view *view)
@@ -6271,6 +6448,7 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 {
 	struct fnc_colour	 *colour;
 	const char		**regexp = NULL;
+	const char		 *regexp_blame[] = {"^"};
 	const char		 *regexp_tree[] = {"@$", "/$", "\\*$", "^$"};
 	const char		 *regexp_diff[] = {
 				    "^((checkin|wiki|ticket|technote) "
@@ -6288,20 +6466,30 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 				    {FNC_TREE_LINK, COLOR_MAGENTA},
 				    {FNC_TREE_DIR, COLOR_CYAN},
 				    {FNC_TREE_EXEC, COLOR_GREEN},
-				    {FNC_COMMIT, COLOR_GREEN}
+				    {FNC_COMMIT, COLOR_MAGENTA}
 				  };
+	int			  pairs_blame[][2] = {{FNC_COMMIT, COLOR_CYAN}};
 	int			(*pairs)[2], rc = 0;
 	fsl_size_t		  idx, n;
 
-	if (vid == FNC_VIEW_DIFF) {
+	switch (vid) {
+	case FNC_VIEW_DIFF:
 		n = nitems(regexp_diff);
 		regexp = regexp_diff;
 		pairs = pairs_diff;
-	}
-	if (vid == FNC_VIEW_TREE) {
+		break;
+	case FNC_VIEW_TREE:
 		n = nitems(regexp_tree);
 		regexp = regexp_tree;
 		pairs = pairs_tree;
+		break;
+	case FNC_VIEW_BLAME:
+		n = nitems(regexp_blame);
+		regexp = regexp_blame;
+		pairs = pairs_blame;
+		break;
+	default:
+		return RC(FSL_RC_TYPE, "%s", "invalid fnc_view_id");
 	}
 
 	for (idx = 0; idx < n; ++idx) {
@@ -6349,7 +6537,7 @@ match_colour(const void *target, const void *key)
 	struct fnc_colour *c = (struct fnc_colour *)key;
 	struct fnc_colour *t = (struct fnc_colour *)target;
 
-	return c->scheme == t->scheme;
+	return (c->scheme == t->scheme) ? 0 : 1;
 }
 
 /*
@@ -6369,11 +6557,981 @@ fnc_home(struct fnc_view *view)
 }
 
 static int
+strtonumcheck(int *ret, const char *nstr, const int min, const int max)
+{
+	const char	*ptr;
+	int		 n;
+
+	ptr = NULL;
+	errno = 0;
+
+	n = strtonum(nstr, INT_MIN, INT_MAX, &ptr);
+	if (errno == ERANGE)
+		return RC(FSL_RC_RANGE, "<n> out of range: -n|--limit=%s [%s]",
+		    nstr, ptr);
+	else if (errno != 0 || errno == EINVAL)
+		return RC(FSL_RC_MISUSE, "<n> not a number: -n|--limit=%s [%s]",
+		    nstr, ptr);
+	else if (ptr && *ptr != '\0')
+		return RC(FSL_RC_MISUSE,
+		    "invalid char in <n>: -n|--limit=%s [%s]", nstr, ptr);
+
+	*ret = n;
+	return 0;
+}
+
+static int
 cmd_blame(fcli_command const *argv)
 {
-	/* Not yet implemened. */
-	f_out("%s blame is not yet implemented.\n", fcli_progname());
-	return FSL_RC_NYI;
+	fsl_cx		*f = fcli_cx();
+	struct fnc_view	*view;
+	char		*path = NULL;
+	fsl_uuid_str	 commit_id = NULL;
+	fsl_id_t	 tip = 0, rid = 0;
+	int		 ndepth = 0, rc = 0;
+
+	rc = fcli_process_flags(argv->flags);
+	if (rc || (rc = fcli_has_unused_flags(false)))
+		goto end;
+	if (!fcli_next_arg(false)) {
+		rc = RC(FSL_RC_MISSING_INFO,
+		    "%s blame requires versioned file path", fcli_progname());
+		goto end;
+	}
+
+	if (fnc_init.nrecords.zlimit)
+		if ((rc = strtonumcheck(&ndepth, fnc_init.nrecords.zlimit,
+		    INT_MIN, INT_MAX)))
+			goto end;
+
+	/*
+	 * If a commit has been specified, don't attempt to map supplied path
+	 * to an in repository path on disk as the specified commit may have a
+	 * completely different tree to the current checkout; instead, pass
+	 * verbatim to open_blame_view() to search against a deck of F cards.
+	 * XXX The drawback of passing unprocessed paths is we will only find
+	 * well-formed paths relative to the repository root; that is, relative
+	 * paths from within repository subdirectories won't be found. We should
+	 * first map_repo_path() and if not found, then search against F cards.
+	 * Also, consider if we should resolve symlinks.
+	 */
+	if (fnc_init.sym || fnc_init.reverse) {
+		path = fsl_strdup(fcli_next_arg(true));
+		if (path == NULL) {
+			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+			goto end;
+		}
+		if (fnc_init.reverse) {
+			if (!fnc_init.sym) {
+				rc = RC(FSL_RC_MISSING_INFO,
+				    "%s blame --reverse requires --commit",
+				    fcli_progname());
+				goto end;
+			}
+			rc = fsl_sym_to_rid(f, "tip", FSL_SATYPE_CHECKIN, &tip);
+			if (rc)
+				goto end;
+		}
+		rc = fsl_sym_to_rid(f, fnc_init.sym, FSL_SATYPE_CHECKIN, &rid);
+		if (rc)
+			goto end;
+	} else if (!fnc_init.sym) {
+		fsl_ckout_version_info(f, &rid, NULL);
+		rc = map_repo_path(&path);
+		if (rc)
+			goto end;
+	}
+	commit_id = fsl_rid_to_uuid(f, rid);
+	if (rc || (path[0] == '/' && path[1] == '\0')) {
+		rc = rc ? rc : RC(FSL_RC_MISSING_INFO,
+		    "%s blame requires versioned file path", fcli_progname());
+		goto end;
+	}
+
+	init_curses();
+
+	view = view_open(0, 0, 0, 0, FNC_VIEW_BLAME);
+	if (view == NULL) {
+		rc = RC(FSL_RC_ERROR, "%s", view_open);
+		goto end;
+	}
+
+	rc = open_blame_view(view, path, commit_id, tip, ndepth);
+	if (rc)
+		goto end;
+	rc = view_loop(view);
+end:
+	fsl_free(path);
+	fsl_free(commit_id);
+	return rc;
+}
+
+static int
+open_blame_view(struct fnc_view *view, char *path, fsl_uuid_str commit_id,
+    fsl_id_t tip, int ndepth)
+{
+	struct fnc_blame_view_state	*s = &view->state.blame;
+	int				 rc = 0;
+
+	CONCAT(STAILQ, _INIT)(&s->blamed_commits);
+
+	s->path = fsl_strdup(path);
+	if (s->path == NULL)
+		return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+
+	rc = fnc_commit_qid_alloc(&s->blamed_commit, commit_id);
+	if (rc) {
+		fsl_free(s->path);
+		return rc;
+	}
+
+	CONCAT(STAILQ, _INSERT_HEAD)(&s->blamed_commits, s->blamed_commit,
+	    entry);
+	memset(&s->blame, 0, sizeof(s->blame));
+	s->first_line_onscreen = 1;
+	s->last_line_onscreen = view->nlines;
+	s->selected_line = 1;
+	s->blame_complete = false;
+	s->commit_id = commit_id;
+	s->blame.origin = tip;
+	s->blame.ndepth = ndepth;
+
+	if (has_colors() && !fnc_init.nocolour) {
+		rc = set_colours(&s->colours, FNC_VIEW_BLAME);
+		if (rc)
+			return rc;
+	}
+
+	view->show = show_blame_view;
+	view->input = blame_input_handler;
+	view->close = close_blame_view;
+	view->search_init = blame_search_init;
+	view->search_next = blame_search_next;
+
+	return run_blame(view);
+}
+
+static int
+run_blame(struct fnc_view *view)
+{
+	fsl_cx				*f = fcli_cx();
+	struct fnc_blame_view_state	*s = &view->state.blame;
+	struct fnc_blame		*blame = &s->blame;
+	fsl_deck			 d = fsl_deck_empty;
+	fsl_buffer			 buf = fsl_buffer_empty;
+	fsl_annotate_opt		*opt = NULL;
+	const fsl_card_F		*cf;
+	char				*filepath = NULL;
+	int				 rc = 0;;
+
+	/*
+	 * Trim prefixed '/' if path has been processed by map_repo_path(),
+	 * which only occurs when the -c option has not been passed.
+	 * XXX This slash trimming is cumbersome; we should not prefix a slash
+	 * in map_repo_path() as we only want the slash for displaying an
+	 * absolute-repository-relative path, so we should prefix it only then.
+	 */
+	filepath = fnc_init.sym ? s->path : s->path + 1;
+
+	rc = fsl_deck_load_sym(f, &d, s->blamed_commit->id, FSL_SATYPE_CHECKIN);
+	if (rc)
+		goto end;
+
+	cf = fsl_deck_F_search(&d, filepath);
+	if (cf == NULL) {
+		rc = RC(FSL_RC_NOT_FOUND, "'%s' not found in tree [%s]",
+		    s->path, s->blamed_commit->id);
+		goto end;
+	}
+	rc = fsl_card_F_content(f, cf, &buf);
+	if (rc)
+		goto end;
+
+	/*
+	 * XXX We load two files: .f0 with the actual file content; and .f with
+	 * the annotated version. This is to map line offsets so we accurately
+	 * find tokens when running a search. This might be done much better if
+	 * we use a callback to obtain a struct of hash, lineno, line, etc. We
+	 * can parse just the line bit for accurate offsets.
+	 */
+	blame->f = tmpfile();
+	if (blame->f == NULL) {
+		rc = RC(fsl_errno_to_rc(errno, FSL_RC_IO), "%s", "tmpfile");
+		goto end;
+	}
+	blame->f0 = tmpfile();
+	if (blame->f0 == NULL) {
+		rc = RC(fsl_errno_to_rc(errno, FSL_RC_IO), "%s", "tmpfile");
+		goto end;
+	}
+
+	opt = &blame->blame_opt;
+	opt->filename = fsl_strdup(filepath);
+	fcli_fax((char *)opt->filename);
+	rc = fsl_sym_to_rid(f, s->blamed_commit->id, FSL_SATYPE_CHECKIN,
+	    &opt->versionRid);
+	opt->originRid = blame->origin;    /* tip when -r is passed */
+	opt->limit = blame->ndepth;
+	opt->out = fsl_output_f_FILE;
+	opt->outState = blame->f;
+
+	rc = fnc_dump_buffer_to_file(&blame->filesz, &blame->nlines,
+	    &blame->line_offsets, blame->f0, &buf);
+	if (rc)
+		goto end;
+	if (blame->nlines == 0) {
+		s->blame_complete = true;
+		goto end;
+	}
+
+	/* Don't include EOF \n in blame line count. */
+	if (blame->line_offsets[blame->nlines - 1] == blame->filesz)
+		--blame->nlines;
+
+	blame->lines = calloc(blame->nlines, sizeof(*blame->lines));
+	if (blame->lines == NULL) {
+		rc = RC(fsl_errno_to_rc(errno, FSL_RC_ERROR), "%s", "calloc");
+		goto end;
+	}
+
+	blame->view = view;
+	blame->commit_id = fsl_strdup(s->blamed_commit->id);
+	if (blame->commit_id == NULL) {
+		rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+		goto end;
+	}
+	blame->quit = &s->done;
+	blame->path = s->path;
+	blame->complete = &s->blame_complete;
+	s->blame_complete = false;
+
+	rc = fnc_blame(&s->blame);
+	if (rc)
+		goto end;
+
+	if (s->first_line_onscreen + view->nlines - 1 > blame->nlines) {
+		s->first_line_onscreen = 1;
+		s->last_line_onscreen = view->nlines;
+		s->selected_line = 1;
+	}
+
+end:
+	fsl_deck_finalize(&d);
+	fsl_buffer_clear(&buf);
+	if (rc)
+		stop_blame(blame);
+	return rc;
+}
+
+/*
+ * Write file content in buf to out file. Record the number of lines in the file
+ * in nlines, and total bytes written in filesz. Assign byte offsets of each
+ * line to the dynamically allocated *line_offsets, which must eventually be
+ * disposed of by the caller. Flush and rewind out file when done.
+ */
+static int
+fnc_dump_buffer_to_file(off_t *filesz, int *nlines, off_t **line_offsets,
+    FILE *out, fsl_buffer *buf)
+{
+	off_t		 off = 0, total_len = 0;
+	size_t		 len, n, i = 0, nalloc = 0;
+	int		 rc = 0;
+	const int	 alloc_chunksz = MIN(512, BUFSIZ);
+
+	if (line_offsets)
+		*line_offsets = NULL;
+	if (filesz)
+		*filesz = 0;
+	if (nlines)
+		*nlines = 0;
+
+	len = buf->used;
+	if (len == 0)
+		return RC(FSL_RC_SIZE_MISMATCH, "%s",
+		    "fnc_dump_buffer_to_file");
+	if (nlines) {
+		if (line_offsets && *line_offsets == NULL) {
+			*nlines = 1;
+			nalloc = alloc_chunksz;
+			*line_offsets = calloc(nalloc, sizeof(**line_offsets));
+			if (*line_offsets == NULL)
+				return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR),
+				    "%s", "calloc");
+
+			/* Consume the first line. */
+			while (i < len) {
+				if (buf->mem[i] == '\n')
+					break;
+				++i;
+			}
+		}
+		/* Scan '\n' offsets. */
+		while (i < len) {
+			if (buf->mem[i] != '\n') {
+				++i;
+				continue;
+			}
+			++(*nlines);
+			if (line_offsets && nalloc < (size_t)*nlines) {
+				size_t n, oldsz, newsz;
+				off_t *new = NULL;
+
+				n = *nlines + alloc_chunksz;
+				oldsz = nalloc * sizeof(**line_offsets);
+				newsz = n * sizeof(**line_offsets);
+				if (newsz <= oldsz) {
+					size_t b = oldsz - newsz;
+					if (b < oldsz / 2 &&
+					    b < (size_t)getpagesize()) {
+						memset((char *)*line_offsets
+						    + newsz, 0, b);
+						goto allocated;
+					}
+				}
+				new = fsl_realloc(*line_offsets, newsz);
+				if (new == NULL) {
+					fsl_free(*line_offsets);
+					*line_offsets = NULL;
+					return RC(FSL_RC_ERROR, "%s",
+					    "fsl_realloc");
+				}
+				*line_offsets = new;
+allocated:
+				nalloc = n;
+			}
+			if (line_offsets) {
+				off = total_len + i + 1;
+				(*line_offsets)[*nlines - 1] = off;
+			}
+			++i;
+		}
+	}
+	n = fwrite(buf->mem, 1, len, out);
+	if (n != len)
+		return RC(ferror(out) ? fsl_errno_to_rc(errno, FSL_RC_IO)
+		    : FSL_RC_IO, "%s", "fwrite");
+	total_len += len;
+
+	if (fflush(out) != 0)
+		return RC(fsl_errno_to_rc(errno, FSL_RC_IO), "%s", "fflush");
+	rewind(out);
+
+	if (filesz)
+		*filesz = total_len;
+
+	return rc;
+}
+
+static int
+fnc_blame(struct fnc_blame *blame)
+{
+	fsl_cx			*const f = fcli_cx();
+	fsl_annotate_opt	*opt = &blame->blame_opt;
+	struct fnc_blame_line	*blame_line;
+	char			*abspath, *line = NULL;
+	ssize_t			 linelen;
+	size_t			 linesz = 0;
+	int			 i = 0, rc = 0;
+
+	if ((abspath = fsl_mprintf("%s%s", blame->path[0] == '/' ? "" : "/",
+	    blame->path)) == NULL)
+		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR),
+		    "%s", "fsl_mprintf");
+
+	rc = fsl_annotate(f, opt);
+	if (rc || fflush(opt->outState) != 0)
+		return rc ? rc : RC(fsl_errno_to_rc(errno, FSL_RC_IO),
+		    "%s", "fflush");
+	rewind(opt->outState);
+
+	/* Parse the line's hash UUID. XXX Implement API callback to do this. */
+	while (i != blame->nlines) {
+		char pfxid[11];
+		linelen = getline(&line, &linesz, blame->f);
+		if (linelen == -1) {
+			if (feof(blame->f))
+				break;
+			fsl_free(line);
+			return RC(ferror(blame->f) ? fsl_errno_to_rc(errno,
+			    FSL_RC_IO) : FSL_RC_IO, "%s", "getline");
+		}
+		blame_line = &blame->lines[i++];
+		/* -r can return lines with no version, use root check-in. */
+		if (opt->originRid && fsl_isspace(line[0]))
+			fsl_sym_to_uuid(f, "root:trunk", FSL_SATYPE_CHECKIN,
+			    &blame_line->id, NULL);
+		else {
+			memset(pfxid, 0, sizeof(pfxid));
+			memcpy(pfxid, line, 10);
+			fsl_sym_to_uuid(f, pfxid, FSL_SATYPE_CHECKIN,
+			    &blame_line->id, NULL);
+		}
+		blame_line->annotated = true;
+		++blame->nannotated;
+	}
+	fsl_free(line);
+	*blame->complete = true;
+
+	fsl_free(abspath);
+	return rc;
+}
+
+static int
+show_blame_view(struct fnc_view *view)
+{
+	int rc = draw_blame(view);
+
+	draw_vborder(view);
+	return rc;
+}
+
+static int
+draw_blame(struct fnc_view *view)
+{
+	struct fnc_blame_view_state	*s = &view->state.blame;
+	struct fnc_blame		*blame = &s->blame;
+	struct fnc_blame_line		*blame_line;
+	regmatch_t			*regmatch = &view->regmatch;
+	struct fnc_colour		*c;
+	wchar_t				*wcstr;
+	char				*line = NULL;
+	fsl_uuid_str			 prev_id = NULL, id_str = NULL;
+	ssize_t				 linelen;
+	size_t				 linesz = 0;
+	int				 width, lineno = 0, nprinted = 0;
+	int				 rc = 0;
+	const int			 idfield = 11;  /* Prefix + space. */
+
+	id_str = fsl_strdup(s->blamed_commit->id);
+	if (id_str == NULL)
+		return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+
+	rewind(blame->f0);
+	werase(view->window);
+
+	if ((line = fsl_mprintf("checkin %s", id_str)) == NULL) {
+		rc = RC(fsl_errno_to_rc(errno, FSL_RC_ERROR),
+		    "%s", "fsl_mprintf");
+		fsl_free(id_str);
+		return rc;
+	}
+
+	rc = formatln(&wcstr, &width, line, view->ncols, 0);
+	fsl_free(line);
+	line = NULL;
+	if (rc)
+		return rc;
+	if (screen_is_shared(view))
+		wstandout(view->window);
+	c = get_colour(&s->colours, FNC_COMMIT);
+	if (c)
+		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
+	waddwstr(view->window, wcstr);
+	if (c)
+		wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
+	if (screen_is_shared(view))
+		wstandend(view->window);
+	fsl_free(wcstr);
+	wcstr = NULL;
+	if (width < view->ncols - 1)
+		waddch(view->window, '\n');
+
+	if ((line = fsl_mprintf("[%d/%d] %s%s",
+	    s->first_line_onscreen - 1 + s->selected_line, blame->nlines,
+	    fnc_init.sym ? "/" : "", s->path)) == NULL) {
+		fsl_free(id_str);
+		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR),
+		    "%s", "fsl_mprintf");
+	}
+	fsl_free(id_str);
+	rc = formatln(&wcstr, &width, line, view->ncols, 0);
+	fsl_free(line);
+	line = NULL;
+	if (rc)
+		return rc;
+	waddwstr(view->window, wcstr);
+	fsl_free(wcstr);
+	wcstr = NULL;
+	if (width < view->ncols - 1)
+		waddch(view->window, '\n');
+
+	s->eof = false;
+	while (nprinted < view->nlines - 2) {
+		linelen = getline(&line, &linesz, blame->f0);
+		if (linelen == -1) {
+			if (feof(blame->f0)) {
+				s->eof = true;
+				break;
+			}
+			fsl_free(line);
+			return RC(ferror(blame->f0) ? fsl_errno_to_rc(errno,
+			    FSL_RC_IO) : FSL_RC_IO, "%s", "getline");
+		}
+		if (++lineno < s->first_line_onscreen)
+			continue;
+
+		if (view->active && nprinted == s->selected_line - 1)
+			wattr_on(view->window, A_REVERSE, NULL);
+
+		if (blame->nlines > 0) {
+			blame_line = &blame->lines[lineno - 1];
+			if (prev_id &&
+			    fsl_uuidcmp(prev_id, blame_line->id) == 0 &&
+			    !(view->active &&
+			    nprinted == s->selected_line - 1)) {
+				waddstr(view->window, "          ");
+			} else {
+				char *id_str;
+				id_str = fsl_strndup(blame_line->id,
+				    idfield - 1);
+				if (id_str == NULL) {
+					fsl_free(line);
+					return RC(FSL_RC_ERROR, "%s",
+					    "fsl_strdup");
+				}
+				c = get_colour(&s->colours, FNC_COMMIT);
+				if (c)
+					wattr_on(view->window,
+					    COLOR_PAIR(c->scheme), NULL);
+				wprintw(view->window, "%.*s", idfield - 1,
+				    id_str);
+				if (c)
+					wattr_off(view->window,
+					    COLOR_PAIR(c->scheme), NULL);
+				fsl_free(id_str);
+				prev_id = blame_line->id;
+			}
+		} else {
+			waddstr(view->window, "..........");
+			prev_id = NULL;
+		}
+
+		if (view->active && nprinted == s->selected_line - 1)
+			wattr_off(view->window, A_REVERSE, NULL);
+		waddstr(view->window, " ");
+
+		if (view->ncols <= idfield) {
+			width = idfield;
+			wcstr = wcsdup(L"");
+			if (wcstr == NULL) {
+				rc = RC(fsl_errno_to_rc(errno, FSL_RC_RANGE),
+				    "%s", "wcsdup");
+				fsl_free(line);
+				return rc;
+			}
+		} else if (s->first_line_onscreen + nprinted == s->matched_line
+		    && regmatch->rm_so >= 0 &&
+		    regmatch->rm_so < regmatch->rm_eo) {
+			rc = write_matched_line(&width, line,
+			    view->ncols - idfield, idfield,
+			    view->window, regmatch);
+			if (rc) {
+				fsl_free(line);
+				return rc;
+			}
+			width += idfield;
+		} else {
+			rc = formatln(&wcstr, &width, line,
+			    view->ncols - idfield, idfield);
+			waddwstr(view->window, wcstr);
+			fsl_free(wcstr);
+			wcstr = NULL;
+			width += idfield;
+		}
+
+		if (width <= view->ncols - 1)
+			waddch(view->window, '\n');
+		if (++nprinted == 1)
+			s->first_line_onscreen = lineno;
+	}
+	fsl_free(line);
+	s->last_line_onscreen = lineno;
+
+	draw_vborder(view);
+
+	return rc;
+}
+
+static int
+blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
+{
+	struct fnc_view			*diff_view;
+	struct fnc_blame_view_state	*s = &view->state.blame;
+	int				 start_col = 0, rc = 0;
+
+	switch (ch) {
+	case 'q':
+		s->done = true;
+		if (s->selected_commit)
+			fnc_commit_artifact_close(s->selected_commit);
+		break;
+	case 'g':
+		if (!fnc_home(view))
+			break;
+	case KEY_HOME:
+		s->selected_line = 1;
+		s->first_line_onscreen = 1;
+		break;
+	case KEY_END:
+	case 'G':
+		if (s->blame.nlines < view->nlines - 2) {
+			s->selected_line = s->blame.nlines;
+			s->first_line_onscreen = 1;
+		} else {
+			s->selected_line = view->nlines - 2;
+			s->first_line_onscreen = s->blame.nlines -
+			    (view->nlines - 3);
+		}
+		break;
+	case KEY_UP:
+	case 'k':
+		if (s->selected_line > 1)
+			--s->selected_line;
+		else if (s->selected_line == 1 && s->first_line_onscreen > 1)
+			--s->first_line_onscreen;
+		break;
+	case KEY_PPAGE:
+	case CTRL('b'):
+		if (s->first_line_onscreen == 1) {
+			s->selected_line = 1;
+			break;
+		}
+		if (s->first_line_onscreen > view->nlines - 2)
+			s->first_line_onscreen -= (view->nlines - 2);
+		else
+			s->first_line_onscreen = 1;
+		break;
+	case KEY_DOWN:
+	case 'j':
+		if (s->selected_line < view->nlines - 2 &&
+		    s->first_line_onscreen +
+		    s->selected_line <= s->blame.nlines)
+			++s->selected_line;
+		else if (s->last_line_onscreen < s->blame.nlines)
+			++s->first_line_onscreen;
+		break;
+	case 'b':
+	case 'p': {
+		fsl_uuid_cstr id = NULL;
+		id = get_selected_commit_id(s->blame.lines, s->blame.nlines,
+		    s->first_line_onscreen, s->selected_line);
+		if (id == NULL)
+			break;
+		if (ch == 'p') {
+			fsl_cx		*f = fcli_cx();
+			fsl_db		*db = fsl_needs_repo(f);
+			fsl_deck	 d = fsl_deck_empty;
+			fsl_id_t	 rid = fsl_uuid_to_rid(f, id);
+			fsl_uuid_str	 pid = fsl_db_g_text(db, NULL,
+			    "SELECT uuid FROM plink, blob WHERE plink.cid=%d "
+			    "AND blob.rid=plink.pid AND plink.isprim", rid);
+			if (pid == NULL)
+				break;
+			/* Check file exists in parent check-in. */
+			rc = fsl_deck_load_sym(f, &d, pid, FSL_SATYPE_CHECKIN);
+			if (rc) {
+				rc = RC(rc, "%s", "fsl_deck_load_sym");
+				goto cleanup;
+			}
+			rc = fsl_deck_F_rewind(&d);
+			if (rc) {
+				rc = RC(rc, "%s", "fsl_deck_F_rewind");
+				goto cleanup;
+			}
+			if (fsl_deck_F_search(&d, s->path +
+			    (fnc_init.sym ? 0 : 1)) == NULL)
+				goto cleanup; /* File not in selected version */
+			rc = fnc_commit_qid_alloc(&s->blamed_commit, pid);
+cleanup:
+			fsl_deck_finalize(&d);
+			fsl_free(pid);
+			if (rc)
+				return rc;
+		} else {
+			if (!fsl_uuidcmp(id, s->blamed_commit->id))
+				break;
+			rc = fnc_commit_qid_alloc(&s->blamed_commit, id);
+		}
+		if (rc)
+			break;
+		s->done = true;
+		rc = stop_blame(&s->blame);
+		s->done = false;
+		if (rc)
+			break;
+		CONCAT(STAILQ, _INSERT_HEAD)(&s->blamed_commits,
+		    s->blamed_commit, entry);
+		rc = run_blame(view);
+		if (rc)
+			break;
+		break;
+	}
+	case 'B': {
+		struct fnc_commit_qid *first;
+		first = CONCAT(STAILQ, _FIRST)(&s->blamed_commits);
+		if (!fsl_uuidcmp(first->id, s->commit_id))
+			break;
+		s->done = true;
+		rc = stop_blame(&s->blame);
+		s->done = false;
+		if (rc)
+			break;
+		CONCAT(STAILQ, _REMOVE_HEAD)(&s->blamed_commits, entry);
+		fnc_commit_qid_free(s->blamed_commit);
+		s->blamed_commit = CONCAT(STAILQ, _FIRST)(&s->blamed_commits);
+		rc = run_blame(view);
+		if (rc)
+			break;
+		break;
+	}
+	case KEY_ENTER:
+	case '\r': {
+		fsl_cx				*f = fcli_cx();
+		struct fnc_commit_artifact	*commit = NULL;
+		fsl_uuid_cstr			 id = NULL;
+		fsl_id_t			 rid;
+
+		id = get_selected_commit_id(s->blame.lines, s->blame.nlines,
+		    s->first_line_onscreen, s->selected_line);
+		if (id == NULL)
+			break;
+		if (s->selected_commit)
+			fnc_commit_artifact_close(s->selected_commit);
+		rid = fsl_uuid_to_rid(f, id);
+		rc = commit_builder(&commit, rid, NULL);
+		if (rc) {
+			fnc_commit_artifact_close(commit);
+			break;
+		}
+		if (view_is_parent(view))
+		    start_col = view_split_start_col(view->start_col);
+		diff_view = view_open(0, 0, 0, start_col, FNC_VIEW_DIFF);
+		if (diff_view == NULL) {
+			fnc_commit_artifact_close(commit);
+			rc = RC(FSL_RC_ERROR, "%s", "view_open");
+			break;
+		}
+		rc = open_diff_view(diff_view, commit, DIFF_DEF_CTXT,
+		    fnc_init.ws, fnc_init.invert, !fnc_init.quiet, NULL, true);
+		s->selected_commit = commit;
+		if (rc) {
+			fnc_commit_artifact_close(commit);
+			view_close(diff_view);
+			break;
+		}
+		view->active = false;
+		diff_view->active = true;
+		if (view_is_parent(view)) {
+			rc = view_close_child(view);
+			if (rc)
+				break;
+			view_set_child(view, diff_view);
+			view->focus_child = true;
+		} else
+			*new_view = diff_view;
+		if (rc)
+			break;
+		break;
+	}
+	case KEY_NPAGE:
+	case CTRL('f'):
+	case ' ':
+		if (s->last_line_onscreen >= s->blame.nlines && s->selected_line
+		    >= MIN(s->blame.nlines, view->nlines - 2))
+			break;
+		if (s->last_line_onscreen >= s->blame.nlines &&
+		    s->selected_line < view->nlines - 2) {
+			s->selected_line = MIN(s->blame.nlines,
+			    view->nlines - 2);
+			break;
+		}
+		if (s->last_line_onscreen + view->nlines - 2 <= s->blame.nlines)
+			s->first_line_onscreen += view->nlines - 2;
+		else
+			s->first_line_onscreen =
+			    s->blame.nlines - (view->nlines - 3);
+		break;
+	case KEY_RESIZE:
+		if (s->selected_line > view->nlines - 2) {
+			s->selected_line = MIN(s->blame.nlines,
+			    view->nlines - 2);
+		}
+		break;
+	default:
+		break;
+	}
+	return rc;
+}
+
+static int
+blame_search_init(struct fnc_view *view)
+{
+	struct fnc_blame_view_state *s = &view->state.blame;
+
+	s->matched_line = 0;
+	return 0;
+}
+
+static int
+blame_search_next(struct fnc_view *view)
+{
+	struct fnc_blame_view_state	*s = &view->state.blame;
+	char				*line = NULL;
+	ssize_t				 linelen;
+	size_t				 linesz = 0;
+	int				 lineno;
+
+	if (view->searching == SEARCH_DONE) {
+		view->search_status = SEARCH_CONTINUE;
+		return 0;
+	}
+
+	if (s->matched_line) {
+		if (view->searching == SEARCH_FORWARD)
+			lineno = s->matched_line + 1;
+		else
+			lineno = s->matched_line - 1;
+	} else {
+		if (view->searching == SEARCH_FORWARD)
+			lineno = 1;
+		else
+			lineno = s->blame.nlines;
+	}
+
+	while (1) {
+		off_t offset;
+
+		if (lineno <= 0 || lineno > s->blame.nlines) {
+			if (s->matched_line == 0) {
+				view->search_status = SEARCH_CONTINUE;
+				break;
+			}
+
+			if (view->searching == SEARCH_FORWARD)
+				lineno = 1;
+			else
+				lineno = s->blame.nlines;
+		}
+
+		offset = s->blame.line_offsets[lineno - 1];
+		if (fseeko(s->blame.f0, offset, SEEK_SET) != 0) {
+			fsl_free(line);
+			return RC(fsl_errno_to_rc(errno, FSL_RC_IO),
+			    "%s", "fseeko");
+		}
+		linelen = getline(&line, &linesz, s->blame.f0);
+		if (linelen != -1 && regexec(&view->regex, line, 1,
+		    &view->regmatch, 0) == 0) {
+			view->search_status = SEARCH_CONTINUE;
+			s->matched_line = lineno;
+			break;
+		}
+		if (view->searching == SEARCH_FORWARD)
+			++lineno;
+		else
+			--lineno;
+	}
+	fsl_free(line);
+
+	if (s->matched_line) {
+		s->first_line_onscreen = s->matched_line;
+		s->selected_line = 1;
+	}
+
+	return 0;
+}
+
+static fsl_uuid_cstr
+get_selected_commit_id(struct fnc_blame_line *lines, int nlines,
+    int first_line_onscreen, int selected_line)
+{
+	struct fnc_blame_line *line;
+
+	if (nlines <= 0)
+		return NULL;
+
+	line = &lines[first_line_onscreen - 1 + selected_line - 1];
+
+	return line->id;
+}
+
+static int
+fnc_commit_qid_alloc(struct fnc_commit_qid **qid, fsl_uuid_cstr id)
+{
+	int rc = 0;
+
+	*qid = calloc(1, sizeof(**qid));
+	if (*qid == NULL)
+		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR), "%s", "calloc");
+
+	(*qid)->id = fsl_strdup(id);
+	if ((*qid)->id == NULL) {
+		rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+		fnc_commit_qid_free(*qid);
+		*qid = NULL;
+	}
+
+	return rc;
+}
+
+static int
+close_blame_view(struct fnc_view *view)
+{
+	struct fnc_blame_view_state	*s = &view->state.blame;
+	struct fsl_list_state		 st = { FNC_COLOUR_OBJ };
+	int				 rc = 0;
+
+	rc = stop_blame(&s->blame);
+
+	while (!CONCAT(STAILQ, _EMPTY)(&s->blamed_commits)) {
+		struct fnc_commit_qid *blamed_commit;
+		blamed_commit = CONCAT(STAILQ, _FIRST)(&s->blamed_commits);
+		CONCAT(STAILQ, _REMOVE_HEAD)(&s->blamed_commits, entry);
+		fnc_commit_qid_free(blamed_commit);
+	}
+
+	fsl_free(s->path);
+	fsl_list_clear(&s->colours, fsl_list_object_free, &st);
+
+	return rc;
+}
+
+static int
+stop_blame(struct fnc_blame *blame)
+{
+	int idx, rc = 0;
+
+	if (blame->f0) {
+		if (fclose(blame->f0) == EOF && rc == 0)
+			rc = RC(fsl_errno_to_rc(errno, FSL_RC_IO), "%s",
+			    fclose);
+		blame->f0 = NULL;
+	}
+	if (blame->f) {
+		if (fclose(blame->f) == EOF && rc == 0)
+			rc = RC(fsl_errno_to_rc(errno, FSL_RC_IO), "%s",
+			    fclose);
+		blame->f = NULL;
+	}
+	if (blame->lines) {
+		for (idx = 0; idx < blame->nlines; ++idx)
+			fsl_free(blame->lines[idx].id);
+		fsl_free(blame->lines);
+		blame->lines = NULL;
+	}
+
+	fsl_free(blame->line_offsets);
+	fsl_free(blame->commit_id);
+	blame->commit_id = NULL;
+
+	return rc;
+}
+
+static void
+fnc_commit_qid_free(struct fnc_commit_qid *qid)
+{
+	fsl_free(qid->id);
+	fsl_free(qid);
 }
 
 static void
