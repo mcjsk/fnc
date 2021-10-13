@@ -603,17 +603,19 @@ struct fsl_outputer {
   */
   fsl_output_f out;
   /**
-     flush() implementation.
+     flush() implementation. This may be NULL for most uses of this
+     class. Cases which specifically require it must document that
+     requirement so.
   */
   fsl_flush_f flush;
   /**
      State to be used when calling this->out(), namely:
-     this->out( this->state.state, ... ).
+     this->out( this->state, ... ) and this->flush(this->state).
   */
-  fsl_state state;
+  void * state;
 };
 /** Empty-initialized fsl_outputer instance. */
-#define fsl_outputer_empty_m {NULL,NULL,fsl_state_empty_m}
+#define fsl_outputer_empty_m {NULL,NULL,NULL}
 /**
    Empty-initialized fsl_outputer instance, intended for
    copy-initializing.
@@ -622,14 +624,9 @@ FSL_EXPORT const fsl_outputer fsl_outputer_empty;
 
 /**
    A fsl_outputer instance which is initialized to output to a
-   (FILE*). To use it, this value then set the copy's state.state
+   (FILE*). To use it, this value then set the copy's state
    member to an opened-for-write (FILE*) handle. By default it will
-   use stdout. Its finalizer (if called!) will fclose(3)
-   self.state.state if self.state.state is not one of (stdout,
-   stderr). To disable the closing behaviour (and not close the
-   file), set self.state.finalize.f to NULL (but then be sure that
-   the file handle outlives this object and to fclose(3) it when
-   finished with it).
+   use stdout.
 */
 FSL_EXPORT const fsl_outputer fsl_outputer_FILE;
 
@@ -639,11 +636,8 @@ FSL_EXPORT const fsl_outputer fsl_outputer_FILE;
 */
 #define fsl_outputer_FILE_m {                   \
     fsl_output_f_FILE,                          \
-      fsl_flush_f_FILE,                         \
-      {/*state*/                                \
-        NULL,                                   \
-        {NULL,fsl_finalizer_f_FILE}             \
-      }                                         \
+    fsl_flush_f_FILE,                         \
+    NULL \
   }
 /**
    Generic stateful alloc/free/realloc() interface.
@@ -6455,10 +6449,10 @@ FSL_EXPORT void fsl_cx_finalize( fsl_cx * f );
 
 /**
    Sets or unsets one or more option flags on the given fossil
-   context.  flags is the flag or a bitmask of flags to set (from
-   the fsl_cx_flags_e enum).  If enable is true the flag(s) is (are)
-   set, else it (they) is (are) unset. Returns the new set of
-   flags.
+   context.  flags is the flag or a bitmask of flags to set (from the
+   fsl_cx_flags_e enum).  If enable is true the flag(s) is (are) set,
+   else it (they) is (are) unset. Returns the _previous_ set of flags
+   (that is, the state they were in before this call was made).
 */
 FSL_EXPORT int fsl_cx_flag_set( fsl_cx * f, int flags, bool enable );
 
@@ -13274,6 +13268,103 @@ FSL_EXPORT int fsl_repo_manifest_write(fsl_cx *f,
                                        fsl_buffer * const manifestTags );
 
 /**
+   Callback state for use by fsl_annotate_step_f().
+
+   This state gets repopulated for each call to the
+   fsl_annote_step_f() callback and any pointers it holds must be
+   treated as if they are invalidated as soon as the callback returns
+   (whether or not that is the case is undefined, though).
+
+   Not all state is set on each call involving this object. Namely:
+
+   - When the corresponding fsl_annotate_opt::dumpVersions flag is
+     true, this->line will be NULL for calls related to that. All such
+     calls will come before the actual line state starts being passed
+     in. That is, the first time this->line is not NULL indicates that
+     the version dump loop is finished.
+
+   - When this->ymd is NULL, the following fields will also be NULL:
+     (fileHash, versionHash, username). This indicates a line for
+     which the version information is incomplete due to a limited
+     annotation run.
+*/
+struct fsl_annotate_step {
+  /**
+     Step number in this annotation, starting at 1 and increasing by
+     one for each subsequent version of the history. When the
+     corresponding fsl_annotate_opt::dumpVersions flag is true,
+     annotation runs two loops, the first one holding only state
+     related to the versions checked and the second one with the
+     complete annotation data. In the loop, the range of this value
+     will differ: in the former it is the relative number of the
+     version, starting at 1 and incremented by 1 on each call.  In the
+     latter it is the relative version from which the current line is
+     from, or 0 if that informat is incomplete due to an incomplete
+     annotation run.
+  */
+  uint32_t stepNumber;
+  /**
+     Line number for the current file.
+  */
+  uint32_t lineNumber;
+  /**
+     NUL-terminated current line of the input file, minus any
+     newline and/or carriage return.
+  */
+  char const * line;
+  /**
+     The number of bytes in this->line.
+  */
+  uint32_t lineLength;
+  /**
+     The hash of the file version from which this->line was
+     pulled.
+  */
+  fsl_uuid_cstr fileHash;
+  /**
+     The hash of the checkin version from which this->line was
+     pulled.
+  */
+  fsl_uuid_cstr versionHash;
+  /**
+     The date this->line was added to the history, in YYYY-MM-DD
+     form. (TODO: add the timestamp from the timeline. We have it
+     readily available.)
+   */
+  char const * ymd;
+  /**
+     The user name this change was attributed to, noting that merges
+     are attributed to the one who did the merge.
+  */
+  char const * username;
+};
+
+/** Convenience typedef. */
+typedef struct fsl_annotate_step fsl_annotate_step;
+/** Forward decl and convenience typedef. */
+typedef struct fsl_annotate_opt fsl_annotate_opt;
+
+/**
+   Callback for use with fsl_annotate(). Implementations receive
+   state about each step of an annotation process. They must return 0
+   on success. On error, their non-0 result code is propagated back
+   to the fsl_annotate() caller.
+*/
+typedef int (*fsl_annotate_step_f)(void * state,
+                                   fsl_annotate_opt const * const opt,
+                                   fsl_annotate_step const * const step);
+
+/**
+   A fsl_annotate_step_f() impl. which requires that its first argument
+   be a fsl_outputer. It formats each step of the annotation
+   in a manner similar to fossil(1) and forwards the result to
+   state->out(state->state, ...), returning that function's result code.
+*/
+int fsl_annotate_step_f_fossilesque(void * state,
+                                    fsl_annotate_opt const * const opt,
+                                    fsl_annotate_step const * const step);
+
+/**
    Configuration for use with fsl_annotate().
 
    This structure holds options for the "annotate" operation and its
@@ -13341,14 +13432,12 @@ struct fsl_annotate_opt {
   /**
      The output channel for the resulting annotation.
   */
-  fsl_output_f out;
+  fsl_annotate_step_f out;
   /**
      State for passing as the first argument to this->out().
   */
   void * outState;
 };
-/** Convenience typedef. */
-typedef struct fsl_annotate_opt fsl_annotate_opt;
 
 /** Initialized-with-defaults fsl_annotate_opt structure, intended for
     const-copy initialization. */
@@ -13357,7 +13446,7 @@ typedef struct fsl_annotate_opt fsl_annotate_opt;
   0/*versionRid*/,0/*originRid*/,    \
   0U/*limit*/, 0/*spacePolicy*/, \
   false/*praise*/, false/*fileVersions*/,     \
-  false/*dumpVersions*/, \
+  false/*dumpVersions*/,                  \
   NULL/*out*/, NULL/*outState*/               \
 }
 

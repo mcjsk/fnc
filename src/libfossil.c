@@ -1125,6 +1125,7 @@ bool fsl_is_reserved_fn(const char *zFilename, fsl_int_t nameLen){
   This file implements the annoate/blame/praise-related APIs.
 */
 #include <assert.h>
+#include <string.h>/*memset()*/
 
 /* Only for debugging */
 #include <stdio.h>
@@ -1134,7 +1135,6 @@ bool fsl_is_reserved_fn(const char *zFilename, fsl_int_t nameLen){
   } while(0)
 
 const fsl_annotate_opt fsl_annotate_opt_empty = fsl_annotate_opt_empty_m;
-#define TO_BE_STATIC
 
 /*
 ** The status of an annotation operation is recorded by an instance
@@ -1452,43 +1452,73 @@ static int fsl__annotate_file(fsl_cx * const f,
   return rc;
 }
 
-/*TO_BE_STATIC int fann__out(fsl_annotate_opt const *const o,
-                     char const *z, fsl_size_t n){
-  return o->out(o->outState, z, n);
-  }*/
-
-static int fann__outf(fsl_annotate_opt const * const o,
-                      char const *fmt, ...){
+int fsl_annotate_step_f_fossilesque(void * state,
+                                    fsl_annotate_opt const * const opt,
+                                    fsl_annotate_step const * const step){
+  static const int szHash = 10;
+  fsl_outputer const * fout = (fsl_outputer*)state;
   int rc = 0;
-  //MARKER(("fmt=%s\n", fmt));
-  va_list va;
-  va_start(va,fmt);
-  rc = fsl_appendfv(o->out, o->outState, fmt, va);
-  va_end(va);
-  //MARKER(("after appendfv\n"));
+  if(opt->dumpVersions && !step->line){
+    rc = fsl_appendf(fout->out, fout->state,
+                     "version %3" PRIu32 ": %s %.*s file %.*s\n",
+                     step->stepNumber, step->ymd, szHash,
+                     step->versionHash, szHash, step->fileHash);
+  }else if(opt->praise){
+    if(step->ymd){
+      rc = fsl_appendf(fout->out, fout->state,
+                       "%.*s %s %13.13s: %.*s\n",
+                       szHash,
+                       opt->fileVersions ? step->fileHash : step->versionHash,
+                       step->ymd, step->username,
+                       (int)step->lineLength, step->line);
+    }else{
+      rc = fsl_appendf(fout->out, fout->state,
+                       "%*s %.*s\n", szHash+26, "",
+                       (int)step->lineLength, step->line);
+    }
+  }else{
+    if(step->ymd){
+      rc = fsl_appendf(fout->out, fout->state,
+                     "%.*s %s %5" PRIu32 ": %.*s\n",
+                     szHash, opt->fileVersions ? step->fileHash : step->versionHash,
+                     step->ymd, step->lineNumber,
+                       (int)step->lineLength, step->line);
+    }else{
+      rc = fsl_appendf(fout->out, fout->state,
+                       "%*s %5" PRIu32 ": %.*s\n",
+                       szHash+11, "", step->lineNumber,
+                       (int)step->lineLength, step->line);
+    }
+  }
   return rc;
 }
+
 
 int fsl_annotate( fsl_cx * const f, fsl_annotate_opt const * const opt ){
   int rc;
   Annotator ann = Annotator_empty;
   unsigned int i;
+  fsl_buffer * const scratch = fsl_cx_scratchpad(f);
+  fsl_annotate_step aStep;
   assert(opt->out);
 
   rc = fsl__annotate_file(f, &ann, opt);
   if(rc) goto end;
+  memset(&aStep,0,sizeof(fsl_annotate_step));
 
-  int const szHash = 10
-    /*# of hash bytes to show. TODO: move this into fsl_annotate_opt. */;
   if(opt->dumpVersions){
     struct AnnVers *av;
     for(av = ann.aVers, i = 0;
         0==rc && i < ann.nVers; ++i, ++av){
-      rc = fann__outf(opt, "version %3u: %s %.*s file %.*s\n",
-                      i+1, av->zDate, szHash, av->zMUuid,
-                      szHash, av->zFUuid);
+      aStep.fileHash = av->zFUuid;
+      aStep.versionHash = av->zMUuid;
+      aStep.ymd = av->zDate;
+      aStep.fileHash = av->zFUuid;
+      aStep.versionHash = av->zMUuid;
+      aStep.ymd = av->zDate;
+      aStep.stepNumber = (uint32_t)i+1;
+      rc = opt->out(opt->outState, opt, &aStep);
     }
-    if(!rc) rc = fann__outf(opt, "%.*c\n", 60, '-');
     if(rc) goto end;
   }
 
@@ -1499,37 +1529,34 @@ int fsl_annotate( fsl_cx * const f, fsl_annotate_opt const * const opt ){
     if(iVers<0 && !ann.bMoreToDo){
       iVers = ann.nVers-1;
     }
-    if(opt->praise){
-      if(iVers>=0){
-        struct AnnVers * const av = &ann.aVers[iVers];
-        rc = fann__outf(opt, "%.*s %s %13.13s: %.*s\n",
-                        szHash,
-                        opt->fileVersions ? av->zFUuid : av->zMUuid,
-                       av->zDate, av->zUser, n, z);
-      }else{
-        rc = fann__outf(opt, "%*s %.*s\n", szHash+26, "", n, z);
-      }
+    fsl_buffer_reuse(scratch);
+    rc = fsl_buffer_append(scratch, z, n);
+    if(rc) break;
+    aStep.stepNumber = (uint32_t)(iVers<0 ? 0 : iVers);
+    ++aStep.lineNumber;
+    aStep.line = fsl_buffer_cstr(scratch);
+    aStep.lineLength = (uint32_t)scratch->used;
+
+    if(iVers>=0){
+      struct AnnVers * const av = &ann.aVers[iVers];
+      aStep.fileHash = av->zFUuid;
+      aStep.versionHash = av->zMUuid;
+      aStep.ymd = av->zDate;
+      aStep.username = av->zUser;
     }else{
-      if(iVers>=0){
-        struct AnnVers * const av = &ann.aVers[iVers];
-        rc = fann__outf(opt, "%.*s %s %5u: %.*s\n",
-                        szHash,
-                        opt->fileVersions ? av->zFUuid : av->zMUuid,
-                        av->zDate, i+1, n, z);
-      }else{
-        rc = fann__outf(opt, "%*s %5u: %.*s\n",
-                        szHash+11, "", i+1, n, z);
-      }
+      aStep.fileHash = aStep.versionHash =
+        aStep.ymd = aStep.username = NULL;
     }
+    rc = opt->out(opt->outState, opt, &aStep);
   }
   
   end:
+  fsl_cx_scratchpad_yield(f, scratch);
   fsl__annotator_clean(&ann);
   return rc;
 }
 
 #undef MARKER
-#undef TO_BE_STATIC
 #undef blob_to_utf8_no_bom
 /* end of file annotate.c */
 /* start of file appendf.c */
@@ -2387,10 +2414,10 @@ static int StrNLen32(const char *z, int N){
 #if 0
 /**
    Given the first byte of an assumed-to-be well-formed UTF8
-   character, returns the length of that character. Results are
-   undefined with non-UTF8 inputs. Returns 0 if the character is 0 or
-   appears to be an invalid UTF8 character, else returns its length,
-   in bytes (1-4).
+   character, returns the length of that character. Returns 0 if the
+   character appears to be an invalid UTF8 character, else returns its
+   length, in bytes (1-4). Note that a NUL byte is a valid length-1
+   character.
 */
 static int utf8__char_length( unsigned char const * const c ){
   switch(0xF0 & *c) {
@@ -9298,7 +9325,7 @@ static int fcli_setup_common2(void){
       /* To avoid any confusion about ownership */;
   }else{
     init.output = fsl_outputer_FILE;
-    init.output.state.state = stdout;
+    init.output.state = stdout;
   }
   if(fcli.config.traceSql>0 || TempFlags.traceSql){
     init.config.traceSql = fcli.config.traceSql;
@@ -12273,8 +12300,8 @@ int fsl_cx_init( fsl_cx ** tgt, fsl_cx_init_opt const * param ){
   extern int fsl_cx_install_timeline_crosslinkers(fsl_cx *f);
   if(!tgt) return FSL_RC_MISUSE;
   else if(!param){
-    if(!paramDefaults.output.state.state){
-      paramDefaults.output.state.state = stdout;
+    if(!paramDefaults.output.state){
+      paramDefaults.output.state = stdout;
     }
     param = &paramDefaults;
   }
@@ -12418,19 +12445,6 @@ void fsl_cx_finalize( fsl_cx * f ){
   if(!f) return;
 
   if(f->xlinkers.list){
-#if 0
-    /* Potential TODO: add client-specified finalizer for xlink
-       callback state, using a fsl_state to replace the current
-       (void*) for x->state. Seems like overkill for the time being.
-     */
-    fsl_size_t i;
-    for( i = 0; i < f->xlinkers.used; ++i ){
-      fsl_xlinker * x = f->xlinkers.list + i;
-      if(x->state.finalize.f){
-        x->state.finalize.f(x->state.finalize.state, x->state.state);
-      }
-    }
-#endif    
     fsl_free(f->xlinkers.list);
     f->xlinkers = fsl_xlinker_list_empty;
   }
@@ -12440,10 +12454,6 @@ void fsl_cx_finalize( fsl_cx * f ){
                                f->clientState.state );
   }
   f->clientState = fsl_state_empty;
-  if(f->output.state.finalize.f){
-    f->output.state.finalize.f( f->output.state.finalize.state,
-                                f->output.state.state );
-  }
   f->output = fsl_outputer_empty;
   fsl_cx_reset(f, 1);
   fsl_db_close(&f->dbMem);
@@ -13739,9 +13749,10 @@ int fsl_cx_flags_get( fsl_cx * f ){
 }
 
 int fsl_cx_flag_set( fsl_cx * f, int flags, bool enable ){
+  int const oldFlags = f->flags;
   if(enable) f->flags |= flags;
   else f->flags &= ~flags;
-  return f->flags;
+  return oldFlags;
 }
 
 
@@ -29550,14 +29561,13 @@ int fsl_outputf( fsl_cx * f, char const * fmt, ... ){
 int fsl_output( fsl_cx * cx, void const * src, fsl_size_t n ){
   if(!cx || !src) return FSL_RC_MISUSE;
   else if(!n || !cx->output.out) return 0;
-  else return cx->output.out( cx->output.state.state,
-                              src, n );
+  else return cx->output.out( cx->output.state, src, n );
 }
 
 int fsl_flush( fsl_cx * f ){
   return f
     ? (f->output.flush
-       ? f->output.flush(f->output.state.state)
+       ? f->output.flush(f->output.state)
        : 0)
     : FSL_RC_MISUSE;
 }

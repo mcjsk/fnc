@@ -788,6 +788,8 @@ static void		 fnc_close_repository_tree(struct fnc_repository_tree *);
 static int		 open_blame_view(struct fnc_view *, char *,
 			    fsl_uuid_str, fsl_id_t, int);
 static int		 run_blame(struct fnc_view *);
+static int		 blame_cb(void *, fsl_annotate_opt const * const,
+			    fsl_annotate_step const * const);
 static int		 fnc_dump_buffer_to_file(off_t *, int *, off_t **,
 			    FILE *, fsl_buffer *);
 static int		 show_blame_view(struct fnc_view *);
@@ -6675,6 +6677,7 @@ run_blame(struct fnc_view *view)
 	fsl_deck			 d = fsl_deck_empty;
 	fsl_buffer			 buf = fsl_buffer_empty;
 	fsl_annotate_opt		*opt = NULL;
+	fsl_outputer			 blame_out = fsl_outputer_FILE;
 	const fsl_card_F		*cf;
 	char				*filepath = NULL;
 	int				 rc = 0;;
@@ -6727,8 +6730,9 @@ run_blame(struct fnc_view *view)
 	    &opt->versionRid);
 	opt->originRid = blame->origin;    /* tip when -r is passed */
 	opt->limit = blame->ndepth;
-	opt->out = fsl_output_f_FILE;
-	opt->outState = blame->f;
+	blame_out.state = blame->f;
+	opt->out = blame_cb;
+	opt->outState = &blame_out;
 
 	rc = fnc_dump_buffer_to_file(&blame->filesz, &blame->nlines,
 	    &blame->line_offsets, blame->f0, &buf);
@@ -6775,6 +6779,30 @@ end:
 	fsl_buffer_clear(&buf);
 	if (rc)
 		stop_blame(blame);
+	return rc;
+}
+
+static int
+blame_cb(void *state, fsl_annotate_opt const * const opt,
+    fsl_annotate_step const * const step)
+{
+	fsl_outputer const	*fout = (fsl_outputer *)state;
+	int			 idlen = 0, rc = 0;
+
+	if (step->ymd) {
+		if (!idlen)
+			idlen = fsl_strlen(step->versionHash);
+		rc = fsl_appendf(fout->out, fout->state,
+		    "%s %s %5" PRIu32 ": %.*s\n",
+		    opt->fileVersions ? step->fileHash : step->versionHash,
+		    step->ymd, step->lineNumber, (int)step->lineLength,
+		    step->line);
+	} else {
+		rc = fsl_appendf(fout->out, fout->state,
+		    "%*s %5" PRIu32 ": %.*s\n", idlen + 11, "",
+		    step->lineNumber, (int)step->lineLength, step->line);
+	}
+
 	return rc;
 }
 
@@ -6894,14 +6922,13 @@ fnc_blame(struct fnc_blame *blame)
 		    "%s", "fsl_mprintf");
 
 	rc = fsl_annotate(f, opt);
-	if (rc || fflush(opt->outState) != 0)
+	if (rc || fflush(((fsl_outputer *)opt->outState)->state) != 0)
 		return rc ? rc : RC(fsl_errno_to_rc(errno, FSL_RC_IO),
 		    "%s", "fflush");
-	rewind(opt->outState);
+	rewind(((fsl_outputer *)opt->outState)->state);
 
 	/* Parse the line's hash UUID. XXX Implement API callback to do this. */
 	while (i != blame->nlines) {
-		char pfxid[11];
 		linelen = getline(&line, &linesz, blame->f);
 		if (linelen == -1) {
 			if (feof(blame->f))
@@ -6915,12 +6942,8 @@ fnc_blame(struct fnc_blame *blame)
 		if (opt->originRid && fsl_isspace(line[0]))
 			fsl_sym_to_uuid(f, "root:trunk", FSL_SATYPE_CHECKIN,
 			    &blame_line->id, NULL);
-		else {
-			memset(pfxid, 0, sizeof(pfxid));
-			memcpy(pfxid, line, 10);
-			fsl_sym_to_uuid(f, pfxid, FSL_SATYPE_CHECKIN,
-			    &blame_line->id, NULL);
-		}
+		else
+			blame_line->id = fsl_strndup(line, FSL_UUID_STRLEN_MIN);
 		blame_line->annotated = true;
 		++blame->nannotated;
 	}
@@ -7252,8 +7275,9 @@ cleanup:
 			break;
 		if (s->selected_commit)
 			fnc_commit_artifact_close(s->selected_commit);
-		rid = fsl_uuid_to_rid(f, id);
-		rc = commit_builder(&commit, rid, NULL);
+		rc = fsl_sym_to_rid(f, id, FSL_SATYPE_CHECKIN, &rid);
+		if (!rc)
+			commit_builder(&commit, rid, NULL);
 		if (rc) {
 			fnc_commit_artifact_close(commit);
 			break;
