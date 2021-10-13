@@ -820,6 +820,8 @@ static int		 fsl_list_object_free(void *, void *);
 static void		 sigwinch_handler(int);
 static void		 sigpipe_handler(int);
 static void		 sigcont_handler(int);
+static int		 strtonumcheck(int *, const char *, const int,
+			    const int);
 static char		*fnc_strsep (char **, const char *);
 #ifdef __linux__
 static size_t		 fnc_strlcat(char *, const char *, size_t);
@@ -933,23 +935,10 @@ cmd_timeline(fcli_command const *argv)
 	if (rc || (rc = fcli_has_unused_flags(false)))
 		return rc;
 
-	if (fnc_init.nrecords.zlimit) {
-		const char	*ptr, *s;
-		s = fnc_init.nrecords.zlimit;
-		ptr = NULL;
-		errno = 0;
-
-		fnc_init.nrecords.limit = strtonum(s, INT_MIN, INT_MAX, &ptr);
-		if (errno == ERANGE)
-			return RC(FSL_RC_RANGE,
-			    "<n> out of range: -n|--limit=%s [%s]", s, ptr);
-		else if (errno != 0 || errno == EINVAL)
-			return RC(FSL_RC_MISUSE,
-			    "<n> not a number: -n|--limit=%s [%s]", s, ptr);
-		else if (ptr && *ptr != '\0')
-			return RC(FSL_RC_MISUSE,
-			    "invalid char in <n>: -n|--limit=%s [%s]", s, ptr);
-	}
+	if (fnc_init.nrecords.zlimit)
+		if ((rc = strtonumcheck(&fnc_init.nrecords.limit,
+		    fnc_init.nrecords.zlimit, INT_MIN, INT_MAX)))
+			return rc;
 
 	if (fnc_init.sym != NULL) {
 		rc = fsl_sym_to_rid(f, fnc_init.sym, FSL_SATYPE_CHECKIN, &rid);
@@ -5065,7 +5054,7 @@ cmd_diff(fcli_command const *argv)
 	fsl_cx				*f = fcli_cx();
 	struct fnc_view			*view;
 	struct fnc_commit_artifact	*commit = NULL;
-	const char			*artifact1, *artifact2, *ptr, *s;
+	const char			*artifact1, *artifact2;
 	fsl_id_t			 prid = -1, rid = -1;
 	int				 context = DIFF_DEF_CTXT, rc = 0;
 
@@ -5139,18 +5128,8 @@ cmd_diff(fcli_command const *argv)
 		goto end;
 
 	if (fnc_init.context) {
-		s = fnc_init.context;
-		context = strtonum(s, INT_MIN, INT_MAX, &ptr);
-		if (errno == ERANGE)
-			rc = RC(FSL_RC_RANGE,
-			    "out of range: -x|--context=%s [%s]", s, ptr);
-		else if (errno != 0 || errno == EINVAL)
-			rc = RC(FSL_RC_MISUSE,
-			    "not a number: -x|--context=%s [%s]", s, ptr);
-		else if (ptr && *ptr != '\0')
-			rc = RC(FSL_RC_MISUSE,
-			    "invalid char: -x|--context=%s [%s]", s, ptr);
-		if (rc)
+		if ((rc = strtonumcheck(&context, fnc_init.context, INT_MIN,
+		    INT_MAX)))
 			goto end;
 		context = MIN(DIFF_MAX_CTXT, context);
 	}
@@ -6557,30 +6536,6 @@ fnc_home(struct fnc_view *view)
 }
 
 static int
-strtonumcheck(int *ret, const char *nstr, const int min, const int max)
-{
-	const char	*ptr;
-	int		 n;
-
-	ptr = NULL;
-	errno = 0;
-
-	n = strtonum(nstr, INT_MIN, INT_MAX, &ptr);
-	if (errno == ERANGE)
-		return RC(FSL_RC_RANGE, "<n> out of range: -n|--limit=%s [%s]",
-		    nstr, ptr);
-	else if (errno != 0 || errno == EINVAL)
-		return RC(FSL_RC_MISUSE, "<n> not a number: -n|--limit=%s [%s]",
-		    nstr, ptr);
-	else if (ptr && *ptr != '\0')
-		return RC(FSL_RC_MISUSE,
-		    "invalid char in <n>: -n|--limit=%s [%s]", nstr, ptr);
-
-	*ret = n;
-	return 0;
-}
-
-static int
 cmd_blame(fcli_command const *argv)
 {
 	fsl_cx		*f = fcli_cx();
@@ -7538,6 +7493,30 @@ static void
 fnc_show_version(void)
 {
 	printf("%s %s\n", fcli_progname(), PRINT_VERSION);
+}
+
+static int
+strtonumcheck(int *ret, const char *nstr, const int min, const int max)
+{
+	const char	*ptr;
+	int		 n;
+
+	ptr = NULL;
+	errno = 0;
+
+	n = strtonum(nstr, INT_MIN, INT_MAX, &ptr);
+	if (errno == ERANGE)
+		return RC(FSL_RC_RANGE, "<n> out of range: -n|--limit=%s [%s]",
+		    nstr, ptr);
+	else if (errno != 0 || errno == EINVAL)
+		return RC(FSL_RC_MISUSE, "<n> not a number: -n|--limit=%s [%s]",
+		    nstr, ptr);
+	else if (ptr && *ptr != '\0')
+		return RC(FSL_RC_MISUSE,
+		    "invalid char in <n>: -n|--limit=%s [%s]", nstr, ptr);
+
+	*ret = n;
+	return 0;
 }
 
 static char *
