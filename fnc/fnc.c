@@ -1854,7 +1854,7 @@ commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
 		type = "forum";
 		break;
 	};
-	if (!rc)
+	if (!rc && comment)
 		rc = fsl_buffer_append(&buf, comment, -1);
 	if (rc) {
 		rc = RC(rc, "%s", "fsl_buffer_append");
@@ -1882,7 +1882,7 @@ commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
 	commit->timestamp = fsl_strdup(fsl_stmt_g_text(q, 1, NULL));
 	commit->user = fsl_strdup(fsl_stmt_g_text(q, 2, NULL));
 	commit->branch = fsl_strdup(fsl_stmt_g_text(q, 5, NULL));
-	commit->comment = fsl_strdup(fsl_buffer_str(&buf));
+	commit->comment = fsl_strdup(comment ? fsl_buffer_str(&buf) : "");
 	fsl_buffer_clear(&buf);
 
 	*ptr = commit;
