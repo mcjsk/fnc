@@ -6943,7 +6943,7 @@ fnc_blame(struct fnc_blame *blame)
 			fsl_sym_to_uuid(f, "root:trunk", FSL_SATYPE_CHECKIN,
 			    &blame_line->id, NULL);
 		else
-			blame_line->id = fsl_strndup(line, FSL_UUID_STRLEN_MIN);
+			blame_line->id = fsl_strndup(line, FSL_UUID_STRLEN_MAX);
 		blame_line->annotated = true;
 		++blame->nannotated;
 	}
@@ -7267,6 +7267,7 @@ cleanup:
 		fsl_cx				*f = fcli_cx();
 		struct fnc_commit_artifact	*commit = NULL;
 		fsl_uuid_cstr			 id = NULL;
+		char				 sym[FSL_UUID_STRLEN_MIN];
 		fsl_id_t			 rid;
 
 		id = get_selected_commit_id(s->blame.lines, s->blame.nlines,
@@ -7275,9 +7276,12 @@ cleanup:
 			break;
 		if (s->selected_commit)
 			fnc_commit_artifact_close(s->selected_commit);
-		rc = fsl_sym_to_rid(f, id, FSL_SATYPE_CHECKIN, &rid);
-		if (!rc)
-			commit_builder(&commit, rid, NULL);
+		memcpy(sym, id, FSL_UUID_STRLEN_MIN);
+		sym[FSL_UUID_STRLEN_MIN - 1] = '\0';
+		rc = fsl_sym_to_rid(f, sym, FSL_SATYPE_CHECKIN, &rid);
+		if (rc)
+			break;
+		rc = commit_builder(&commit, rid, NULL);
 		if (rc) {
 			fnc_commit_artifact_close(commit);
 			break;
