@@ -584,22 +584,36 @@ struct fnc_blame_line {
 	bool		annotated;
 };
 
-struct fnc_blame {
+struct fnc_blame_cb_cx {
 	struct fnc_view		*view;
-	FILE			*f;		/* Output of fsl_annotate() */
-	FILE			*f0;		/* Non-annotated copy of file */
 	struct fnc_blame_line	*lines;
-	fsl_annotate_opt	 blame_opt;
-	const char		*path;		/* File path being blamed. */
-	fsl_uuid_str		 commit_id;	/* Commit to begin blame. */
-	off_t			*line_offsets;
-	off_t			 filesz;
-	fsl_id_t		 origin;	/* Tip rid for reverse blame. */
+	fsl_uuid_str		 commit_id;
 	int			 nlines;
-	int			 nannotated;
-	int			 ndepth;	/* Limit depth traversal. */
-	bool			*complete;
 	bool			*quit;
+};
+
+typedef int (*fnc_cancel_cb)(void *);
+
+struct fnc_blame_thread_cx {
+	struct fnc_blame_cb_cx	*cb_cx;
+	fsl_annotate_opt	 blame_opt;
+	fnc_cancel_cb		 cancel_cb;
+	const char		*path;
+	void			*cancel_cx;
+	bool			*complete;
+};
+
+struct fnc_blame {
+	struct fnc_blame_thread_cx	 thread_cx;
+	struct fnc_blame_cb_cx		 cb_cx;
+	FILE				*f;	/* Non-annotated copy of file */
+	struct fnc_blame_line		*lines;
+	off_t				*line_offsets;
+	off_t				 filesz;
+	fsl_id_t			 origin; /* Tip rid for reverse blame */
+	int				 nlines;
+	int				 ndepth;    /* Limit depth traversal. */
+	pthread_t			 thread_id;
 };
 
 CONCAT(STAILQ, _HEAD)(fnc_commit_id_queue, fnc_commit_qid);
@@ -620,6 +634,7 @@ struct fnc_blame_view_state {
 	int				 last_line_onscreen;
 	int				 selected_line;
 	int				 matched_line;
+	int				 spin_idx;
 	bool				 done;
 	bool				 blame_complete;
 	bool				 eof;
@@ -788,12 +803,12 @@ static void		 fnc_close_repository_tree(struct fnc_repository_tree *);
 static int		 open_blame_view(struct fnc_view *, char *,
 			    fsl_uuid_str, fsl_id_t, int);
 static int		 run_blame(struct fnc_view *);
-static int		 blame_cb(void *, fsl_annotate_opt const * const,
-			    fsl_annotate_step const * const);
 static int		 fnc_dump_buffer_to_file(off_t *, int *, off_t **,
 			    FILE *, fsl_buffer *);
 static int		 show_blame_view(struct fnc_view *);
-static int		 fnc_blame(struct fnc_blame *);
+static void		*blame_thread(void *);
+static int		 blame_cb(void *, fsl_annotate_opt const * const,
+			    fsl_annotate_step const * const);
 static int		 draw_blame(struct fnc_view *);
 static int		 blame_input_handler(struct fnc_view **,
 			    struct fnc_view *, int);
@@ -805,6 +820,7 @@ static int		 fnc_commit_qid_alloc(struct fnc_commit_qid **,
 			    fsl_uuid_cstr);
 static int		 close_blame_view(struct fnc_view *);
 static int		 stop_blame(struct fnc_blame *);
+static int		 cancel_blame(void *);
 static void		 fnc_commit_qid_free(struct fnc_commit_qid *);
 static void		 view_set_child(struct fnc_view *, struct fnc_view *);
 static int		 view_close_child(struct fnc_view *);
@@ -6652,6 +6668,7 @@ open_blame_view(struct fnc_view *view, char *path, fsl_uuid_str commit_id,
 	s->commit_id = commit_id;
 	s->blame.origin = tip;
 	s->blame.ndepth = ndepth;
+	s->spin_idx = 0;
 
 	if (has_colors() && !fnc_init.nocolour) {
 		rc = set_colours(&s->colours, FNC_VIEW_BLAME);
@@ -6677,7 +6694,6 @@ run_blame(struct fnc_view *view)
 	fsl_deck			 d = fsl_deck_empty;
 	fsl_buffer			 buf = fsl_buffer_empty;
 	fsl_annotate_opt		*opt = NULL;
-	fsl_outputer			 blame_out = fsl_outputer_FILE;
 	const fsl_card_F		*cf;
 	char				*filepath = NULL;
 	int				 rc = 0;;
@@ -6706,36 +6722,27 @@ run_blame(struct fnc_view *view)
 		goto end;
 
 	/*
-	 * XXX We load two files: .f0 with the actual file content; and .f with
-	 * the annotated version. This is to map line offsets so we accurately
-	 * find tokens when running a search. This might be done much better if
-	 * we use a callback to obtain a struct of hash, lineno, line, etc. We
-	 * can parse just the line bit for accurate offsets.
+	 * We load f with the actual file content to map line offsets so we
+	 * accurately find tokens when running a search.
 	 */
 	blame->f = tmpfile();
 	if (blame->f == NULL) {
 		rc = RC(fsl_errno_to_rc(errno, FSL_RC_IO), "%s", "tmpfile");
 		goto end;
 	}
-	blame->f0 = tmpfile();
-	if (blame->f0 == NULL) {
-		rc = RC(fsl_errno_to_rc(errno, FSL_RC_IO), "%s", "tmpfile");
-		goto end;
-	}
 
-	opt = &blame->blame_opt;
+	opt = &blame->thread_cx.blame_opt;
 	opt->filename = fsl_strdup(filepath);
 	fcli_fax((char *)opt->filename);
 	rc = fsl_sym_to_rid(f, s->blamed_commit->id, FSL_SATYPE_CHECKIN,
 	    &opt->versionRid);
 	opt->originRid = blame->origin;    /* tip when -r is passed */
 	opt->limit = blame->ndepth;
-	blame_out.state = blame->f;
 	opt->out = blame_cb;
-	opt->outState = &blame_out;
+	opt->outState = &blame->cb_cx;
 
 	rc = fnc_dump_buffer_to_file(&blame->filesz, &blame->nlines,
-	    &blame->line_offsets, blame->f0, &buf);
+	    &blame->line_offsets, blame->f, &buf);
 	if (rc)
 		goto end;
 	if (blame->nlines == 0) {
@@ -6753,20 +6760,22 @@ run_blame(struct fnc_view *view)
 		goto end;
 	}
 
-	blame->view = view;
-	blame->commit_id = fsl_strdup(s->blamed_commit->id);
-	if (blame->commit_id == NULL) {
+	blame->cb_cx.view = view;
+	blame->cb_cx.lines = blame->lines;
+	blame->cb_cx.nlines = blame->nlines;
+	blame->cb_cx.commit_id = fsl_strdup(s->blamed_commit->id);
+	if (blame->cb_cx.commit_id == NULL) {
 		rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 		goto end;
 	}
-	blame->quit = &s->done;
-	blame->path = s->path;
-	blame->complete = &s->blame_complete;
-	s->blame_complete = false;
+	blame->cb_cx.quit = &s->done;
 
-	rc = fnc_blame(&s->blame);
-	if (rc)
-		goto end;
+	blame->thread_cx.path = s->path;
+	blame->thread_cx.cb_cx = &blame->cb_cx;
+	blame->thread_cx.complete = &s->blame_complete;
+	blame->thread_cx.cancel_cb = cancel_blame;
+	blame->thread_cx.cancel_cx = &s->done;
+	s->blame_complete = false;
 
 	if (s->first_line_onscreen + view->nlines - 1 > blame->nlines) {
 		s->first_line_onscreen = 1;
@@ -6779,30 +6788,6 @@ end:
 	fsl_buffer_clear(&buf);
 	if (rc)
 		stop_blame(blame);
-	return rc;
-}
-
-static int
-blame_cb(void *state, fsl_annotate_opt const * const opt,
-    fsl_annotate_step const * const step)
-{
-	fsl_outputer const	*fout = (fsl_outputer *)state;
-	int			 idlen = 0, rc = 0;
-
-	if (step->ymd) {
-		if (!idlen)
-			idlen = fsl_strlen(step->versionHash);
-		rc = fsl_appendf(fout->out, fout->state,
-		    "%s %s %5" PRIu32 ": %.*s\n",
-		    opt->fileVersions ? step->fileHash : step->versionHash,
-		    step->ymd, step->lineNumber, (int)step->lineLength,
-		    step->line);
-	} else {
-		rc = fsl_appendf(fout->out, fout->state,
-		    "%*s %5" PRIu32 ": %.*s\n", idlen + 11, "",
-		    step->lineNumber, (int)step->lineLength, step->line);
-	}
-
 	return rc;
 }
 
@@ -6906,60 +6891,104 @@ allocated:
 }
 
 static int
-fnc_blame(struct fnc_blame *blame)
+show_blame_view(struct fnc_view *view)
 {
-	fsl_cx			*const f = fcli_cx();
-	fsl_annotate_opt	*opt = &blame->blame_opt;
-	struct fnc_blame_line	*blame_line;
-	char			*abspath, *line = NULL;
-	ssize_t			 linelen;
-	size_t			 linesz = 0;
-	int			 i = 0, rc = 0;
+	struct fnc_blame_view_state	*s = &view->state.blame;
+	int				 rc = 0;
 
-	if ((abspath = fsl_mprintf("%s%s", blame->path[0] == '/' ? "" : "/",
-	    blame->path)) == NULL)
-		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR),
-		    "%s", "fsl_mprintf");
+	if (!s->blame.thread_id && !s->blame_complete) {
+		rc = pthread_create(&s->blame.thread_id, NULL, blame_thread,
+		    &s->blame.thread_cx);
+		if (rc)
+			return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+			    "%s", "pthread_create");
 
-	rc = fsl_annotate(f, opt);
-	if (rc || fflush(((fsl_outputer *)opt->outState)->state) != 0)
-		return rc ? rc : RC(fsl_errno_to_rc(errno, FSL_RC_IO),
-		    "%s", "fflush");
-	rewind(((fsl_outputer *)opt->outState)->state);
-
-	/* Parse the line's hash UUID. XXX Implement API callback to do this. */
-	while (i != blame->nlines) {
-		linelen = getline(&line, &linesz, blame->f);
-		if (linelen == -1) {
-			if (feof(blame->f))
-				break;
-			fsl_free(line);
-			return RC(ferror(blame->f) ? fsl_errno_to_rc(errno,
-			    FSL_RC_IO) : FSL_RC_IO, "%s", "getline");
-		}
-		blame_line = &blame->lines[i++];
-		/* -r can return lines with no version, use root check-in. */
-		if (opt->originRid && fsl_isspace(line[0]))
-			fsl_sym_to_uuid(f, "root:trunk", FSL_SATYPE_CHECKIN,
-			    &blame_line->id, NULL);
-		else
-			blame_line->id = fsl_strndup(line, FSL_UUID_STRLEN_MAX);
-		blame_line->annotated = true;
-		++blame->nannotated;
+		halfdelay(1);	/* Fast refresh while annotating.  */
 	}
-	fsl_free(line);
-	*blame->complete = true;
 
-	fsl_free(abspath);
+	if (s->blame_complete)
+		cbreak();	/* Return to blocking mode. */
+
+	rc = draw_blame(view);
+	draw_vborder(view);
+
 	return rc;
 }
 
-static int
-show_blame_view(struct fnc_view *view)
+static void *
+blame_thread(void *state)
 {
-	int rc = draw_blame(view);
+	struct fnc_blame_thread_cx	*cx = state;
+	int				 rc0, rc;
 
-	draw_vborder(view);
+	rc = block_main_thread_signals();
+	if (rc)
+		return (void *)(intptr_t)rc;
+
+	rc = fsl_annotate(fcli_cx(), &cx->blame_opt);
+	if (rc && fsl_cx_err_get_e(fcli_cx())->code == FSL_RC_BREAK) {
+		fcli_err_reset();
+		rc = 0;
+	}
+
+	rc0 = pthread_mutex_lock(&fnc_mutex);
+	if (rc0)
+		return (void *)(intptr_t)RC(fsl_errno_to_rc(rc0, FSL_RC_ACCESS),
+		    "%s", "pthread_mutex_lock");
+
+	*cx->complete = true;
+
+	rc0 = pthread_mutex_unlock(&fnc_mutex);
+	if (rc0 && !rc)
+		rc = RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+		    "%s", "pthread_mutex_unlock");
+
+	return (void *)(intptr_t)rc;
+}
+
+static int
+blame_cb(void *state, fsl_annotate_opt const * const opt,
+    fsl_annotate_step const * const step)
+{
+	struct fnc_blame_cb_cx	*cx = state;
+	struct fnc_blame_line	*line;
+	int			 rc = 0;
+
+	rc = pthread_mutex_lock(&fnc_mutex);
+	if (rc)
+		return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+		    "%s", "pthread_mutex_lock");
+
+	if (*cx->quit) {
+		rc = fcli_err_set(FSL_RC_BREAK, "user quit");
+		goto end;
+	}
+
+	line = &cx->lines[step->lineNumber - 1];
+	if (line->annotated)
+		goto end;
+
+	if (step->mtime) {
+		line->id = fsl_strdup(step->versionHash);
+		if (line->id == NULL) {
+			rc = RC(FSL_RC_ERROR, "%s", fsl_strdup);
+			goto end;
+		}
+	} else
+		line->id = NULL;
+
+	/* -r can return lines with no version, so use root check-in. */
+	if (opt->originRid && !line->id)
+		fsl_sym_to_uuid(fcli_cx(), "root:trunk", FSL_SATYPE_CHECKIN,
+		    &line->id, NULL);
+
+	line->annotated = true;
+	++cx->nlines;
+end:
+	rc = pthread_mutex_unlock(&fnc_mutex);
+	if (rc)
+		rc = RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+		    "%s", "pthread_mutex_unlock");
 	return rc;
 }
 
@@ -6984,7 +7013,7 @@ draw_blame(struct fnc_view *view)
 	if (id_str == NULL)
 		return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 
-	rewind(blame->f0);
+	rewind(blame->f);
 	werase(view->window);
 
 	if ((line = fsl_mprintf("checkin %s", id_str)) == NULL) {
@@ -7014,13 +7043,17 @@ draw_blame(struct fnc_view *view)
 	if (width < view->ncols - 1)
 		waddch(view->window, '\n');
 
-	if ((line = fsl_mprintf("[%d/%d] %s%s",
+	if ((line = fsl_mprintf("[%d/%d] %s%s%s %c",
 	    s->first_line_onscreen - 1 + s->selected_line, blame->nlines,
-	    fnc_init.sym ? "/" : "", s->path)) == NULL) {
+	    s->blame_complete ? "" : "annotating... ",
+	    fnc_init.sym ? "/" : "", s->path,
+	    s->blame_complete ? ' ' : SPINNER[s->spin_idx])) == NULL) {
 		fsl_free(id_str);
 		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR),
 		    "%s", "fsl_mprintf");
 	}
+	if (SPINNER[++s->spin_idx] == '\0')
+		s->spin_idx = 0;
 	fsl_free(id_str);
 	rc = formatln(&wcstr, &width, line, view->ncols, 0);
 	fsl_free(line);
@@ -7035,14 +7068,14 @@ draw_blame(struct fnc_view *view)
 
 	s->eof = false;
 	while (nprinted < view->nlines - 2) {
-		linelen = getline(&line, &linesz, blame->f0);
+		linelen = getline(&line, &linesz, blame->f);
 		if (linelen == -1) {
-			if (feof(blame->f0)) {
+			if (feof(blame->f)) {
 				s->eof = true;
 				break;
 			}
 			fsl_free(line);
-			return RC(ferror(blame->f0) ? fsl_errno_to_rc(errno,
+			return RC(ferror(blame->f) ? fsl_errno_to_rc(errno,
 			    FSL_RC_IO) : FSL_RC_IO, "%s", "getline");
 		}
 		if (++lineno < s->first_line_onscreen)
@@ -7053,12 +7086,12 @@ draw_blame(struct fnc_view *view)
 
 		if (blame->nlines > 0) {
 			blame_line = &blame->lines[lineno - 1];
-			if (prev_id &&
+			if (blame_line->annotated && prev_id &&
 			    fsl_uuidcmp(prev_id, blame_line->id) == 0 &&
 			    !(view->active &&
 			    nprinted == s->selected_line - 1)) {
 				waddstr(view->window, "          ");
-			} else {
+			} else if (blame_line->annotated) {
 				char *id_str;
 				id_str = fsl_strndup(blame_line->id,
 				    idfield - 1);
@@ -7078,6 +7111,9 @@ draw_blame(struct fnc_view *view)
 					    COLOR_PAIR(c->scheme), NULL);
 				fsl_free(id_str);
 				prev_id = blame_line->id;
+			} else {
+				waddstr(view->window, "..........");
+				prev_id = NULL;
 			}
 		} else {
 			waddstr(view->window, "..........");
@@ -7397,12 +7433,12 @@ blame_search_next(struct fnc_view *view)
 		}
 
 		offset = s->blame.line_offsets[lineno - 1];
-		if (fseeko(s->blame.f0, offset, SEEK_SET) != 0) {
+		if (fseeko(s->blame.f, offset, SEEK_SET) != 0) {
 			fsl_free(line);
 			return RC(fsl_errno_to_rc(errno, FSL_RC_IO),
 			    "%s", "fseeko");
 		}
-		linelen = getline(&line, &linesz, s->blame.f0);
+		linelen = getline(&line, &linesz, s->blame.f);
 		if (linelen != -1 && regexec(&view->regex, line, 1,
 		    &view->regmatch, 0) == 0) {
 			view->search_status = SEARCH_CONTINUE;
@@ -7484,11 +7520,25 @@ stop_blame(struct fnc_blame *blame)
 {
 	int idx, rc = 0;
 
-	if (blame->f0) {
-		if (fclose(blame->f0) == EOF && rc == 0)
-			rc = RC(fsl_errno_to_rc(errno, FSL_RC_IO), "%s",
-			    fclose);
-		blame->f0 = NULL;
+	if (blame->thread_id) {
+		int retval;
+		rc = pthread_mutex_unlock(&fnc_mutex);
+		if (rc)
+			return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+			    "%s", "pthread_mutex_unlock");
+		rc = pthread_join(blame->thread_id, (void **)&retval);
+		if (rc)
+			return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+			    "%s", "pthread_join");
+		rc = pthread_mutex_lock(&fnc_mutex);
+		if (rc)
+			return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+			    "%s", "pthread_mutex_lock");
+		if (!rc && fsl_cx_err_get_e(fcli_cx())->code == FSL_RC_BREAK) {
+			rc = 0;
+			fcli_err_reset();
+		}
+		blame->thread_id = 0;
 	}
 	if (blame->f) {
 		if (fclose(blame->f) == EOF && rc == 0)
@@ -7503,9 +7553,31 @@ stop_blame(struct fnc_blame *blame)
 		blame->lines = NULL;
 	}
 
+	fsl_free(blame->cb_cx.commit_id);
+	blame->cb_cx.commit_id = NULL;
 	fsl_free(blame->line_offsets);
-	fsl_free(blame->commit_id);
-	blame->commit_id = NULL;
+
+	return rc;
+}
+
+static int
+cancel_blame(void *state)
+{
+	int	*done = state;
+	int	 rc = 0;
+
+	rc = pthread_mutex_lock(&fnc_mutex);
+	if (rc)
+		return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+		    "%s", "pthread_mutex_unlock");
+
+	if (*done)
+		rc = fcli_err_set(FSL_RC_BREAK, "user quit");
+
+	rc = pthread_mutex_unlock(&fnc_mutex);
+	if (rc)
+		return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+		    "%s", "pthread_mutex_lock");
 
 	return rc;
 }

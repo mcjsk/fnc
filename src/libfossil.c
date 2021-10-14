@@ -1158,8 +1158,8 @@ struct Annotator {
   struct AnnVers {
     char *zFUuid;   /* File being analyzed */
     char *zMUuid;   /* Check-in containing the file */
-    char *zDate;    /* Date of the check-in */
     char *zUser;    /* Name of user who did the check-in */
+    double mtime;   /* [event].[mtime] db entry */
   } *aVers;         /* For each check-in analyzed */
   unsigned int naVers; /* # of entries allocated in this->aVers */
 };
@@ -1182,7 +1182,6 @@ static void fsl__annotator_clean(Annotator * const a){
   for(i = 0; i < a->nVers; ++i){
     fsl_free(a->aVers[i].zFUuid);
     fsl_free(a->aVers[i].zMUuid);
-    fsl_free(a->aVers[i].zDate);
     fsl_free(a->aVers[i].zUser);
   }
   fsl_free(a->aVers);
@@ -1354,9 +1353,8 @@ static int fsl__annotate_file(fsl_cx * const f,
     "SELECT DISTINCT"
     "   (SELECT uuid FROM blob WHERE rid=mlink.fid),"
     "   (SELECT uuid FROM blob WHERE rid=mlink.mid),"
-    "   date(event.mtime),"
     "   coalesce(event.euser,event.user),"
-    "   mlink.fid"
+    "   mlink.fid, event.mtime"
     "  FROM mlink, event, ancestor"
     " WHERE mlink.fnid=%" FSL_ID_T_PFMT
     "   AND ancestor.rid=mlink.mid"
@@ -1380,7 +1378,8 @@ static int fsl__annotate_file(fsl_cx * const f,
     char * zTmp = 0;
     char const * zCol = 0;
     fsl_size_t nCol = 0;
-    fsl_id_t const rid = fsl_stmt_g_id(&q, 4);
+    fsl_id_t const rid = fsl_stmt_g_id(&q, 3);
+    double const mtime = fsl_stmt_g_double(&q, 4);
     if(0==a->nVers){
       rc = fsl_content_get(f, rid, &a->headVersion);
       if(rc) goto end;
@@ -1409,9 +1408,9 @@ static int fsl__annotate_file(fsl_cx * const f,
     a->aVers[a->nVers].FLD = zTmp
     AnnStr(0,zFUuid);
     AnnStr(1,zMUuid);
-    AnnStr(2,zDate);
-    AnnStr(3,zUser);
+    AnnStr(2,zUser);
 #undef AnnStr
+    a->aVers[a->nVers].mtime = mtime;
     if( a->nVers>0 ){
       rc = fsl_content_get(f, rid, &step);
       if(!rc){
@@ -1458,37 +1457,46 @@ int fsl_annotate_step_f_fossilesque(void * state,
   static const int szHash = 10;
   fsl_outputer const * fout = (fsl_outputer*)state;
   int rc = 0;
-  if(opt->dumpVersions && !step->line){
-    rc = fsl_appendf(fout->out, fout->state,
-                     "version %3" PRIu32 ": %s %.*s file %.*s\n",
-                     step->stepNumber, step->ymd, szHash,
-                     step->versionHash, szHash, step->fileHash);
-  }else if(opt->praise){
-    if(step->ymd){
+  char ymd[24];
+  if(step->mtime>0){
+    fsl_julian_to_iso8601(step->mtime, &ymd[0], false);
+    ymd[10] = 0;
+  }
+  switch(step->stepType){
+    case FSL_ANNOTATE_STEP_VERSION:
       rc = fsl_appendf(fout->out, fout->state,
-                       "%.*s %s %13.13s: %.*s\n",
-                       szHash,
-                       opt->fileVersions ? step->fileHash : step->versionHash,
-                       step->ymd, step->username,
-                       (int)step->lineLength, step->line);
-    }else{
-      rc = fsl_appendf(fout->out, fout->state,
-                       "%*s %.*s\n", szHash+26, "",
-                       (int)step->lineLength, step->line);
-    }
-  }else{
-    if(step->ymd){
-      rc = fsl_appendf(fout->out, fout->state,
-                     "%.*s %s %5" PRIu32 ": %.*s\n",
-                     szHash, opt->fileVersions ? step->fileHash : step->versionHash,
-                     step->ymd, step->lineNumber,
-                       (int)step->lineLength, step->line);
-    }else{
-      rc = fsl_appendf(fout->out, fout->state,
-                       "%*s %5" PRIu32 ": %.*s\n",
-                       szHash+11, "", step->lineNumber,
-                       (int)step->lineLength, step->line);
-    }
+                       "version %3d: %s %.*s file %.*s\n",
+                       step->stepNumber+1, ymd, szHash,
+                       step->versionHash, szHash, step->fileHash);
+      break;
+    case FSL_ANNOTATE_STEP_FULL:
+      if(opt->praise){
+        rc = fsl_appendf(fout->out, fout->state,
+                         "%.*s %s %13.13s: %.*s\n",
+                         szHash,
+                         opt->fileVersions ? step->fileHash : step->versionHash,
+                         ymd, step->username,
+                         (int)step->lineLength, step->line);
+      }else{
+        rc = fsl_appendf(fout->out, fout->state,
+                         "%.*s %s %5d: %.*s\n",
+                         szHash, opt->fileVersions ? step->fileHash : step->versionHash,
+                         ymd, step->lineNumber,
+                         (int)step->lineLength, step->line);
+      }
+      break;
+    case FSL_ANNOTATE_STEP_LIMITED:
+      if(opt->praise){
+        rc = fsl_appendf(fout->out, fout->state,
+                         "%*s %.*s\n", szHash+26, "",
+                         (int)step->lineLength, step->line);
+      }else{
+        rc = fsl_appendf(fout->out, fout->state,
+                         "%*s %5" PRIu32 ": %.*s\n",
+                         szHash+11, "", step->lineNumber,
+                         (int)step->lineLength, step->line);
+      }
+      break;
   }
   return rc;
 }
@@ -1512,11 +1520,9 @@ int fsl_annotate( fsl_cx * const f, fsl_annotate_opt const * const opt ){
         0==rc && i < ann.nVers; ++i, ++av){
       aStep.fileHash = av->zFUuid;
       aStep.versionHash = av->zMUuid;
-      aStep.ymd = av->zDate;
-      aStep.fileHash = av->zFUuid;
-      aStep.versionHash = av->zMUuid;
-      aStep.ymd = av->zDate;
-      aStep.stepNumber = (uint32_t)i+1;
+      aStep.mtime = av->mtime;
+      aStep.stepNumber = i;
+      aStep.stepType = FSL_ANNOTATE_STEP_VERSION;
       rc = opt->out(opt->outState, opt, &aStep);
     }
     if(rc) goto end;
@@ -1532,7 +1538,7 @@ int fsl_annotate( fsl_cx * const f, fsl_annotate_opt const * const opt ){
     fsl_buffer_reuse(scratch);
     rc = fsl_buffer_append(scratch, z, n);
     if(rc) break;
-    aStep.stepNumber = (uint32_t)(iVers<0 ? 0 : iVers);
+    aStep.stepNumber = iVers;
     ++aStep.lineNumber;
     aStep.line = fsl_buffer_cstr(scratch);
     aStep.lineLength = (uint32_t)scratch->used;
@@ -1541,11 +1547,14 @@ int fsl_annotate( fsl_cx * const f, fsl_annotate_opt const * const opt ){
       struct AnnVers * const av = &ann.aVers[iVers];
       aStep.fileHash = av->zFUuid;
       aStep.versionHash = av->zMUuid;
-      aStep.ymd = av->zDate;
+      aStep.mtime = av->mtime;
       aStep.username = av->zUser;
+      aStep.stepType = FSL_ANNOTATE_STEP_FULL;
     }else{
       aStep.fileHash = aStep.versionHash =
-        aStep.ymd = aStep.username = NULL;
+        aStep.username = NULL;
+      aStep.stepType = FSL_ANNOTATE_STEP_LIMITED;
+      aStep.mtime = 0.0;
     }
     rc = opt->out(opt->outState, opt, &aStep);
   }

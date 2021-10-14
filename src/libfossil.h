@@ -13267,42 +13267,75 @@ FSL_EXPORT int fsl_repo_manifest_write(fsl_cx *f,
                                        fsl_buffer * const manifestUuid,
                                        fsl_buffer * const manifestTags );
 
+
+/**
+   "Stage" flag for use with fsl_annotate_step and
+   fsl_annotate_step_f().
+*/
+enum fsl_annotate_step_e {
+/**
+   Indicates that the current fsl_annotate_step_f() call is
+   part of the "version dump" stage of the annotation.
+*/
+FSL_ANNOTATE_STEP_VERSION,
+/**
+   Indicates that the current fsl_annotate_step_f() call has
+   complete version information for the line it is reporting
+   about.
+*/
+FSL_ANNOTATE_STEP_FULL,
+/**
+   Indicates that the current fsl_annotate_step_f() call has
+   only partial version information for the line it is reporting
+   about, as a result of a limited-run annotation.
+*/
+FSL_ANNOTATE_STEP_LIMITED
+};
+typedef enum fsl_annotate_step_e fsl_annotate_step_e;
+
 /**
    Callback state for use by fsl_annotate_step_f().
 
-   This state gets repopulated for each call to the
+   ACHTUNG: this state gets repopulated for each call to the
    fsl_annote_step_f() callback and any pointers it holds must be
    treated as if they are invalidated as soon as the callback returns
    (whether or not that is the case is undefined, though).
 
-   Not all state is set on each call involving this object. Namely:
-
-   - When the corresponding fsl_annotate_opt::dumpVersions flag is
-     true, this->line will be NULL for calls related to that. All such
-     calls will come before the actual line state starts being passed
-     in. That is, the first time this->line is not NULL indicates that
-     the version dump loop is finished.
-
-   - When this->ymd is NULL, the following fields will also be NULL:
-     (fileHash, versionHash, username). This indicates a line for
-     which the version information is incomplete due to a limited
-     annotation run.
+   Not all state is set on each call involving this object. See the
+   stepType member for details.
 */
 struct fsl_annotate_step {
   /**
-     Step number in this annotation, starting at 1 and increasing by
-     one for each subsequent version of the history. When the
-     corresponding fsl_annotate_opt::dumpVersions flag is true,
-     annotation runs two loops, the first one holding only state
-     related to the versions checked and the second one with the
-     complete annotation data. In the loop, the range of this value
-     will differ: in the former it is the relative number of the
-     version, starting at 1 and incremented by 1 on each call.  In the
-     latter it is the relative version from which the current line is
-     from, or 0 if that informat is incomplete due to an incomplete
-     annotation run.
+     Tells the caller the "type" of annotation step this call
+     represents. The type of step will determine which fields
+     of this object are populated when it is passed to a
+     fsl_annotate_step_f() callback:
+
+     Always set:
+
+     stepType, stepNumber (but interpretation varies - see that
+     member's docs for details).
+
+     FSL_ANNOTATE_STEP_VERSION: fileHash, versionHash, mtime
+
+     FSL_ANNOTATE_STEP_LIMITED: stepNumber (always 0 for the limited
+     case), lineNumber, line, lineNength.
+
+     FSL_ANNOTATE_STEP_FULL: as for FSL_ANNOTATE_STEP_LIMITED plus:
+     fileHash, versionHash, mtime, username.
   */
-  uint32_t stepNumber;
+  fsl_annotate_step_e stepType;
+  /**
+     Step number in this annotation run. When this->stepType is
+     FSL_ANNOTATE_STEP_VERSION, this value is the relative number of
+     the version, starting at 0 and incremented by 1 on each call. In
+     the other modes it is 0-based relative version from which the
+     current line is from, or negative if that information is
+     incomplete due to a limited annotation run. e.g. a value of 3
+     indicates that this line is from 3 version away from the starting
+     version.
+  */
+  int stepNumber;
   /**
      Line number for the current file.
   */
@@ -13326,12 +13359,16 @@ struct fsl_annotate_step {
      pulled.
   */
   fsl_uuid_cstr versionHash;
+
   /**
-     The date this->line was added to the history, in YYYY-MM-DD
-     form. (TODO: add the timestamp from the timeline. We have it
-     readily available.)
-   */
-  char const * ymd;
+     The mtime field from the [event] table (timeline) entry
+     associated with this version. This is a Julian Date and, because
+     it is updated by annotations which modify timestamps in the
+     [event] table, it reflects any "edited" time (if any).
+
+     @see fsl_julian_to_iso8601()
+  */
+  double mtime;
   /**
      The user name this change was attributed to, noting that merges
      are attributed to the one who did the merge.
