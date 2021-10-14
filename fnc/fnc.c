@@ -6974,15 +6974,17 @@ blame_cb(void *state, fsl_annotate_opt const * const opt,
 			rc = RC(FSL_RC_ERROR, "%s", fsl_strdup);
 			goto end;
 		}
+		line->annotated = true;
 	} else
 		line->id = NULL;
 
 	/* -r can return lines with no version, so use root check-in. */
-	if (opt->originRid && !line->id)
+	if (opt->originRid && !line->id) {
 		fsl_sym_to_uuid(fcli_cx(), "root:trunk", FSL_SATYPE_CHECKIN,
 		    &line->id, NULL);
+		line->annotated = true;
+	}
 
-	line->annotated = true;
 	++cx->nlines;
 end:
 	rc = pthread_mutex_unlock(&fnc_mutex);
