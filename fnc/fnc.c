@@ -7606,7 +7606,7 @@ strtonumcheck(int *ret, const char *nstr, const int min, const int max)
 	ptr = NULL;
 	errno = 0;
 
-	n = strtonum(nstr, INT_MIN, INT_MAX, &ptr);
+	n = strtonum(nstr, min, max, &ptr);
 	if (errno == ERANGE)
 		return RC(FSL_RC_RANGE, "<n> out of range: -n|--limit=%s [%s]",
 		    nstr, ptr);
