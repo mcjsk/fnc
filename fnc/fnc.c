@@ -894,27 +894,31 @@ main(int argc, const char **argv)
 
 	if (argc == 1)
 		cmd = &fnc_init.cmd_args[FNC_VIEW_TIMELINE];
-	else if (fcli_dispatch_commands(fnc_init.cmd_args, false)) {
-		if (argc == 2) {
-			/*
-			 * Check if user entered fnc path/in/repo; if valid path
-			 * is found, assume fnc timeline path/in/repo was meant.
-			 */
-			rc = map_repo_path(&path);
-			if (rc == FSL_RC_NOT_FOUND || !path) {
-				rc = RC(rc, "'%s' is not a valid command or "
-				    "path", argv[1]);
-				fnc_init.err = rc;
-				usage();
-				/* NOT REACHED */
-			} else if (rc)
-				goto end;
-			cmd = &fnc_init.cmd_args[FNC_VIEW_TIMELINE];
-			fnc_init.path = path;
-			fcli_err_reset(); /* cmd_timeline::fcli_process_flags */
-		} else
+	else if ((rc = fcli_dispatch_commands(fnc_init.cmd_args, false)
+	    == FSL_RC_NOT_FOUND) && argc == 2) {
+		/*
+		 * Check if user entered fnc path/in/repo; if valid path
+		 * is found, assume fnc timeline path/in/repo was meant.
+		 */
+		rc = map_repo_path(&path);
+		if (rc == FSL_RC_NOT_FOUND || !path) {
+			rc = RC(rc, "'%s' is not a valid command or path",
+			    argv[1]);
+			fnc_init.err = rc;
 			usage();
 			/* NOT REACHED */
+		} else if (rc)
+			goto end;
+		cmd = &fnc_init.cmd_args[FNC_VIEW_TIMELINE];
+		fnc_init.path = path;
+		fcli_err_reset(); /* cmd_timeline::fcli_process_flags */
+	} else if (rc)
+		goto end;
+
+	if ((rc = fcli_has_unused_args(false))) {
+		fnc_init.err = rc;
+		usage();
+		/* NOT REACHED */
 	}
 
 	f = fcli_cx();
