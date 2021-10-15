@@ -588,6 +588,7 @@ struct fnc_blame_cb_cx {
 	struct fnc_view		*view;
 	struct fnc_blame_line	*lines;
 	fsl_uuid_str		 commit_id;
+	fsl_uuid_str		 root_commit;
 	int			 nlines;
 	bool			*quit;
 };
@@ -6696,7 +6697,8 @@ run_blame(struct fnc_view *view)
 	fsl_annotate_opt		*opt = NULL;
 	const fsl_card_F		*cf;
 	char				*filepath = NULL;
-	int				 rc = 0;;
+	char				*master = NULL, *root = NULL;
+	int				 rc = 0;
 
 	/*
 	 * Trim prefixed '/' if path has been processed by map_repo_path(),
@@ -6760,6 +6762,22 @@ run_blame(struct fnc_view *view)
 		goto end;
 	}
 
+	master = fsl_config_get_text(f, FSL_CONFDB_REPO, "main-branch", NULL);
+	if (master == NULL) {
+		master = fsl_strdup("trunk");
+		if (master == NULL) {
+			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+			goto end;
+		}
+	}
+	root = fsl_mprintf("root:%s", master);
+	rc = fsl_sym_to_uuid(f, root, FSL_SATYPE_CHECKIN,
+	    &blame->cb_cx.root_commit, NULL);
+	if (rc) {
+		rc = RC(rc, "%s", "fsl_sym_to_uuid");
+		goto end;
+	}
+
 	blame->cb_cx.view = view;
 	blame->cb_cx.lines = blame->lines;
 	blame->cb_cx.nlines = blame->nlines;
@@ -6784,6 +6802,8 @@ run_blame(struct fnc_view *view)
 	}
 
 end:
+	fsl_free(master);
+	fsl_free(root);
 	fsl_deck_finalize(&d);
 	fsl_buffer_clear(&buf);
 	if (rc)
@@ -6980,8 +7000,7 @@ blame_cb(void *state, fsl_annotate_opt const * const opt,
 
 	/* -r can return lines with no version, so use root check-in. */
 	if (opt->originRid && !line->id) {
-		fsl_sym_to_uuid(fcli_cx(), "root:trunk", FSL_SATYPE_CHECKIN,
-		    &line->id, NULL);
+		line->id = fsl_strdup(cx->root_commit);
 		line->annotated = true;
 	}
 
@@ -7555,6 +7574,8 @@ stop_blame(struct fnc_blame *blame)
 		blame->lines = NULL;
 	}
 
+	fsl_free(blame->cb_cx.root_commit);
+	blame->cb_cx.root_commit = NULL;
 	fsl_free(blame->cb_cx.commit_id);
 	blame->cb_cx.commit_id = NULL;
 	fsl_free(blame->line_offsets);
