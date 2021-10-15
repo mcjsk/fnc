@@ -6940,7 +6940,7 @@ blame_thread(void *state)
 
 	rc0 = pthread_mutex_unlock(&fnc_mutex);
 	if (rc0 && !rc)
-		rc = RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
+		rc = RC(fsl_errno_to_rc(rc0, FSL_RC_ACCESS),
 		    "%s", "pthread_mutex_unlock");
 
 	return (void *)(intptr_t)rc;
