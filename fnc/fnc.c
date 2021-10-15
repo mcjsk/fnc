@@ -569,7 +569,6 @@ struct fnc_tree_view_state {			  /* Parent trees of the- */
 	struct fnc_tree_entry		*selected_entry;
 	struct fnc_tree_entry		*matched_entry;
 	fsl_list			 colours;
-	char				*master_branch;
 	char				*tree_label;  /* Headline string. */
 	fsl_uuid_str			 commit_id;
 	fsl_id_t			 rid;
@@ -766,6 +765,8 @@ static int		 path_skip_common_ancestor(char **, const char *,
 			    size_t, const char *, size_t);
 static bool		 fnc_path_is_root_dir(const char *);
 /* static bool		 fnc_path_is_cwd(const char *); */
+static int		 browse_commit_tree(struct fnc_view **, int,
+			    struct commit_entry *, const char *);
 static int		 open_tree_view(struct fnc_view *, const char *,
 			    fsl_id_t);
 static int		 walk_tree_path(struct fnc_tree_view_state *,
@@ -2728,7 +2729,7 @@ static int
 tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 {
 	struct fnc_tl_view_state	*s = &view->state.timeline;
-	struct fnc_view			*diff_view = NULL;
+	struct fnc_view			*diff_view = NULL, *tree_view = NULL;
 	int				 rc = 0, start_col = 0;
 
 	switch (ch) {
@@ -2835,6 +2836,26 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			view->focus_child = true;
 		} else
 			*new_view = diff_view;
+		break;
+	case 't':
+		if (s->selected_commit == NULL)
+			break;
+		if (view_is_parent(view))
+			start_col = view_split_start_col(view->start_col);
+		rc = browse_commit_tree(&tree_view, start_col,
+		    s->selected_commit, s->path);
+		if (rc)
+			break;
+		view->active = false;
+		tree_view->active = true;
+		if (view_is_parent(view)) {
+			rc = view_close_child(view);
+			if (rc)
+				return rc;
+			view_set_child(view, tree_view);
+			view->focus_child = true;
+		} else
+			*new_view = tree_view;
 		break;
 	case 'q':
 		s->quit = 1;
@@ -5169,6 +5190,26 @@ end:
 }
 
 static int
+browse_commit_tree(struct fnc_view **new_view, int start_col,
+    struct commit_entry *entry, const char *path)
+{
+	struct fnc_view	*tree_view;
+	int		 rc = 0;
+
+	tree_view = view_open(0, 0, 0, start_col, FNC_VIEW_TREE);
+	if (tree_view == NULL)
+		return RC(FSL_RC_ERROR, "%s", "view_open");
+
+	rc = open_tree_view(tree_view, path, entry->commit->rid);
+	if (rc)
+		return rc;
+
+	*new_view = tree_view;
+
+	return rc;
+}
+
+static int
 cmd_tree(fcli_command const *argv)
 {
 	fsl_cx		*f = fcli_cx();
@@ -5266,11 +5307,16 @@ open_tree_view(struct fnc_view *view, const char *path, fsl_id_t rid)
 		goto end;
 	s->tree = s->root;
 	/*
-	 * If user has supplied a path arg (i.e., fnc tree path/in/repo),
+	 * If user has supplied a path arg (i.e., fnc tree path/in/repo), or
+	 * has selected a commit from an 'fnc timeline path/in/repo' command,
 	 * walk the path and open corresponding (sub)tree objects now.
 	 */
-	if (!fnc_path_is_root_dir(path))
+	if (!fnc_path_is_root_dir(path)) {
 		rc = walk_tree_path(s, s->repo, &s->root, path);
+		if (rc)
+			goto end;
+	}
+
 
 	if ((s->tree_label = fsl_mprintf("checkin %s", s->commit_id)) == NULL) {
 		rc = RC(FSL_RC_RANGE, "%s", "fsl_mprintf");
@@ -6368,8 +6414,6 @@ close_tree_view(struct fnc_view *view)
 	s->tree_label = NULL;
 	fsl_free(s->commit_id);
 	s->commit_id = NULL;
-	fsl_free(s->master_branch);
-	s->master_branch = NULL;
 
 	while (!TAILQ_EMPTY(&s->parents)) {
 		struct fnc_parent_tree *parent;
