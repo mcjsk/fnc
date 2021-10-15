@@ -192,7 +192,7 @@ static struct fnc_setup {
 	fcli_cliflag	  cliflags_timeline[10];	/* Timeline options. */
 	fcli_cliflag	  cliflags_diff[7];		/* Diff options. */
 	fcli_cliflag	  cliflags_tree[4];		/* Tree options. */
-	fcli_cliflag	  cliflags_blame[5];		/* Blame options. */
+	fcli_cliflag	  cliflags_blame[6];		/* Blame options. */
 } fnc_init = {
 	NULL,		/* cmdarg copy of argv[1] to aid usage/error report. */
 	NULL,		/* sym(bolic name) of commit to open defaults to tip. */
@@ -327,6 +327,10 @@ static struct fnc_setup {
 	}, /* End cliflags_tree. */
 
 	{ /* cliflags_blame blame command related options. */
+	    FCLI_FLAG_BOOL("C", "no-colour", &fnc_init.nocolour,
+            "Disable coloured output, which is enabled by default on supported"
+            "\n    terminals. Colour can also be toggled with the 'c' key "
+            "binding when\n    this option is not used."),
 	    FCLI_FLAG("c", "commit", "<commit>", &fnc_init.sym,
             "Start blame of specified file from <commit>. Common symbols are:\n"
             "\tSHA{1,3} hash\n"
@@ -638,6 +642,7 @@ struct fnc_blame_view_state {
 	bool				 done;
 	bool				 blame_complete;
 	bool				 eof;
+	bool				 colour;
 };
 
 TAILQ_HEAD(view_tailhead, fnc_view);
@@ -4714,7 +4719,7 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case 'v':
 	case 'w':
 		if (ch == 'c')
-			s->colour = s->colour == false;
+			s->colour = !s->colour;
 		if (ch == 'i')
 			s->diff_flags ^= FSL_DIFF_INVERT;
 		if (ch == 'v')
@@ -6002,8 +6007,7 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 
 	switch (ch) {
 	case 'c':
-		if (ch == 'c')
-			s->colour = s->colour == false;
+		s->colour = !s->colour;
 		break;
 	case 'i':
 		s->show_id = !s->show_id;
@@ -6718,8 +6722,9 @@ open_blame_view(struct fnc_view *view, char *path, fsl_uuid_str commit_id,
 	s->blame.origin = tip;
 	s->blame.ndepth = ndepth;
 	s->spin_idx = 0;
+	s->colour = !fnc_init.nocolour && has_colors();
 
-	if (has_colors() && !fnc_init.nocolour) {
+	if (s->colour) {
 		rc = set_colours(&s->colours, FNC_VIEW_BLAME);
 		if (rc)
 			return rc;
@@ -7068,7 +7073,7 @@ draw_blame(struct fnc_view *view)
 	struct fnc_blame		*blame = &s->blame;
 	struct fnc_blame_line		*blame_line;
 	regmatch_t			*regmatch = &view->regmatch;
-	struct fnc_colour		*c;
+	struct fnc_colour		*c = NULL;
 	wchar_t				*wcstr;
 	char				*line = NULL;
 	fsl_uuid_str			 prev_id = NULL, id_str = NULL;
@@ -7099,7 +7104,8 @@ draw_blame(struct fnc_view *view)
 		return rc;
 	if (screen_is_shared(view))
 		wstandout(view->window);
-	c = get_colour(&s->colours, FNC_COMMIT);
+	if (s->colour)
+		c = get_colour(&s->colours, FNC_COMMIT);
 	if (c)
 		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 	waddwstr(view->window, wcstr);
@@ -7169,7 +7175,8 @@ draw_blame(struct fnc_view *view)
 					return RC(FSL_RC_ERROR, "%s",
 					    "fsl_strdup");
 				}
-				c = get_colour(&s->colours, FNC_COMMIT);
+				if (s->colour)
+					c = get_colour(&s->colours, FNC_COMMIT);
 				if (c)
 					wattr_on(view->window,
 					    COLOR_PAIR(c->scheme), NULL);
@@ -7247,6 +7254,9 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		s->done = true;
 		if (s->selected_commit)
 			fnc_commit_artifact_close(s->selected_commit);
+		break;
+	case 'c':
+		s->colour = !s->colour;
 		break;
 	case 'g':
 		if (!fnc_home(view))
