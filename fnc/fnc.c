@@ -1041,6 +1041,30 @@ map_repo_path(char **requested_path)
 		goto end;
 	}
 
+	path = realpath(canonpath, NULL);
+	if (path == NULL && (errno == ENOENT || errno == ENOTDIR)) {
+		/* Path is not on disk, assume it is relative to repo root. */
+		rc = fsl_file_canonical_name2(ckoutdir0, canonpath, &buf, NULL);
+		if (rc) {
+			rc = RC(rc, "%s", "fsl_file_canonical_name2");
+			goto end;
+		}
+		fsl_free(path);
+		path = realpath(fsl_buffer_cstr(&buf), NULL);
+		if (path) {
+			/* Confirmed path is relative to repository root. */
+			fsl_free(path);
+			path = fsl_strdup(canonpath);
+			if (path == NULL)
+				rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+		} else {
+			rc = RC(fsl_errno_to_rc(errno, FSL_RC_NOT_FOUND),
+			    "'%s' not found in tree", canonpath);
+			*requested_path = fsl_strdup(canonpath);
+		}
+		goto end;
+	}
+	fsl_free(path);
 	/*
 	 * Use the cwd as the virtual root to canonicalise the supplied path if
 	 * it is either: (a) relative; or (b) the root of the current checkout.
@@ -6630,23 +6654,7 @@ cmd_blame(fcli_command const *argv)
 		    INT_MIN, INT_MAX)))
 			goto end;
 
-	/*
-	 * If a commit has been specified, don't attempt to map supplied path
-	 * to an in repository path on disk as the specified commit may have a
-	 * completely different tree to the current checkout; instead, pass
-	 * verbatim to open_blame_view() to search against a deck of F cards.
-	 * XXX The drawback of passing unprocessed paths is we will only find
-	 * well-formed paths relative to the repository root; that is, relative
-	 * paths from within repository subdirectories won't be found. We should
-	 * first map_repo_path() and if not found, then search against F cards.
-	 * Also, consider if we should resolve symlinks.
-	 */
 	if (fnc_init.sym || fnc_init.reverse) {
-		path = fsl_strdup(fcli_next_arg(true));
-		if (path == NULL) {
-			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
-			goto end;
-		}
 		if (fnc_init.reverse) {
 			if (!fnc_init.sym) {
 				rc = RC(FSL_RC_MISSING_INFO,
@@ -6661,12 +6669,18 @@ cmd_blame(fcli_command const *argv)
 		rc = fsl_sym_to_rid(f, fnc_init.sym, FSL_SATYPE_CHECKIN, &rid);
 		if (rc)
 			goto end;
-	} else if (!fnc_init.sym) {
+	} else if (!fnc_init.sym)
 		fsl_ckout_version_info(f, &rid, NULL);
-		rc = map_repo_path(&path);
-		if (rc)
+
+	rc = map_repo_path(&path);
+	if (rc) {
+		if (rc != FSL_RC_NOT_FOUND || !fnc_init.sym)
 			goto end;
+		/* Path may be valid in repository tree of specified commit. */
+		rc = 0;
+		fcli_err_reset();
 	}
+
 	commit_id = fsl_rid_to_uuid(f, rid);
 	if (rc || (path[0] == '/' && path[1] == '\0')) {
 		rc = rc ? rc : RC(FSL_RC_MISSING_INFO,
@@ -6760,7 +6774,7 @@ run_blame(struct fnc_view *view)
 	 * in map_repo_path() as we only want the slash for displaying an
 	 * absolute-repository-relative path, so we should prefix it only then.
 	 */
-	filepath = fnc_init.sym ? s->path : s->path + 1;
+	filepath = s->path[0] != '/' ? s->path : s->path + 1;
 
 	rc = fsl_deck_load_sym(f, &d, s->blamed_commit->id, FSL_SATYPE_CHECKIN);
 	if (rc)
@@ -6769,7 +6783,7 @@ run_blame(struct fnc_view *view)
 	cf = fsl_deck_F_search(&d, filepath);
 	if (cf == NULL) {
 		rc = RC(FSL_RC_NOT_FOUND, "'%s' not found in tree [%s]",
-		    s->path, s->blamed_commit->id);
+		    filepath, s->blamed_commit->id);
 		goto end;
 	}
 	rc = fsl_card_F_content(f, cf, &buf);
