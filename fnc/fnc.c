@@ -7373,6 +7373,7 @@ cleanup:
 			break;
 		break;
 	}
+	case KEY_BACKSPACE:
 	case 'B': {
 		struct fnc_commit_qid *first;
 		first = CONCAT(STAILQ, _FIRST)(&s->blamed_commits);

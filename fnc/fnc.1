@@ -48,8 +48,9 @@
 .Op Ar path
 .Nm
 .Cm blame
-.Op Fl c Ar commit
-.Ar file
+.Op Fl c Ar commit Op Fl r
+.Op Fl n Ar number
+.Ar path
 .Sh DESCRIPTION
 .Nm
 is an interactive read-only browser for
@@ -123,12 +124,11 @@ Display commit history of a repository.  If
 is specified, only commits that modified the file(s) at this path will populate
 the timeline.  The
 .Ar path
-may be absolute or relative to the repository root.  This command must be
-executed from within or below the top level directory of the repository; that
-is,
+may be absolute, relative to the current working directory, or relative to the
+repository root.  This command must be executed from within or below the top
+level directory of the repository; that is,
 .Nm
-assumes a local
-checkout is open in or above the current working directory.
+assumes a local checkout is open in or above the current working directory.
 .Pp
 If no command is explicitly specified, this command will be executed by
 default.
@@ -223,6 +223,9 @@ in the repository).
 Open a
 .Cm diff
 view displaying the changeset of the currently selected commit.
+.It Cm t
+Display the tree of the repository corresponding to the currently selected
+commit.
 .It Cm /
 Prompt to enter a search term to begin searching for commits matching
 the pattern provided.  The search term is an extended regular expression,
@@ -322,11 +325,18 @@ Find the next line that matches the current search term.
 .It Cm N
 Find the previous line that matches the current search term.
 .El
-.It Cm tree Oo Fl C | -no-colour Oc Oo Fl c | -commit Ar commit Oc Op Ar path
+.It Cm tree Oo Fl C | -no-colour Oc Oo Fl c | -commit Ar commit Oc \
+Oo Fl h | -help Oc Op Ar path
 Display hierarchical tree of a repository.  If a
 .Ar path
-is specified, display tree nodes of this path.  With no options passed, the
-tree will reflect the state of the latest commit on trunk.
+is specified, display tree nodes of this path.  The
+.Ar path
+may be absolute, relative to the current working directory, or relative to the
+repository root.  With no options passed, the tree will reflect the state of the
+latest commit on trunk.  This command must be executed from within or below the
+top level directory of the repository; that is,
+.Nm
+assumes a local checkout is open in or above the current working directory.
 .Pp
 Tree nodes are lexicographically ordered and may be postfixed with an identifier
 corresponding to the mode of the file object on disk as returned by
@@ -359,6 +369,8 @@ prefix of) a valid commit UUID SHA1 or SHA3 hash.  Note that this option also
 accepts
 .Lk https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki \
 "Fossil's Special Tags".
+.It Fl h , -help
+Display tree command help and usage information then exit.
 .El
 .Pp
 Key bindings for
@@ -366,7 +378,9 @@ Key bindings for
 are as follows:
 .Bl -tag -width Ds
 .It Cm Enter, Arrow-right, l
-Enter the currently selected directory.  (Currently a no-op on file nodes.)
+Enter the currently selected directory, or open a
+.Cm blame
+view of the currently selected file.
 .It Cm Backspace, Arrow-left, h
 Move up a level to the parent directory.  This is a no-op when in the root tree.
 .It Cm Arrow-down, j
@@ -404,28 +418,100 @@ Find the next tree node that matches the current search pattern.
 .It Cm N
 Find the previous tree node that matches the current search pattern.
 .El
-.It Cm blame Oo Fl c | -commit Ar commit Oc Ar file
-Show commit attribution history for each line of the specified
-.Ar file .
-.Pp
-Key bindings for
-.Cm fnc blame
-are as follows:
-.Bl -tag -width Ds
-.It Cm NYI
-Not yet implemented.
-.El
+.It Cm blame Oo Fl C | -no-colour Oc \
+Oo Fl c | -commit Ar commit Oo Fl r | -reverse Oc Oc Oo Fl h | -help Oc \
+Oo Fl n | -limit Ar n Oc Ar path
+Show commit attribution history for each line of the file at the specified
+.Ar path ,
+which may be absolute, relative to the current working directory, or relative to
+the repository root.  This command must be executed from within or below the top
+level directory of the repository; that is,
+.Nm
+assumes a local checkout is open in or above the current working directory.
 .Pp
 Options for
 .Cm fnc blame
 are as follows:
 .Bl -tag -width Ds
+.It Fl C , -no-colour
+Disable coloured output, which is enabled by default on supported terminals.
+If this option is not used, colour can be toggled with the
+.Sy c
+blame view key binding as documented below.
 .It Fl c , -commit Ar commit
-Open the timeline from the check-in identified by
+Start blame of file at the specified
+.Ar path
+from the check-in identified by
 .Ar commit .
 The expected argument is either the name of a branch, which will resolve
 to the latest commit on the given branch, or (a unique abbreviated
-prefix of) a valid commit UUID SHA1 or SHA3 hash.
+prefix of) a valid commit UUID SHA1 or SHA3 hash. When this option is
+not supplied,
+.Nm
+will blame the version of the file from the current checkout.  This option also
+accepts
+.Lk https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki \
+"Fossil's Special Tags".
+.It Fl h , -help
+Display blame command help and usage information then exit.
+.It Fl n , -limit Ar n
+Limit depth of blame history to
+.Ar n
+commits.
+By default,
+.Nm
+will traverse the entire historical record of the file, which can be expensive
+for large files that span many commits. Use this option for more targeted
+annotation.
+.It Fl r , -reverse
+Reverse annotate the file starting from a historical commit and move forward in
+time. That is, rather than show the most recent change to each line, show the
+first time each line was modified by a subsequent commit after the specified
+.Ar commit .
+(Requires \fB\-c\fP|\fB\-\-commit\fP.)
+.El
+.Pp
+Key bindings for
+.Cm fnc blame
+are as follows:
+.Bl -tag -width Ds
+.It Cm Arrow-down, j
+Move selection cursor down one line.
+.It Cm Arrow-up, k
+Move selection cursor up one line.
+.It Cm Page-down, Ctrl+f
+Move selection cursor down one page.
+.It Cm Page-up, Ctrl+b
+Move selection cursor up one page.
+.It Cm Home, gg
+Move selection cursor to the first line in the file.
+.It Cm End, G
+Move selection cursor to the last line in the file.
+.It Cm Enter
+Display the
+.Cm diff
+of the commit corresponding to the currently selected line.
+.It Cm b
+Blame the version of the file corresponding to the commit in the currently
+selected line.
+.It Cm p
+Blame the version of the file corresponding to the parent of the commit in
+the currently selected line.
+.It Cm B, Backspace
+Reload the previous blamed version of the file.
+.It Cm c
+Toggle coloured output.
+.Nm
+will default to displaying the blamed file in colour.
+.It Cm /
+Prompt to enter a search term to begin searching the file for tokens matching
+the entered pattern.  The search term is an extended regular expression, as
+documented in
+.Xr re_format 7 .
+.It Cm n
+Find the next token that matches the current search pattern.
+.It Cm N
+Find the previous token that matches the current search pattern.
 .El
 .El
 .Sh EXIT STATUS
