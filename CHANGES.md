@@ -1,3 +1,27 @@
+**fnc 0.3** 2021-10-17
+
+- add in-app help with H|?|F1 key binding
+- improvements to the build system
+- decompose build_commits() to make reusable commit_builder() method
+- dynamically size header so metadata is not truncated in timeline view
+- fix highlight of coloured search results in tmux with A_REVERSE attribute
+- correct install path of man pages with 'make install'
+- implement 'fnc tree' command to navigate repository tree
+- deduplicate code with utility functions fnc_home() and strtonumcheck()
+- implement 'fnc path' convenience form of 'fnc timeline path'
+- improve error reporting and cleaner code with rc wrapper
+- make -R repo option available to 'fnc timeline' 
+- make -R repo option compatible with 'fnc timeline path' invocation
+- implement 'fnc blame' command with the new libfossil annotate API
+- enable accessing the blame interface from the tree view
+- fix handling of artifacts with no comment string
+- substantial UX and performance improvements by making 'fnc blame' threaded
+- fix bug in 'fnc blame --limit|-n' calls when lines were not annotated
+- enable handling of master branches not named 'trunk' in 'fnc blame'
+- enable accessing the tree interface from the timeline with new 't' key binding
+- add '-C|--no-colour' and 'c' key binding to 'fnc blame'
+- enhance and standardise parsing of path arguments for all commands
+
 **fnc 0.2** 2021-09-04
 
 - fix iconv lib linking in macOS builds
