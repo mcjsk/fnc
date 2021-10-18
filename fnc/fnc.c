@@ -7423,8 +7423,6 @@ cleanup:
 		struct fnc_commit_artifact	*commit = NULL;
 		fsl_stmt			*q = NULL;
 		fsl_uuid_cstr			 id = NULL;
-		char				 sym[FSL_UUID_STRLEN_MIN];
-		fsl_id_t			 rid;
 
 		id = get_selected_commit_id(s->blame.lines, s->blame.nlines,
 		    s->first_line_onscreen, s->selected_line);
@@ -7432,9 +7430,6 @@ cleanup:
 			break;
 		if (s->selected_commit)
 			fnc_commit_artifact_close(s->selected_commit);
-		memcpy(sym, id, FSL_UUID_STRLEN_MIN);
-		sym[FSL_UUID_STRLEN_MIN - 1] = '\0';
-		rc = fsl_sym_to_rid(f, sym, FSL_SATYPE_CHECKIN, &rid);
 		if (rc)
 			break;
 		q =  fsl_stmt_malloc();
