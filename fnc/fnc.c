@@ -517,6 +517,7 @@ struct fnc_tl_thread_cx {
 	 * thread functions while pinging between, but before we join, threads?
 	 */
 	int			  rc;
+	bool			  tree_open;
 	bool			  endjmp;
 	bool			  timeline_end;
 	sig_atomic_t		 *quit;
@@ -1492,8 +1493,12 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 	view->search_init = tl_search_init;
 	view->search_next = tl_search_next;
 
-	if ((rc = fsl_db_prepare_cached(db, &s->thread_cx.q, "%b", &sql)))
+	s->thread_cx.q = fsl_stmt_malloc();
+	rc = fsl_db_prepare(db, s->thread_cx.q, "%b", &sql);
+	if (rc) {
+		rc = RC(rc, "%s", "fsl_db_prepare");
 		goto end;
+	}
 	fsl_stmt_step(s->thread_cx.q);
 
 	s->thread_cx.rc = 0;
@@ -1769,6 +1774,22 @@ build_commits(struct fnc_tl_thread_cx *cx)
 {
 	int		 rc = 0;
 
+	if (cx->tree_open) {
+		/*
+		 * XXX If a tree has been opened with the 't' key binding, the
+		 * commit builder statement needs to be reset otherwise one of
+		 * the SQLite3 APIs down the fsl_stmt_step() call stack fails,
+		 * irrespective of whether fsl_db_prepare_cached() is called.
+		 */
+		fsl_size_t loaded = cx->q->rowCount;
+		cx->tree_open = false;
+		rc = fsl_stmt_reset(cx->q);
+		if (rc)
+			return RC(rc, "%s", "fsl_stmt_reset");
+		while (loaded--)
+			if ((rc = fsl_stmt_step(cx->q)) != FSL_RC_STEP_ROW)
+				return RC(rc, "%s", "fsl_stmt_step");
+	}
 	/*
 	 * Step through the given SQL query, passing each row to the commit
 	 * builder to build commits for the timeline.
@@ -1843,7 +1864,7 @@ commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
 	int				 rc = 0;
 
 	if (rid) {
-		rc = fsl_db_prepare_cached(db, &q, "SELECT "
+		rc = fsl_db_prepare(db, q, "SELECT "
 		    /* 0 */"uuid, "
 		    /* 1 */"datetime(event.mtime%s), "
 		    /* 2 */"coalesce(euser, user), "
@@ -1857,7 +1878,7 @@ commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
 		    "FROM event JOIN blob WHERE blob.rid=%d AND event.objid=%d",
 		    fnc_init.utc ? "" : ", 'localtime'", rid, rid);
 		if (rc)
-			return RC(FSL_RC_DB, "%s", "fsl_db_prepare_cached");
+			return RC(FSL_RC_DB, "%s", "fsl_db_prepare");
 		fsl_stmt_step(q);
 	}
 
@@ -1938,7 +1959,6 @@ commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
 
 	*ptr = commit;
 end:
-	fsl_stmt_cached_yield(q);
 	return rc;
 }
 
@@ -2879,6 +2899,7 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		    s->selected_commit, s->path);
 		if (rc)
 			break;
+		s->thread_cx.tree_open = true;
 		view->active = false;
 		tree_view->active = true;
 		if (view_is_parent(view)) {
@@ -3237,6 +3258,7 @@ close_timeline_view(struct fnc_view *view)
 	int				 rc = 0;
 
 	rc = join_tl_thread(s);
+	fsl_stmt_finalize(s->thread_cx.q);
 	fnc_free_commits(&s->commits);
 	regfree(&view->regex);
 	fsl_free(s->path);
@@ -3556,11 +3578,11 @@ create_changeset(struct fnc_commit_artifact *commit)
 {
 	fsl_cx		*f = fcli_cx();
 	fsl_stmt	*st = NULL;
-	fsl_db		*db = fsl_cx_db_repo(f);
 	fsl_list	 changeset = fsl_list_empty;
 	int		 rc = 0;
 
-	rc = fsl_db_prepare_cached(db, &st,
+	st = fsl_stmt_malloc();
+	rc = fsl_cx_prepare(f, st,
 	    "SELECT name, mperm, "
 	    "(SELECT uuid FROM blob WHERE rid=mlink.pid), "
 	    "(SELECT uuid FROM blob WHERE rid=mlink.fid), "
@@ -3571,7 +3593,7 @@ create_changeset(struct fnc_commit_artifact *commit)
 	    "OR mlink.fnid NOT IN (SELECT pfnid FROM mlink WHERE mid=%d)) "
 	    "ORDER BY name", commit->rid, commit->rid);
 	if (rc)
-		return RC(FSL_RC_DB, "%s", "fsl_db_prepare_cached");
+		return RC(FSL_RC_DB, "%s", "fsl_cx_prepare");
 
 	while ((rc = fsl_stmt_step(st)) == FSL_RC_STEP_ROW) {
 		struct fsl_file_artifact *fdiff = NULL;
@@ -3607,7 +3629,7 @@ create_changeset(struct fnc_commit_artifact *commit)
 	}
 
 	commit->changeset = changeset;
-	fsl_stmt_cached_yield(st);
+	fsl_stmt_finalize(st);
 
 	if (rc == FSL_RC_STEP_DONE)
 		rc = 0;
@@ -3900,7 +3922,6 @@ diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
     int sbs)
 {
 	fsl_cx		*f = fcli_cx();
-	fsl_db		*db = fsl_cx_db_ckout(f);
 	fsl_stmt	*st = NULL;
 	fsl_buffer	 sql, abspath, bminus;
 	fsl_uuid_str	 xminus = NULL;
@@ -3951,8 +3972,12 @@ diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
 		    " AND (deleted OR chnged OR rid == 0)"
 		    " ORDER BY pathname", cid);
 	}
-	if ((rc = fsl_db_prepare_cached(db, &st, "%b", &sql)))
+	st = fsl_stmt_malloc();
+	rc = fsl_cx_prepare(f, st, "%b", &sql);
+	if (rc) {
+		rc = RC(rc, "%s", "fsl_cx_prepare");
 		goto yield;
+	}
 
 	while ((rc = fsl_stmt_step(st)) == FSL_RC_STEP_ROW) {
 		const char	*path;
@@ -4060,7 +4085,7 @@ diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
 	}
 
 yield:
-	fsl_stmt_cached_yield(st);
+	fsl_stmt_finalize(st);
 	fsl_free(xminus);
 unload:
 	fsl_vfile_unload_except(f, cid);
@@ -7396,6 +7421,7 @@ cleanup:
 	case '\r': {
 		fsl_cx				*f = fcli_cx();
 		struct fnc_commit_artifact	*commit = NULL;
+		fsl_stmt			*q = NULL;
 		fsl_uuid_cstr			 id = NULL;
 		char				 sym[FSL_UUID_STRLEN_MIN];
 		fsl_id_t			 rid;
@@ -7411,7 +7437,9 @@ cleanup:
 		rc = fsl_sym_to_rid(f, sym, FSL_SATYPE_CHECKIN, &rid);
 		if (rc)
 			break;
-		rc = commit_builder(&commit, rid, NULL);
+		q =  fsl_stmt_malloc();
+		rc = commit_builder(&commit, fsl_uuid_to_rid(f, id), q);
+		fsl_stmt_finalize(q);
 		if (rc) {
 			fnc_commit_artifact_close(commit);
 			break;
