@@ -362,11 +362,21 @@ proc wh-check-compile-commands {{configOpt {}}} {
 # $filename.in but explicitly makes the output read-only, to avoid
 # inadvertent editing (who, me?).
 #
+# The second argument is an optional boolean specifying whether to
+# `touch` the generates files. This can be used as a workaround for
+# cases where (A) autosetup does not update the file because it was
+# not really modified and (B) the file *really* needs to be updates to
+# the please build process. Pass any non-0 value to enable touching.
+#
 # The argument may be a list of filenames.
-proc wh-make-from-dot-in {filename} {
-    foreach f $filename {
-        catch { exec chmod u+w $f }
-        make-template $f.in $f
-        catch { exec chmod u-w $f }
+proc wh-make-from-dot-in {filename {touch 0}} {
+  foreach f $filename {
+    catch { exec chmod u+w $f }
+    make-template $f.in $f
+    if {0 != $touch} {
+      puts "Touching $f"
+      catch { exec touch $f }
     }
+    catch { exec chmod u-w $f }
+  }
 }
