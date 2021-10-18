@@ -866,8 +866,6 @@ int
 main(int argc, const char **argv)
 {
 	fcli_command	*cmd = NULL;
-	fsl_cx		*f = NULL;
-	fsl_error	 e = fsl_error_empty;	/* DEBUG */
 	char		*path = NULL;
 	int		 rc = 0;
 
@@ -900,26 +898,29 @@ main(int argc, const char **argv)
 
 	if (argc == 1)
 		cmd = &fnc_init.cmd_args[FNC_VIEW_TIMELINE];
-	else if ((rc = fcli_dispatch_commands(fnc_init.cmd_args, false)
-	    == FSL_RC_NOT_FOUND) && argc == 2) {
-		/*
-		 * Check if user entered fnc path/in/repo; if valid path
-		 * is found, assume fnc timeline path/in/repo was meant.
-		 */
-		rc = map_repo_path(&path);
-		if (rc == FSL_RC_NOT_FOUND || !path) {
-			rc = RC(rc, "'%s' is not a valid command or path",
-			    argv[1]);
-			fnc_init.err = rc;
-			usage();
-			/* NOT REACHED */
+	else {
+		rc = fcli_dispatch_commands(fnc_init.cmd_args, false);
+		if (rc == FSL_RC_NOT_FOUND && argc == 2) {
+			/*
+			 * Check if user entered fnc path/in/repo; if valid path
+			 * is found, assume fnc timeline path/in/repo was meant.
+			 */
+			rc = map_repo_path(&path);
+			if (rc == FSL_RC_NOT_FOUND || !path) {
+				rc = RC(rc,
+				    "'%s' is not a valid command or path",
+				    argv[1]);
+				fnc_init.err = rc;
+				usage();
+				/* NOT REACHED */
+			} else if (rc)
+				goto end;
+			cmd = &fnc_init.cmd_args[FNC_VIEW_TIMELINE];
+			fnc_init.path = path;
+			fcli_err_reset(); /* cmd_timeline::fcli_process_flags */
 		} else if (rc)
 			goto end;
-		cmd = &fnc_init.cmd_args[FNC_VIEW_TIMELINE];
-		fnc_init.path = path;
-		fcli_err_reset(); /* cmd_timeline::fcli_process_flags */
-	} else if (rc)
-		goto end;
+	}
 
 	if ((rc = fcli_has_unused_args(false))) {
 		fnc_init.err = rc;
@@ -927,8 +928,7 @@ main(int argc, const char **argv)
 		/* NOT REACHED */
 	}
 
-	f = fcli_cx();
-	if (!fsl_cx_db_repo(f)) {
+	if (!fsl_cx_db_repo(fcli_cx())) {
 		rc = RC(FSL_RC_MISUSE, "%s", "repository database required");
 		goto end;
 	}
@@ -938,17 +938,22 @@ main(int argc, const char **argv)
 end:
 	fsl_free(path);
 	endwin();
-	putchar('\n');
 	if (rc) {
 		if (rc == FCLI_RC_HELP)
 			rc = 0;
-		else {
-			fsl_error_set(&e, rc, NULL);
+		else if (rc == FSL_RC_BREAK) {
+			fsl_cx *f = fcli_cx();
+			const char *errstr;
+			fsl_error_get(&f->error, &errstr, NULL);
+			fsl_fprintf(stdout, "%s", errstr);
+			fcli_err_reset();  /* For fcli_end_of_main() */
+			rc = 0;
+		}
+		else
 			fsl_fprintf(stderr, "%s: %s %d\n", fcli_progname(),
 			    fsl_rc_cstr(rc), rc);
-			fsl_fprintf(stderr, "-> %s\n", e.msg.mem);
-		}
 	}
+	putchar('\n');
 	return fcli_end_of_main(rc);
 }
 
@@ -1499,7 +1504,20 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 		rc = RC(rc, "%s", "fsl_db_prepare");
 		goto end;
 	}
-	fsl_stmt_step(s->thread_cx.q);
+	rc = fsl_stmt_step(s->thread_cx.q);
+	if (rc) {
+		switch (rc) {
+		case FSL_RC_STEP_ROW:
+			rc = 0;
+			break;
+		case FSL_RC_STEP_ERROR:
+			rc = RC(rc, "%s", "fsl_stmt_step");
+			goto end;
+		case FSL_RC_STEP_DONE:
+			rc = RC(FSL_RC_BREAK, "%s", "no matching records");
+			goto end;
+		}
+	}
 
 	s->thread_cx.rc = 0;
 	s->thread_cx.db = db;
