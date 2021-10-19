@@ -5536,8 +5536,9 @@ create_repository_tree(struct fnc_repository_tree **repo, fsl_uuid_str *id,
 	if (rc)
 		return RC(rc, "fsl_deck_load_rid(%d) [%s]", rid, id);
 	rc = fsl_deck_F_rewind(&d);
-	if (!rc)
-		rc = fsl_deck_F_next(&d, &cf);
+	if (rc)
+		goto end;;
+	rc = fsl_deck_F_next(&d, &cf);
 	if (rc)
 		goto end;;
 
@@ -5556,7 +5557,8 @@ create_repository_tree(struct fnc_repository_tree **repo, fsl_uuid_str *id,
 			goto end;
 		}
 		rc = fsl_mtime_of_F_card(f, rid, cf, &mtime);
-		rc = link_tree_node(ptr, filename, uuid, mtime);
+		if (!rc)
+			rc = link_tree_node(ptr, filename, uuid, mtime);
 		fsl_free(filename);
 		fsl_free(uuid);
 		if (!rc)
@@ -5749,11 +5751,16 @@ link_tree_node(struct fnc_repository_tree *tree, const char *path,
 		if (rc)
 			goto end;
 		if (lstat(fsl_buffer_cstr(&buf), &s) == -1) {
-			rc = RC(fsl_errno_to_rc(errno, FSL_RC_ACCESS),
-			    "lstat(%s)", fsl_buffer_cstr(&buf));
-			goto end;
-		}
-		tn->mode = s.st_mode;
+			if (errno == ENOENT)
+				tn->mode = (!fsl_strcmp(tn->path, path) &&
+				    tn->uuid) ? S_IFREG : S_IFDIR;
+			else {
+				rc = RC(fsl_errno_to_rc(errno, FSL_RC_ACCESS),
+				    "lstat(%s)", fsl_buffer_cstr(&buf));
+				goto end;
+			}
+		} else
+			tn->mode = s.st_mode;
 		fsl_buffer_reuse(&buf);
 	}
 
