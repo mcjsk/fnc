@@ -2932,6 +2932,21 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case 't':
 		if (s->selected_commit == NULL)
 			break;
+		if (!fsl_rid_is_a_checkin(fcli_cx(),
+		    s->selected_commit->commit->rid)) {
+			wattr_on(view->window, A_BOLD, NULL);
+			mvwaddstr(view->window,
+			    view->start_ln + view->nlines - 1, 0,
+			    "-- tree requires check-in artifact --");
+			wclrtoeol(view->window);
+			wattr_off(view->window, A_BOLD, NULL);
+			fcli_err_reset();
+			rc = 0;
+			update_panels();
+			doupdate();
+			sleep(1);
+			break;
+		}
 		if (view_is_parent(view))
 			start_col = view_split_start_col(view->start_col);
 		rc = browse_commit_tree(&tree_view, start_col,
