@@ -707,8 +707,8 @@ static int		 write_commit_line(struct fnc_view *,
 			    struct fnc_commit_artifact *, int);
 static int		 view_input(struct fnc_view **, int *,
 			    struct fnc_view *, struct view_tailhead *);
-static void		 help(struct fnc_view *);
-static void		 padpopup(struct fnc_view *, const char **,
+static int		 help(struct fnc_view *);
+static int		 padpopup(struct fnc_view *, int, int, FILE *,
 			    const char *);
 static void		 centerprint(WINDOW *, int, int, int, const char *,
 			    chtype);
@@ -2515,147 +2515,178 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 	return rc;
 }
 
-static void
+static int
 help(struct fnc_view *view)
 {
-	static const char	*progname = NULL;
-	static const char	*help[] = {
+	FILE			*help = NULL;
+	char			*title = NULL;
+	static const char	*keys[][2] = {
+	    {""},
+	    {""}, /* Global */
+	    {"  H,?,F1           ", "  ❬H❭❬?❭❬F1❭          "},
+	    {"  f                ", "  ❬f❭                 "},
+	    {"  Tab              ", "  ❬TAB❭               "},
+	    {"  Q                ", "  ❬Q❭                 "},
+	    {"  q                ", "  ❬q❭                 "},
+	    {"  /                ", "  ❬/❭                 "},
+	    {"  n                ", "  ❬n❭                 "},
+	    {"  N                ", "  ❬N❭                 "},
+	    {""},
+	    {""}, /* Timeline */
+	    {"  k,<Up>,<,,       ", "  ❬↑❭❬k❭❬<❭❬>         "},
+	    {"  j,<Down>,>,.     ", "  ❬↓❭❬j❭❬>❭❬.❭        "},
+	    {"  C-b,PgUp         ", "  ❬C-b❭❬PgUp❭         "},
+	    {"  C-f,PgDn         ", "  ❬C-f❭❬PgDn❭         "},
+	    {"  gg,Home          ", "  ❬gg❭❬Home❭          "},
+	    {"  G,End            ", "  ❬G❭❬End❭            "},
+	    {"  Enter,Space      ", "  ❬Enter❭❬Space❭      "},
+	    {"  t                ", "  ❬t❭                 "},
+	    {""},
+	    {""}, /* Diff */
+	    {"  k,<Up>           ", "  ❬↑❭❬k❭              "},
+	    {"  j,<Down>         ", "  ❬↓❭❬j❭              "},
+	    {"  C-b,PgUp         ", "  ❬C-b❭❬PgUp❭         "},
+	    {"  C-f,PgDn,Space   ", "  ❬C-f❭❬PgDn❭❬Space❭  "},
+	    {"  gg,Home          ", "  ❬gg❭❬Home❭          "},
+	    {"  G,End            ", "  ❬G❭❬End❭            "},
+	    {"  c                ", "  ❬c❭                 "},
+	    {"  i                ", "  ❬i❭                 "},
+	    {"  v                ", "  ❬v❭                 "},
+	    {"  w                ", "  ❬w❭                 "},
+	    {"  -,_              ", "  ❬-❭❬_❭              "},
+	    {"  +,=              ", "  ❬+❭❬=❭              "},
+	    {"  C-k,K,<,,        ", "  ❬C-k❭❬K❭❬<❭❬,❭      "},
+	    {"  C-j,J,>,.        ", "  ❬C-j❭❬J❭❬>❭❬.❭      "},
+	    {""},
+	    {""}, /* Tree */
+	    {"  k,<Up>           ", "  ❬↑❭❬k❭              "},
+	    {"  j,<Down>         ", "  ❬↓❭❬j❭              "},
+	    {"  C-b,PgUp         ", "  ❬C-b❭❬PgUp❭         "},
+	    {"  C-f,PgDn         ", "  ❬C-f❭❬PgDn❭         "},
+	    {"  gg,Home          ", "  ❬gg❭❬Home❭          "},
+	    {"  G,End            ", "  ❬G❭❬End❭            "},
+	    {"  l,Enter,<Right>  ", "  ❬→❭❬l❭❬Enter❭       "},
+	    {"  h,<BS>,<Left>    ", "  ❬←❭❬h❭❬⌫❭           "},
+	    {"  c                ", "  ❬c❭                 "},
+	    {"  i                ", "  ❬i❭                 "},
+	    {"  t                ", "  ❬t❭                 "},
+	    {""},
+	    {""}, /* Blame */
+	    {"  k,<Up>           ", "  ❬↑❭❬k❭              "},
+	    {"  j,<Down>         ", "  ❬↓❭❬j❭              "},
+	    {"  C-b,PgUp         ", "  ❬C-b❭❬PgUp❭         "},
+	    {"  C-f,PgDn,Space   ", "  ❬C-f❭❬PgDn❭❬Space❭  "},
+	    {"  gg,Home          ", "  ❬gg❭❬Home❭          "},
+	    {"  G,End            ", "  ❬G❭❬End❭            "},
+	    {"  Enter            ", "  ❬Enter❭             "},
+	    {"  c                ", "  ❬c❭                 "},
+	    {"  b                ", "  ❬b❭                 "},
+	    {"  p                ", "  ❬p❭                 "},
+	    {"  B                ", "  ❬B❭                 "},
+	    {""},
+	    {""},
+	    {0}
+	};
+	static const char *desc[] = {
 	    "",
 	    "Global",
-	    "  H,?,F1           Open in-app help",
-	    "  f                Toggle fullscreen",
-	    "  Tab              Switch focus between open views",
-	    "  Q                Quit the program",
-	    "  q                Quit the active view",
+	    "Open in-app help",
+            "Toggle fullscreen",
+	    "Switch focus between open views",
+	    "Quit the program",
+            "Quit the active view",
+	    "Open prompt to enter search term",
+	    "Find next line or token matching the current search term",
+	    "Find previous line or token matching the current search term",
 	    "",
 	    "Timeline",
-	    "  k,<Up>,<,,       Move selection cursor up one commit",
-	    "  j,<Down>,>,.     Move selection cursor down one commit",
-	    "  C-b,PgUp         Scroll up one page",
-	    "  C-f,PgDn         Scroll down one page",
-	    "  gg,Home          Jump to first line in the current view",
-	    "  G,End            Jump to last line in the current view",
-	    "  Enter,Space      Open a diff view of the selected commit",
-	    "  /                Open prompt to enter timeline search",
-	    "  n                Find next commit matching the current search "
-	    "term",
-	    "  N                Find previous commit matching the current "
-	    "search term",
+	    "Move selection cursor up one commit",
+	    "Move selection cursor down one commit",
+	    "Scroll up one page",
+	    "Scroll down one page",
+	    "Jump to first line in the current view",
+	    "Jump to last line in the current view",
+	    "Open diff view of the selected commit",
+	    "Display a tree reflecting the state of the selected commit",
 	    "",
 	    "Diff",
-	    "  k,<Up>           Scroll up one line of diff output",
-	    "  j,<Down>         Scroll down one line of diff output",
-	    "  C-b,PgUp         Scroll up one page of diff output",
-	    "  C-f,PgDn         Scroll down one page of diff output",
-	    "  gg,Home          Scroll to the top of the diff view",
-	    "  G,End            Scroll to the end of the diff view",
-	    "  c                Toggle coloured diff output",
-	    "  i                Toggle inversion of diff output",
-	    "  v                Toggle verbosity of diff output",
-	    "  w                Toggle ignore whitespace-only changes in diff",
-	    "  -,_              Decrease the number of context lines",
-	    "  +,=              Increase the number of context lines",
-	    "  C-k,K,<,,        Display diff of next commit in the timeline",
-	    "  C-j,J,>,.        Display diff of previous commit in the "
-	    "timeline",
-	    "  /                Open prompt to enter diff search",
-	    "  n                Find next line matching the current search "
-	    "term",
-	    "  N                Find previous line matching the current search"
-	    " term",
+	    "Scroll up one line of diff output",
+	    "Scroll down one line of diff output",
+	    "Scroll up one page of diff output",
+	    "Scroll down one page of diff output",
+	    "Scroll to the top of the diff view",
+	    "Scroll to the end of the diff view",
+	    "Toggle coloured diff output",
+	    "Toggle inversion of diff output",
+	    "Toggle verbosity of diff output",
+	    "Toggle ignore whitespace-only changes in diff",
+	    "Decrease the number of context lines",
+	    "Increase the number of context lines",
+	    "Display diff of next commit in the timeline",
+	    "Display diff of previous commit in the timeline",
 	    "",
 	    "Tree",
-	    "  k,<Up>           Move selection cursor up one entry",
-	    "  j,<Down>         Move selection cursor down one entry",
-	    "  C-b,PgUp         Scroll up one page",
-	    "  C-f,PgDn         Scroll down one page",
-	    "  gg,Home          Jump to first entry in the tree",
-	    "  G,End            Jump to last entry in the tree",
-	    "  l,Enter,<Right>  Move into the selected directory",
-	    "  h,<BS>,<Left>    Return to the parent directory",
-	    "  c                Toggle coloured tree output",
-	    "  i                Toggle display of file artifact SHA hashes",
-	    "  t                Display timeline of all commits modifying the "
-	    "selected entry",
-	    "  /                Open prompt to enter tree search",
-	    "  n                Find next tree entry matching the current "
-	    "search term",
-	    "  N                Find previous tree entry matching the current "
-	    "search term",
+	    "Move selection cursor up one entry",
+	    "Move selection cursor down one entry",
+	    "Scroll up one page",
+	    "Scroll down one page",
+	    "Jump to first entry in the tree",
+	    "Jump to last entry in the tree",
+	    "Move into the selected directory",
+	    "Return to the parent directory",
+	    "Toggle coloured tree output",
+	    "Toggle display of file artifact SHA hashes",
+	    "Display timeline of all commits modifying the selected entry",
 	    "",
-	    "  See fnc(1) for complete list of options and key bindings.",
-	    0};
-	 static const char	*help0[] =
-	 {
+	    "Blame",
+	    "Move selection cursor up one line",
+	    "Move selection cursor down one line",
+	    "Scroll up one page",
+	    "Scroll down one page",
+	    "Jump to the first line of the file",
+	    "Jump to the last line of the file",
+	    "Display the diff of the commit corresponding to the selected line",
+	    "Toggle coloured blame output",
+	    "Blame the version of the file found in the selected line's commit",
+	    "Blame the version of the file found in the selected line's parent "
+	    "commit",
+	    "Reload the previous blamed version of the file",
 	    "",
-	    "Global",
-	    "  ❬H❭❬?❭❬F1❭      Open in-app help",
-	    "  ❬f❭             Toggle fullscreen",
-	    "  ❬TAB❭           Switch focus between open views",
-	    "  ❬Q❭             Quit the program",
-	    "  ❬q❭             Quit the active view",
-	    "",
-	    "Timeline",
-	    "  ❬↑❭❬k❭❬<❭❬,❭    Move selection cursor up one commit",
-	    "  ❬↓❭❬j❭❬>❭❬.❭    Move selection cursor down one commit",
-	    "  ❬C-b❭❬PgUp❭     Scroll up one page",
-	    "  ❬C-f❭❬PgDn❭     Scroll down one page",
-	    "  ❬gg❭❬Home❭      Jump to first line in the current view",
-	    "  ❬G❭❬End❭        Jump to last line in the current view",
-	    "  ❬Enter❭❬Space❭  Open diff view of the selected commit",
-	    "  ❬/❭             Open prompt to enter timeline search",
-	    "  ❬n❭             Find next commit matching the current search "
-	    "term",
-	    "  ❬N❭             Find previous commit matching the current search"
-	    " term",
-	    "",
-	    "Diff",
-	    "  ❬↑❭❬k❭          Scroll up one line of diff output",
-	    "  ❬↓❭❬j❭          Scroll down one line of diff output",
-	    "  ❬C-b❭❬PgUp❭     Scroll up one page of diff output",
-	    "  ❬C-f❭❬PgDn❭     Scroll down one page of diff output",
-	    "  ❬gg❭❬Home❭      Scroll to the top of the diff view",
-	    "  ❬G❭❬End❭        Scroll to the end of the diff view",
-	    "  ❬c❭             Toggle coloured diff output",
-	    "  ❬i❭             Toggle inversion of diff output",
-	    "  ❬v❭             Toggle verbosity of diff output",
-	    "  ❬w❭             Toggle ignore whitespace-only changes in diff",
-	    "  ❬-❭❬_❭          Decrease the number of context lines",
-	    "  ❬+❭❬=❭          Increase the number of context lines",
-	    "  ❬C-k❭❬K❭❬<❭❬,❭  Display diff of next commit in the timeline",
-	    "  ❬C-j❭❬J❭❬>❭❬.❭  Display diff of previous commit in the "
-	    "timeline",
-	    "  ❬/❭             Open prompt to enter diff search",
-	    "  ❬n❭             Find next line matching the current search term",
-	    "  ❬N❭             Find previous line matching the current search "
-	    "term",
-	    "",
-	    "Tree",
-	    "  ❬↑❭❬k❭          Move selection cursor up one entry",
-	    "  ❬↓❭❬j❭          Move selection cursor down one entry",
-	    "  ❬C-b❭❬PgUp❭     Scroll up one page",
-	    "  ❬C-f❭❬PgDn❭     Scroll down one page",
-	    "  ❬gg❭❬Home❭      Jump to first entry in the tree",
-	    "  ❬G❭❬End❭        Jump to last entry in the tree",
-	    "  ❬→❭❬l❭❬Enter❭   Move into the selected directory",
-	    "  ❬←❭❬h❭❬⌫❭       Return to the parent directory",
-	    "  ❬c❭             Toggle coloured tree output",
-	    "  ❬i❭             Toggle display of file artifact SHA hashes",
-	    "  ❬t❭             Display timeline of all commits modifying the "
-	    "selected entry",
-	    "  ❬/❭             Open prompt to enter tree search",
-	    "  ❬n❭             Find next tree entry matching the current search"
-	    " term",
-	    "  ❬N❭             Find previous tree entry matching the current "
-	    "search term",
-	    "",
-	    "  See fnc(1) for complete list of options and key bindings.",
-	    0
-	 };
-	const char		*codeset = nl_langinfo(CODESET);
+	    "  See fnc(1) for complete list of options and key bindings."
+	};
+	int	cs, ln, width = 0, rc = 0;
 
-	progname = fsl_mprintf("%s %s Help\n", fcli_progname(), PRINT_VERSION);
-	padpopup(view, !strcmp(codeset, "UTF-8") ? help0 : help, progname);
+	cs = (strcmp(nl_langinfo(CODESET), "UTF-8") == 0) ? 1 : 0;
+
+	title = fsl_mprintf("%s %s Help\n", fcli_progname(), PRINT_VERSION);
+	if (title == NULL)
+		return RC(FSL_RC_ERROR, "%s", "fsl_mprintf");
+
+	help = tmpfile();
+	if (help == NULL)
+		return RC(FSL_RC_IO, "%s", "tmpfile");
+
+	/*
+	 * Format help text, and compute longest line and total number of
+	 * lines in text to be displayed to determine pad dimensions.
+	 */
+	width = fsl_strlen(title);
+	for (ln = 0; keys[ln][0]; ++ln) {
+		if (keys[ln][1]) {
+			width = MAX((fsl_size_t)width,
+			    fsl_strlen(keys[ln][cs]) + fsl_strlen(desc[ln]));
+		}
+		fsl_fprintf(help, "%s%s%c", keys[ln][cs], desc[ln],
+		    keys[ln + 1] ? '\n' : 0);
+	}
+	rewind(help);
+
+	rc = padpopup(view, width, ln, help, title);
+	if (fclose(help) == EOF)
+		rc = RC(fsl_errno_to_rc(errno, FSL_RC_IO), "%s", "fclose");
+
+	fsl_free(title);
+	return rc;
 }
 
 /*
@@ -2663,38 +2694,28 @@ help(struct fnc_view *view)
  * title. The pad is contained within a window that is offset four columns in
  * and two lines down from the parent window.
  */
-static void
-padpopup(struct fnc_view *view, const char **txt, const char *title)
+static int
+padpopup(struct fnc_view *view, int width, int height, FILE *txt,
+    const char *title)
 {
-	WINDOW	*help, *content;
-	int	 ch, cury, end, idx, len, py, px, wy, wx, x0, y0;
+	WINDOW		*win, *content;
+	char		*line = NULL;
+	ssize_t		 linelen;
+	size_t		 linesz;
+	int		 ch, cury, end, wy, wx, x0, y0;
 
-	x0 = 4;		/* Number of columns to border help window. */
-	y0 = 2;		/* Number of lines to border help window. */
+	x0 = 4;		/* Number of columns to border window. */
+	y0 = 2;		/* Number of lines to border window. */
 	cury = 0;
-	wx = getmaxx(view->window) - ((x0 + 1) * 2); /* Width of help window. */
-	wy = getmaxy(view->window) - ((y0 + 1) * 2); /* Height of help window */
+	wx = getmaxx(view->window) - ((x0 + 1) * 2); /* Width of window. */
+	wy = getmaxy(view->window) - ((y0 + 1) * 2); /* Height of window */
 	ch = ERR;
 
-	/*
-	 * Compute longest line and total number of lines in text to be
-	 * displayed to determine pad dimensions.
-	 */
-	px = 0;  /* Width of help pad (i.e., longest line in txt). */
-	for (idx = 0; txt[idx] != 0; ++idx) {
-		len = fsl_strlen(txt[idx]);
-		if (px < len)
-			px = len;
-	}
-	py = idx;  /* Height of help pad (i.e., number of lines in txt). */
-	if (title)
-		px = MAX(fsl_strlen(title), (fsl_size_t)px);
-
-	if ((help = newwin(wy, wx, y0, x0)) == 0)
-		return;
-	if ((content = newpad(py + 1, px + 1)) == 0) {
-		delwin(help);
-		return;
+	if ((win = newwin(wy, wx, y0, x0)) == 0)
+		return RC(FSL_RC_ERROR, "%s", "newwin");
+	if ((content = newpad(height + 1, width + 1)) == 0) {
+		delwin(win);
+		return RC(FSL_RC_ERROR, "%s", "newpad");
 	}
 
 	doupdate();
@@ -2702,12 +2723,10 @@ padpopup(struct fnc_view *view, const char **txt, const char *title)
 
 	/* Write text content to pad. */
 	if (title)
-		centerprint(content, 0, 0, px, title, 0);
-	for (idx = 0; idx < py; ++idx) {
-		waddstr(content, txt[idx]);
-		if ((idx + 1) < py)
-			waddch(content, '\n');
-	}
+		centerprint(content, 0, 0, width, title, 0);
+	while ((linelen = getline(&line, &linesz, txt)) != -1)
+		waddstr(content, line);
+	fsl_free(line);
 
 	end = (getcury(content) - (wy - 3));  /* No. lines past end of pad. */
 	do {
@@ -2754,27 +2773,29 @@ padpopup(struct fnc_view *view, const char **txt, const char *title)
 			default:
 				break;
 		}
-		werase(help);
-		box(help, 0, 0);
-		wnoutrefresh(help);
+		werase(win);
+		box(win, 0, 0);
+		wnoutrefresh(win);
 		pnoutrefresh(content, cury, 0, y0 + 1, x0 + 1, wy, wx);
 		doupdate();
 	} while ((ch = wgetch(content)) != 'q' && ch != KEY_ESCAPE
 	    && ch != ERR);
 
-	/* Destroy help window. */
-	werase(help);
-	wrefresh(help);
-	delwin(help);
+	/* Destroy window. */
+	werase(win);
+	wrefresh(win);
+	delwin(win);
 	delwin(content);
 
 	/* Restore fnc window content. */
 	touchwin(view->window);
 	wnoutrefresh(view->window);
 	doupdate();
+
+	return 0;
 }
 
-void
+static void
 centerprint(WINDOW *win, int starty, int startx, int cols, const char *str,
     chtype colour)
 {
@@ -7450,7 +7471,7 @@ cleanup:
 			fnc_commit_artifact_close(s->selected_commit);
 		if (rc)
 			break;
-		q =  fsl_stmt_malloc();
+		q = fsl_stmt_malloc();
 		rc = commit_builder(&commit, fsl_uuid_to_rid(f, id), q);
 		fsl_stmt_finalize(q);
 		if (rc) {
