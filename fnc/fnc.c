@@ -5338,7 +5338,7 @@ cmd_tree(fcli_command const *argv)
 	if (rc)
 		goto end;
 	if (fnc_init.sym)
-		rc = fsl_sym_to_rid(f, fnc_init.sym, FSL_SATYPE_CHECKIN, &rid);
+		rc = fsl_sym_to_rid(f, fnc_init.sym, FSL_SATYPE_ANY, &rid);
 	else
 		fsl_ckout_version_info(f, &rid, NULL);
 
@@ -5364,7 +5364,7 @@ cmd_tree(fcli_command const *argv)
 	}
 
 	if (!fsl_rid_is_a_checkin(f, rid)) {
-		RC(FSL_RC_TYPE, "%s tree can only open a check-in",
+		RC(FSL_RC_TYPE, "%s tree requires a check-in artifact",
 		    fcli_progname());
 		goto end;
 	}
