@@ -5,6 +5,7 @@ use cc cc-shared cc-lib wh-common
 options {
     no-debug=0 => "Disable debug build options."
     loud=0 => "Enables 'loud' build mode."
+    profile=0 => "Enables the -pg (profiling) compile/link flag if CC is gcc."
     no-compile-commands=0 =>
       "Disable compile_commands.json support even if detected (possibly incorrectly)."
 }
@@ -97,6 +98,14 @@ wh-check-compile-commands no-compile-commands
 define CFLAGS $cFlags
 if {[wh-opt-bool-01 -v loud BUILD_QUIETLY]} {
     puts "Enabling quiet build mode. Use --loud to enable loud mode."
+}
+
+msg-checking "gprof profiling? "
+if {[wh-check-profile-flag profile]} {
+  msg-result "gcc detected: building with profiling option."
+  # Add CC_PROFILE_FLAG to CFLAGS and LDFLAGS in config.make.in.
+} else {
+  msg-result "no. Use --profile and gcc to enable."
 }
 
 # Each generated Makefile requires an input file with a .in extension:

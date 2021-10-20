@@ -380,3 +380,32 @@ proc wh-make-from-dot-in {filename {touch 0}} {
     catch { exec chmod u-w $f }
   }
 }
+
+########################################################################
+# Checks for the boolean configure option named by $flagname. If set,
+# it checks if $CC seems to refer to gcc. If it does (or appears to)
+# then it defines CC_PROFILE_FLAG to "-pg" and returns 1, else it
+# defines CC_PROFILE_FLAG to "" and returns 0.
+#
+# Note that the resulting flag must be added to both CFLAGS and
+# LDFLAGS in order for binaries to be able to generate "gmon.out".  In
+# order to avoid potential problems with escaping, space-containing
+# tokens, and interfering with autosetup's use of these vars, this
+# routine does not directly modify CFLAGS or LDFLAGS.
+proc wh-check-profile-flag {{flagname profile}} {
+  if {[opt-bool $flagname]} {
+    set CC [get-define CC]
+    regsub {.*ccache *} $CC "" CC
+    # ^^^ if CC="ccache gcc" then [exec] treats "ccache gcc" as a
+    # single binary name and fails. So strip any leading ccache part
+    # for this purpose.
+    if { ![catch { exec $CC --version } msg]} {
+      if {[string first gcc $CC] != -1} {
+        define CC_PROFILE_FLAG "-pg"
+        return 1
+      }
+    }
+  }
+  define CC_PROFILE_FLAG ""
+  return 0
+}
