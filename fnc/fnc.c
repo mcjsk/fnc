@@ -7428,21 +7428,37 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			/* Check file exists in parent check-in. */
 			rc = fsl_deck_load_sym(f, &d, pid, FSL_SATYPE_CHECKIN);
 			if (rc) {
-				rc = RC(rc, "%s", "fsl_deck_load_sym");
-				goto cleanup;
+				fsl_deck_finalize(&d);
+				fsl_free(pid);
+				return RC(rc, "%s", "fsl_deck_load_sym");
 			}
 			rc = fsl_deck_F_rewind(&d);
 			if (rc) {
-				rc = RC(rc, "%s", "fsl_deck_F_rewind");
-				goto cleanup;
+				fsl_deck_finalize(&d);
+				fsl_free(pid);
+				return RC(rc, "%s", "fsl_deck_F_rewind");
 			}
 			if (fsl_deck_F_search(&d, s->path +
-			    (fnc_init.sym ? 0 : 1)) == NULL)
-				goto cleanup; /* File not in selected version */
+			    (fnc_init.sym ? 0 : 1)) == NULL) {
+				char *m = fsl_mprintf("-- %s not in [%.12s] --",
+				    s->path + (fnc_init.sym ? 0 : 1), pid);
+				if (m == NULL)
+					rc = RC(FSL_RC_ERROR, "%s",
+					    "fsl_mprintf");
+				wattr_on(view->window, A_BOLD, NULL);
+				mvwaddstr(view->window,
+				    view->start_ln + view->nlines - 1, 0, m);
+				wclrtoeol(view->window);
+				wattr_off(view->window, A_BOLD, NULL);
+				update_panels();
+				doupdate();
+				sleep(1);
+				fsl_deck_finalize(&d);
+				fsl_free(pid);
+				fsl_free(m);
+				break;
+			}
 			rc = fnc_commit_qid_alloc(&s->blamed_commit, pid);
-cleanup:
-			fsl_deck_finalize(&d);
-			fsl_free(pid);
 			if (rc)
 				return rc;
 		} else {
