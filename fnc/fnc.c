@@ -3641,8 +3641,7 @@ create_diff(struct fnc_diff_view_state *s)
 	if (s->selected_commit->rid == 0)
 		diff_checkout(&s->buf, s->selected_commit->prid, s->diff_flags,
 		    s->context, s->sbs);
-	else if (!fsl_strcmp(s->selected_commit->type, "checkin") &&
-	    s->selected_commit->puuid != NULL)
+	else if (!fsl_strcmp(s->selected_commit->type, "checkin"))
 		diff_commit(&s->buf, s->selected_commit, s->diff_flags,
 		    s->context, s->sbs);
 
@@ -3939,24 +3938,23 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 		goto end;
 
 	/*
-	 * If this commit has no parent (initial empty checkin), there's
-	 * nothing to diff against. TODO: May be redundant with the
-	 * this->puuid != NULL check in the caller.
+	 * For the one-and-only special case of repositories, such as the
+	 * canonical fnc, that do not have an "initial empty check-in", we
+	 * proceed with no parent version to diff against.
 	 */
-	if (d2.P.used == 0)
-		goto end;
+	if (commit->puuid) {
+		rc = fsl_sym_to_rid(f, commit->puuid, FSL_SATYPE_CHECKIN, &id1);
+		if (rc)
+			goto end;
+		rc = fsl_deck_load_rid(f, &d1, id1, FSL_SATYPE_CHECKIN);
+		if (rc)
+			goto end;
+		rc = fsl_deck_F_rewind(&d1);
+		if (rc)
+			goto end;
+		fsl_deck_F_next(&d1, &fc1);
+	}
 
-	rc = fsl_sym_to_rid(f, commit->puuid, FSL_SATYPE_CHECKIN, &id1);
-	if (rc)
-		goto end;
-	rc = fsl_deck_load_rid(f, &d1, id1, FSL_SATYPE_CHECKIN);
-	if (rc)
-		goto end;
-	rc = fsl_deck_F_rewind(&d1);
-	if (rc)
-		goto end;
-
-	fsl_deck_F_next(&d1, &fc1);
 	fsl_deck_F_next(&d2, &fc2);
 	while (fc1 || fc2) {
 		const fsl_card_F	*a = NULL, *b = NULL;
@@ -4494,7 +4492,7 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
 	bool		 verbose;
 
 	assert(vid1 != vid2);
-	assert(vid1 > 0 && vid2 > 0 &&
+	assert(vid2 > 0 &&
 	    "local checkout should be diffed with diff_checkout()");
 
 	fbuf2.used = fbuf1.used = 0;
