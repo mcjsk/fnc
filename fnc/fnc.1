@@ -28,7 +28,7 @@
 .Op Fl v | -version
 .Nm
 .Cm timeline
-.Op Fl z
+.Op Fl Cz
 .Op Fl T Ar tag
 .Op Fl b Ar branch
 .Op Fl c Ar commit
@@ -38,16 +38,18 @@
 .Op Ar path
 .Nm
 .Cm diff
-.Op Fl ciw
+.Op Fl Ciw
 .Op Fl x Ar number
 .Ar commit1
 .Ar commit2
 .Nm
 .Cm tree
+.Op Fl C
 .Op Fl c Ar commit
 .Op Ar path
 .Nm
 .Cm blame
+.Op Fl C
 .Op Fl c Ar commit Op Fl r
 .Op Fl n Ar number
 .Ar path
@@ -114,9 +116,9 @@ Commands available to
 .Nm
 are as follows:
 .Bl -tag -width 4v
-.It Cm timeline Oo Fl T | -tag Ar tag Oc Oo Fl b | -branch Ar branch Oc \
-Oo Fl c | -commit Ar commit Oc Oo Fl h | -help Oc \
-Oo Fl n | -limit Ar n Oc  Oo Fl t | -type Ar type Oc \
+.It Cm timeline Oo Fl C | -no-colour Oc Oo Fl T | -tag Ar tag Oc \
+Oo Fl b | -branch Ar branch Oc Oo Fl c | -commit Ar commit Oc \
+Oo Fl h | -help Oc  Oo Fl n | -limit Ar n Oc  Oo Fl t | -type Ar type Oc \
 Oo Fl u | -username Ar user Oc Oo Fl z | -utc Oc  Op Ar path
 .Pp
 Display commit history of a repository.  If
@@ -137,6 +139,11 @@ Options for
 .Cm fnc timeline
 are as follows:
 .Bl -tag -width Ds
+.It Fl C , -no-colour
+Disable colourised timeline, which is enabled by default on supported
+terminals. If this option is not used, colour can be toggled with the
+.Sy c
+timeline view key binding as documented below.
 .It Fl T , -tag Ar tag
 Only display commits with T cards containing
 .Ar tag .
@@ -223,6 +230,10 @@ in the repository).
 Open a
 .Cm diff
 view displaying the changeset of the currently selected commit.
+.It Cm c
+Toggle colourised timeline.
+.Nm
+will default to displaying the timeline in colour.
 .It Cm t
 Display the tree of the repository corresponding to the currently selected
 commit.

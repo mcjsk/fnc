@@ -189,7 +189,7 @@ static struct fnc_setup {
 	fcli_cliflag	  cliflags_global[3];		/* Global options. */
 	fcli_command	  cmd_args[5];			/* App commands. */
 	void		(*fnc_usage_cb[4])(void);	/* Command usage. */
-	fcli_cliflag	  cliflags_timeline[10];	/* Timeline options. */
+	fcli_cliflag	  cliflags_timeline[11];	/* Timeline options. */
 	fcli_cliflag	  cliflags_diff[7];		/* Diff options. */
 	fcli_cliflag	  cliflags_tree[4];		/* Tree options. */
 	fcli_cliflag	  cliflags_blame[6];		/* Blame options. */
@@ -243,6 +243,10 @@ static struct fnc_setup {
 	{&usage_timeline, &usage_diff, &usage_tree, &usage_blame},
 
 	{ /* cliflags_timeline timeline command related options. */
+	    FCLI_FLAG_BOOL("C", "no-colour", &fnc_init.nocolour,
+            "Disable colourised timeline, which is enabled by default on\n    "
+            "supported terminals. Colour can also be toggled with the 'c' "
+            "\n    key binding in timeline view when this option is not used."),
 	    FCLI_FLAG("T", "tag", "<tag>", &fnc_init.filter_tag,
             "Only display commits with T cards containing <tag>."),
 	    FCLI_FLAG("b", "branch", "<branch>", &fnc_init.filter_branch,
@@ -2577,6 +2581,7 @@ help(struct fnc_view *view)
 	    {"  gg,Home          ", "  ❬gg❭❬Home❭          "},
 	    {"  G,End            ", "  ❬G❭❬End❭            "},
 	    {"  Enter,Space      ", "  ❬Enter❭❬Space❭      "},
+	    {"  c                ", "  ❬c❭                 "},
 	    {"  t                ", "  ❬t❭                 "},
 	    {""},
 	    {""}, /* Diff */
@@ -2644,6 +2649,7 @@ help(struct fnc_view *view)
 	    "Jump to first line in the current view",
 	    "Jump to last line in the current view",
 	    "Open diff view of the selected commit",
+	    "Toggle colourised timeline",
 	    "Display a tree reflecting the state of the selected commit",
 	    "",
 	    "Diff",
@@ -2965,6 +2971,9 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			view->focus_child = true;
 		} else
 			*new_view = diff_view;
+		break;
+	case 'c':
+		s->colour = !s->colour;
 		break;
 	case 't':
 		if (s->selected_commit == NULL)
