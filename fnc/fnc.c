@@ -396,7 +396,10 @@ enum fnc_colours {
 	FNC_TREE_LINK,
 	FNC_TREE_DIR,
 	FNC_TREE_EXEC,
-	FNC_COMMIT
+	FNC_COMMIT_ID,
+	FNC_USER_STR,
+	FNC_DATE_STR,
+	FNC_TAGS_STR
 };
 
 struct fnc_colour {
@@ -533,11 +536,13 @@ struct fnc_tl_view_state {
 	struct commit_entry	*selected_commit;
 	struct commit_entry	*matched_commit;
 	struct commit_entry	*search_commit;
+	fsl_list		 colours;
 	const char		*curr_ckout_uuid;
 	char			*path;	     /* Match commits involving path. */
 	int			 selected_idx;
 	sig_atomic_t		 quit;
 	pthread_t		 thread_id;
+	bool			 colour;
 };
 
 struct fnc_diff_view_state {
@@ -1519,6 +1524,7 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 		}
 	}
 
+	s->colour = !fnc_init.nocolour && has_colors();
 	s->thread_cx.rc = 0;
 	s->thread_cx.db = db;
 	s->thread_cx.spin_idx = 0;
@@ -1533,6 +1539,8 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 	s->thread_cx.regex = &view->regex;
 	s->thread_cx.path = s->path;
 
+	if (s->colour)
+		set_colours(&s->colours, FNC_VIEW_TIMELINE);
 end:
 	fsl_buffer_clear(&sql);
 	if (rc) {
@@ -2027,6 +2035,7 @@ draw_commits(struct fnc_view *view)
 	struct fnc_tl_view_state	*s = &view->state.timeline;
 	struct fnc_tl_thread_cx		*tcx = &s->thread_cx;
 	struct commit_entry		*entry = s->selected_commit;
+	struct fnc_colour		*c = NULL;
 	const char			*search_str = NULL;
 	char				*headln = NULL, *idxstr = NULL;
 	char				*branch = NULL, *type = NULL;
@@ -2110,7 +2119,13 @@ draw_commits(struct fnc_view *view)
 
 	if (screen_is_shared(view))
 		wstandout(view->window);
+	if (s->colour)
+		c = get_colour(&s->colours, FNC_COMMIT_ID);
+	if (c)
+		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 	waddwstr(view->window, wcstr);
+	if (c)
+		wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
 	while (wstrlen < view->ncols) {
 		waddch(view->window, ' ');
 		++wstrlen;
@@ -2152,10 +2167,10 @@ draw_commits(struct fnc_view *view)
 		if (ncommits >= view->nlines - 1)
 			break;
 		if (ncommits == s->selected_idx)
-			wstandout(view->window);
+			wattr_on(view->window, A_REVERSE, NULL);
 		rc = write_commit_line(view, entry->commit, max_usrlen);
 		if (ncommits == s->selected_idx)
-			wstandend(view->window);
+			wattr_off(view->window, A_REVERSE, NULL);
 		++ncommits;
 		s->last_commit_onscreen = entry;
 		entry = TAILQ_NEXT(entry, entries);
@@ -2309,24 +2324,40 @@ static int
 write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
     int max_usrlen)
 {
-	wchar_t		*usr_wcstr = NULL, *wcomment = NULL;
-	char		*comment0 = NULL, *comment = NULL, *date = NULL;
-	char		*eol = NULL, *pad = NULL, *user = NULL;
-	size_t		 i = 0;
-	int		 col_pos, ncols_avail, usrlen, commentlen, rc = 0;
+	struct fnc_tl_view_state	*s = &view->state.timeline;
+	struct fnc_colour		*c = NULL;
+	wchar_t				*usr_wcstr = NULL, *wcomment = NULL;
+	char				*comment0 = NULL, *comment = NULL;
+	char				*date = NULL;
+	char				*eol = NULL, *pad = NULL, *user = NULL;
+	size_t				 i = 0;
+	int				 col_pos, ncols_avail, usrlen;
+	int				 commentlen, rc = 0;
 
 	/* Trim time component from timestamp for the date field. */
 	date = fsl_strdup(commit->timestamp);
 	while (!fsl_isspace(date[i++])) {}
 	date[i] = '\0';
 	col_pos = MIN(view->ncols, ISO8601_DATE_ONLY + 1);
+	if (s->colour)
+		c = get_colour(&s->colours, FNC_DATE_STR);
+	if (c)
+		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 	waddnstr(view->window, date, col_pos);
+	if (c)
+		wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
 	if (col_pos > view->ncols)
 		goto end;
 
 	/* If enough columns, write abbreviated commit hash. */
 	if (view->ncols >= 110) {
+		if (s->colour)
+			c = get_colour(&s->colours, FNC_COMMIT_ID);
+		if (c)
+			wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 		wprintw(view->window, "%.9s ", commit->uuid);
+		if (c)
+			wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
 		col_pos += 10;
 		if (col_pos > view->ncols)
 			goto end;
@@ -2346,9 +2377,15 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	    col_pos);
 	if (rc)
 		goto end;
+	if (s->colour)
+		c = get_colour(&s->colours, FNC_USER_STR);
+	if (c)
+		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 	waddwstr(view->window, usr_wcstr);
 	pad = fsl_mprintf("%*c",  max_usrlen - usrlen + 2, ' ');
 	waddstr(view->window, pad);
+	if (c)
+		wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
 	col_pos += (max_usrlen + 2);
 	if (col_pos > view->ncols)
 		goto end;
@@ -3309,11 +3346,13 @@ static int
 close_timeline_view(struct fnc_view *view)
 {
 	struct fnc_tl_view_state	*s = &view->state.timeline;
+	struct fsl_list_state		 st = { FNC_COLOUR_OBJ };
 	int				 rc = 0;
 
 	rc = join_tl_thread(s);
 	fsl_stmt_finalize(s->thread_cx.q);
 	fnc_free_commits(&s->commits);
+	fsl_list_clear(&s->colours, fsl_list_object_free, &st);
 	regfree(&view->regex);
 	fsl_free(s->path);
 	s->path = NULL;
@@ -5907,7 +5946,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 	if (screen_is_shared(view))
 		wstandout(view->window);
 	if (s->colour)
-		c = get_colour(&s->colours, FNC_COMMIT);
+		c = get_colour(&s->colours, FNC_COMMIT_ID);
 	if (c)
 		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 	waddwstr(view->window, wcstr);
@@ -6614,15 +6653,19 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 	struct fnc_colour	 *colour;
 	const char		**regexp = NULL;
 	const char		 *regexp_blame[] = {"^"};
+	const char		 *regexp_timeline[] = {"^$", "^$", "^$"};
 	const char		 *regexp_tree[] = {"@$", "/$", "\\*$", "^$"};
 	const char		 *regexp_diff[] = {
 				    "^((checkin|wiki|ticket|technote) "
 				    "[0-9a-f]|hash [+-] |\\[[+~>-]] |"
-				    "[+-]{3} )",
+				    "[+-]{3} )", "^user:", "^date:", "^tags:",
 				    "^-", "^\\+", "^@@"
 				  };
 	int			  pairs_diff[][2] = {
 				    {FNC_DIFF_META, COLOR_GREEN},
+				    {FNC_USER_STR, COLOR_CYAN},
+				    {FNC_DATE_STR, COLOR_YELLOW},
+				    {FNC_TAGS_STR, COLOR_MAGENTA},
 				    {FNC_DIFF_MINUS, COLOR_MAGENTA},
 				    {FNC_DIFF_PLUS, COLOR_CYAN},
 				    {FNC_DIFF_CHNK, COLOR_YELLOW}
@@ -6631,9 +6674,16 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 				    {FNC_TREE_LINK, COLOR_MAGENTA},
 				    {FNC_TREE_DIR, COLOR_CYAN},
 				    {FNC_TREE_EXEC, COLOR_GREEN},
-				    {FNC_COMMIT, COLOR_MAGENTA}
+				    {FNC_COMMIT_ID, COLOR_MAGENTA}
 				  };
-	int			  pairs_blame[][2] = {{FNC_COMMIT, COLOR_CYAN}};
+	int			  pairs_timeline[][2] = {
+				    {FNC_COMMIT_ID, COLOR_GREEN},
+				    {FNC_USER_STR, COLOR_CYAN},
+				    {FNC_DATE_STR, COLOR_YELLOW}
+				  };
+	int			  pairs_blame[][2] = {
+				    {FNC_COMMIT_ID, COLOR_CYAN}
+				  };
 	int			(*pairs)[2], rc = 0;
 	fsl_size_t		  idx, n;
 
@@ -6647,6 +6697,11 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 		n = nitems(regexp_tree);
 		regexp = regexp_tree;
 		pairs = pairs_tree;
+		break;
+	case FNC_VIEW_TIMELINE:
+		n = nitems(regexp_timeline);
+		regexp = regexp_timeline;
+		pairs = pairs_timeline;
 		break;
 	case FNC_VIEW_BLAME:
 		n = nitems(regexp_blame);
@@ -7210,7 +7265,7 @@ draw_blame(struct fnc_view *view)
 	if (screen_is_shared(view))
 		wstandout(view->window);
 	if (s->colour)
-		c = get_colour(&s->colours, FNC_COMMIT);
+		c = get_colour(&s->colours, FNC_COMMIT_ID);
 	if (c)
 		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 	waddwstr(view->window, wcstr);
@@ -7281,7 +7336,8 @@ draw_blame(struct fnc_view *view)
 					    "fsl_strdup");
 				}
 				if (s->colour)
-					c = get_colour(&s->colours, FNC_COMMIT);
+					c = get_colour(&s->colours,
+					    FNC_COMMIT_ID);
 				if (c)
 					wattr_on(view->window,
 					    COLOR_PAIR(c->scheme), NULL);
