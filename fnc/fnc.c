@@ -5363,8 +5363,13 @@ cmd_tree(fcli_command const *argv)
 		}
 	}
 
-	if (!fsl_rid_is_a_checkin(f, rid)) {
-		RC(FSL_RC_TYPE, "%s tree requires a check-in artifact",
+	/* In 'fnc tree -R repo.db [path]' case, use the latest checkin. */
+	if (rid == 0) {
+		rc = fsl_sym_to_rid(f, "tip", FSL_SATYPE_CHECKIN, &rid);
+		if (rc)
+			goto end;
+	} else if (!fsl_rid_is_a_checkin(f, rid)) {
+		rc = RC(FSL_RC_TYPE, "%s tree requires check-in artifact",
 		    fcli_progname());
 		goto end;
 	}
