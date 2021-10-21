@@ -181,6 +181,7 @@ const fsl_checkin_queue_opt fsl_checkin_queue_opt_empty =
 const fsl_fstat fsl_fstat_empty = fsl_fstat_empty_m;
 const fsl_list fsl_list_empty = fsl_list_empty_m;
 const fsl_mcache fsl_mcache_empty = fsl_mcache_empty_m;
+const fsl_merge_opt fsl_merge_opt_empty = fsl_merge_opt_empty_m;
 const fsl_outputer fsl_outputer_FILE = fsl_outputer_FILE_m;
 const fsl_outputer fsl_outputer_empty = fsl_outputer_empty_m;
 const fsl_pathfinder fsl_pathfinder_empty = fsl_pathfinder_empty_m;
@@ -270,14 +271,14 @@ int fsl_is_uuid_len(int x){
       return 0;
   }
 }
-void fsl_error_clear( fsl_error * err ){
+void fsl_error_clear( fsl_error * const err ){
   if(err){
     fsl_buffer_clear(&err->msg);
     *err = fsl_error_empty;
   }
 }
 
-void fsl_error_reset( fsl_error * err ){
+void fsl_error_reset( fsl_error * const err ){
   if(err){
     err->code = 0;
     err->msg.used = err->msg.cursor = 0;
@@ -286,7 +287,7 @@ void fsl_error_reset( fsl_error * err ){
 }
 
 
-int fsl_error_copy( fsl_error const * src, fsl_error * dest ){
+int fsl_error_copy( fsl_error const * const src, fsl_error * const dest ){
   if(!src || !dest || (src==dest)) return FSL_RC_MISUSE;
   else {
     int rc = 0;
@@ -299,7 +300,7 @@ int fsl_error_copy( fsl_error const * src, fsl_error * dest ){
   }
 }
 
-void fsl_error_move( fsl_error * lower, fsl_error * higher ){
+void fsl_error_move( fsl_error * const lower, fsl_error * const higher ){
   fsl_error const err = *lower;
   *lower = *higher;
   lower->code = 0;
@@ -307,7 +308,7 @@ void fsl_error_move( fsl_error * lower, fsl_error * higher ){
   *higher = err;
 }
 
-int fsl_error_setv( fsl_error * err, int code, char const * fmt,
+int fsl_error_setv( fsl_error * const err, int code, char const * fmt,
                     va_list args ){
   if(!err) return FSL_RC_MISUSE;
   else if(!code){ /* clear error state */
@@ -331,7 +332,7 @@ int fsl_error_setv( fsl_error * err, int code, char const * fmt,
   }
 }
 
-int fsl_error_set( fsl_error * err, int code, char const * fmt,
+int fsl_error_set( fsl_error * const err, int code, char const * fmt,
                    ... ){
   int rc;
   va_list args;
@@ -342,7 +343,8 @@ int fsl_error_set( fsl_error * err, int code, char const * fmt,
 }
 
 
-int fsl_error_get( fsl_error const * err, char const ** str, fsl_size_t * len ){
+int fsl_error_get( fsl_error const * const err, char const ** str,
+                   fsl_size_t * const len ){
   if(!err) return FSL_RC_MISUSE;
   else{
     if(str) *str = err->msg.used
@@ -1861,6 +1863,7 @@ static const et_info fmtinfo[] = {
 #if FSLPRINTF_OMIT_SQL
 {'w'/*119*/, 0, 0, 0, 0, 0 },
 #else
+/* TODO: remap this to %!Q. %w is not currently used/documented. */
 {'w'/*119*/, 0, FLAG_STRING, etSQLESCAPE3, 0, 0 },
 #endif
 {'x'/*120*/, 16, 0, etRADIX,      16, 1  },
@@ -3445,11 +3448,8 @@ FSL_EXPORT int fsl_repo_login_clear( fsl_cx * f, fsl_id_t userId ){
 
 const fsl_id_bag fsl_id_bag_empty = fsl_id_bag_empty_m;
 
-/* Only for debugging */
-#include <stdio.h>
-
-void fsl_id_bag_clear(fsl_id_bag *p){
-  if(p->list) fsl_free(p->list);
+void fsl_id_bag_clear(fsl_id_bag * const p){
+  fsl_free(p->list);
   *p = fsl_id_bag_empty;
 }
 
@@ -3468,7 +3468,7 @@ void fsl_id_bag_clear(fsl_id_bag *p){
 
    Returns on on success, FSL_RC_OOM on allocation error.
 */
-static int fsl_id_bag_resize(fsl_id_bag *p, fsl_size_t newSize){
+static int fsl_id_bag_resize(fsl_id_bag * const p, fsl_size_t newSize){
   fsl_size_t i;
   fsl_id_bag old;
   fsl_size_t nDel = 0;   /* Number of deleted entries */
@@ -3482,7 +3482,7 @@ static int fsl_id_bag_resize(fsl_id_bag *p, fsl_size_t newSize){
   p->capacity = newSize;
   memset(p->list, 0, sizeof(p->list[0])*newSize );
   for(i=0; i<old.capacity; i++){
-    fsl_id_t e = old.list[i];
+    fsl_id_t const e = old.list[i];
     if( e>0 ){
       unsigned h = fsl_id_bag_hash(e)%newSize;
       while( p->list[h] ){
@@ -3502,17 +3502,20 @@ static int fsl_id_bag_resize(fsl_id_bag *p, fsl_size_t newSize){
   return 0;
 }
 
-void fsl_id_bag_reset(fsl_id_bag *p){
+void fsl_id_bag_reset(fsl_id_bag * const p){
   p->entryCount = p->used = 0;
+  if(p->list){
+    memset(p->list, 0, sizeof(p->list[0])*p->capacity);
+  }
 }
 
 
-int fsl_id_bag_insert(fsl_id_bag *p, fsl_id_t e){
+int fsl_id_bag_insert(fsl_id_bag * const p, fsl_id_t e){
   fsl_size_t h;
   int rc = 0;
   assert( e>0 );
   if( p->used+1 >= p->capacity/2 ){
-    fsl_size_t n = p->capacity ? p->capacity*2 : 30;
+    fsl_size_t const n = p->capacity ? p->capacity*2 : 30;
     rc = fsl_id_bag_resize(p,  n );
     if(rc) return rc;
   }
@@ -3530,7 +3533,7 @@ int fsl_id_bag_insert(fsl_id_bag *p, fsl_id_t e){
   return rc;
 }
 
-bool fsl_id_bag_contains(fsl_id_bag const *p, fsl_id_t e){
+bool fsl_id_bag_contains(fsl_id_bag const * const p, fsl_id_t e){
   fsl_size_t h;
   assert( e>0 );
   if( p->capacity==0 || 0==p->used ){
@@ -3547,7 +3550,7 @@ bool fsl_id_bag_contains(fsl_id_bag const *p, fsl_id_t e){
   return p->list[h]==e;
 }
 
-bool fsl_id_bag_remove(fsl_id_bag *p, fsl_id_t e){
+bool fsl_id_bag_remove(fsl_id_bag * const p, fsl_id_t e){
   fsl_size_t h;
   bool rv = false;
   assert( e>0 );
@@ -3580,7 +3583,7 @@ bool fsl_id_bag_remove(fsl_id_bag *p, fsl_id_t e){
   return rv;
 }
 
-fsl_id_t fsl_id_bag_first(fsl_id_bag const *p){
+fsl_id_t fsl_id_bag_first(fsl_id_bag const * const p){
   if( p->capacity==0 || 0==p->used ){
     return 0;
   }else{
@@ -3594,7 +3597,7 @@ fsl_id_t fsl_id_bag_first(fsl_id_bag const *p){
   }
 }
 
-fsl_id_t fsl_id_bag_next(fsl_id_bag const *p, fsl_id_t e){
+fsl_id_t fsl_id_bag_next(fsl_id_bag const * const p, fsl_id_t e){
   fsl_size_t h;
   assert( p->capacity>0 );
   assert( e>0 );
@@ -3612,11 +3615,11 @@ fsl_id_t fsl_id_bag_next(fsl_id_bag const *p, fsl_id_t e){
   return h<p->capacity ? p->list[h] : 0;
 }
 
-fsl_size_t fsl_id_bag_count(fsl_id_bag const *p){
+fsl_size_t fsl_id_bag_count(fsl_id_bag const * const p){
   return p->entryCount;
 }
 
-void fsl_id_bag_swap(fsl_id_bag *lhs, fsl_id_bag *rhs){
+void fsl_id_bag_swap(fsl_id_bag * const lhs, fsl_id_bag * const rhs){
   fsl_id_bag x = *lhs;
   *lhs = *rhs;
   *rhs = x;
@@ -3758,7 +3761,7 @@ int fsl_buffer_append( fsl_buffer * b,
       len = (fsl_int_t)fsl_strlen((char const *)data);
     }
     sz += len + 1/*NUL*/;
-    rc = fsl_buffer_reserve( b, sz );
+    rc = b->capacity<sz ? fsl_buffer_reserve( b, sz ) : 0;
     if(!rc){
       assert(b->capacity >= sz);
       if(len>0) memcpy(b->mem + b->used, data, (size_t)len);
@@ -4028,7 +4031,8 @@ int fsl_buffer_uncompress(fsl_buffer const *pIn, fsl_buffer *pOut){
 }
 
 
-int fsl_buffer_fill_from( fsl_buffer * dest, fsl_input_f src, void * state )
+int fsl_buffer_fill_from( fsl_buffer * const dest, fsl_input_f src,
+                          void * const state )
 {
   int rc;
   enum { BufSize = 512 * 8 };
@@ -4064,35 +4068,32 @@ int fsl_buffer_fill_from( fsl_buffer * dest, fsl_input_f src, void * state )
   return rc;
 }
 
-int fsl_buffer_fill_from_FILE( fsl_buffer * dest, FILE * src ){
-  return (!dest || !src)
-          ? FSL_RC_MISUSE
-          : fsl_buffer_fill_from( dest, fsl_input_f_FILE, src );
+int fsl_buffer_fill_from_FILE( fsl_buffer * const dest,
+                               FILE * const src ){
+  return fsl_buffer_fill_from( dest, fsl_input_f_FILE, src );
 }          
 
 
-int fsl_buffer_fill_from_filename( fsl_buffer * dest, char const * filename ){
-  if(!dest || !filename || !*filename) return FSL_RC_MISUSE;
-  else{
-    int rc;
-    FILE * src;
-    fsl_fstat st = fsl_fstat_empty;
-    /* This stat() is only an optimization to reserve all needed
-       memory up front.
-    */
-    rc = fsl_stat( filename, &st, 1 );
-    if(!rc && st.size>0){
-      rc = fsl_buffer_reserve(dest, st.size +1/*NUL terminator*/);
-      if(rc) return rc;
-    } /* Else it might not be a real file, e.g. "-", so we'll try anyway... */
-    src = fsl_fopen(filename,"rb");
-    if(!src) rc = fsl_errno_to_rc(errno, FSL_RC_IO);
-    else {
-      rc = fsl_buffer_fill_from( dest, fsl_input_f_FILE, src );
-      fsl_fclose(src);
-    }
-    return rc;
+int fsl_buffer_fill_from_filename( fsl_buffer * const dest,
+                                   char const * filename ){
+  int rc;
+  FILE * src;
+  fsl_fstat st = fsl_fstat_empty;
+  /* This stat() is only an optimization to reserve all needed
+     memory up front.
+  */
+  rc = fsl_stat( filename, &st, 1 );
+  if(!rc && st.size>0){
+    rc = fsl_buffer_reserve(dest, st.size +1/*NUL terminator*/);
+    if(rc) return rc;
+  } /* Else it might not be a real file, e.g. "-", so we'll try anyway... */
+  src = fsl_fopen(filename,"rb");
+  if(!src) rc = fsl_errno_to_rc(errno, FSL_RC_IO);
+  else {
+    rc = fsl_buffer_fill_from( dest, fsl_input_f_FILE, src );
+    fsl_fclose(src);
   }
+  return rc;
 }
 
 void fsl_buffer_swap( fsl_buffer * left, fsl_buffer * right ){
@@ -4206,19 +4207,20 @@ int fsl_finalizer_f_buffer( void * state, void * mem ){
   return 0;
 }
 
-int fsl_buffer_strftime(fsl_buffer * b, char const * format, const struct tm *timeptr){
+int fsl_buffer_strftime(fsl_buffer * const b, char const * format,
+                        const struct tm *timeptr){
   if(!b || !format || !*format || !timeptr) return FSL_RC_MISUSE;
   else{
     enum {BufSize = 128};
     char buf[BufSize];
     fsl_size_t len = fsl_strftime(buf, BufSize, format, timeptr);
     if(!len) return FSL_RC_RANGE;
-    return fsl_buffer_append(b, buf, len);
+    return fsl_buffer_append(b, buf, (fsl_int_t)len);
   }
 }
 
-int fsl_buffer_stream_lines(fsl_output_f fTo, void * toState,
-                            fsl_buffer *pFrom, fsl_size_t N){
+int fsl_buffer_stream_lines(fsl_output_f fTo, void * const toState,
+                            fsl_buffer * const pFrom, fsl_size_t N){
   char *z = (char *)pFrom->mem;
   fsl_size_t i = pFrom->cursor;
   fsl_size_t n = pFrom->used;
@@ -4245,7 +4247,9 @@ int fsl_buffer_stream_lines(fsl_output_f fTo, void * toState,
 }
 
 
-int fsl_buffer_copy_lines(fsl_buffer *pTo, fsl_buffer *pFrom, fsl_size_t N){
+int fsl_buffer_copy_lines(fsl_buffer * const pTo,
+                          fsl_buffer * const pFrom,
+                          fsl_size_t N){
 #if 1
   return fsl_buffer_stream_lines( pTo ? fsl_output_f_buffer : NULL, pTo,
                                   pFrom, N );
@@ -4331,13 +4335,14 @@ int fsl_buffer_compare_file( fsl_buffer const * b, char const * zFile ){
   }
 }
 
-char * fsl_buffer_take(fsl_buffer *b){
+char * fsl_buffer_take(fsl_buffer * const b){
   char * z = (char *)b->mem;
   *b = fsl_buffer_empty;
   return z;
 }
 
-fsl_size_t fsl_buffer_seek(fsl_buffer * b, fsl_int_t offset, fsl_buffer_seek_e  whence){
+fsl_size_t fsl_buffer_seek(fsl_buffer * const b, fsl_int_t offset,
+                           fsl_buffer_seek_e  whence){
   int64_t c = (int64_t)b->cursor;
   switch(whence){
     case FSL_BUFFER_SEEK_SET: c = offset;
@@ -4365,11 +4370,11 @@ fsl_size_t fsl_buffer_seek(fsl_buffer * b, fsl_int_t offset, fsl_buffer_seek_e  
   return b->cursor;
 }
 
-fsl_size_t fsl_buffer_tell(fsl_buffer const *b){
+fsl_size_t fsl_buffer_tell(fsl_buffer const * const b){
   return b->cursor;
 }
 
-void fsl_buffer_rewind(fsl_buffer *b){
+void fsl_buffer_rewind(fsl_buffer * const b){
   b->cursor = 0;
 }
 
@@ -5359,25 +5364,37 @@ static int fsl_checkin_calc_manifest( fsl_cx * f, fsl_deck * d,
     fsl_size_t szD = 0, szB = 0 /* see commentary below */;
     if(basedOnVid && deltaPolicy!=0){
       /* Figure out a baseline for a delta manifest... */
+      fsl_uuid_str bUuid = NULL /* UUID for d's B-card */;
       rc = fsl_deck_load_rid(f, &dBase, basedOnVid, FSL_SATYPE_CHECKIN);
       RC;
       if(dBase.B.uuid){
         /* dBase is a delta. Let's use its baseline for manifest
-           generation.
-        */
+           generation. */
         fsl_id_t const baseRid = fsl_uuid_to_rid(f, dBase.B.uuid);
         fsl_deck_finalize(&dBase);
-        assert(baseRid>0);
-        rc = fsl_deck_load_rid(f, &dBase, baseRid,
-                               FSL_SATYPE_CHECKIN);
+        if(baseRid>0){
+          rc = fsl_deck_load_rid(f, &dBase, baseRid,
+                                 FSL_SATYPE_CHECKIN);
+        }else{
+          rc = fsl_cx_err_get(f, NULL, NULL);
+          assert(0!=rc);
+        }
         RC;
       }else{
         /* dBase version is a suitable baseline. */
+        bUuid = fsl_rid_to_uuid(f, basedOnVid);
+        if(!bUuid){
+          assert(f->error.code);
+          rc = f->error.code;
+          RC;
+        }
       }
-      pBase = &dBase;
       /* MARKER(("Baseline = %d / %s\n", (int)pBase->rid, pBase->uuid)); */
-      rc = fsl_deck_B_set(d, pBase->uuid);
+      assert(dBase.B.uuid || bUuid);
+      rc = fsl_deck_B_set(d, dBase.B.uuid ? dBase.B.uuid : bUuid);
+      fsl_free(bUuid);
       RC;
+      pBase = &dBase;
     }
     rc = fsl_checkin_calc_F_cards2(f, d, pBase, basedOnVid,
                                    &szD, opt);
@@ -5594,6 +5611,7 @@ static int fsl_checkin_calc_manifest( fsl_cx * f, fsl_deck * d,
 #undef RC
   fsl_stmt_finalize(&q);
   fsl_deck_finalize(&dBase);
+  assert(NULL==d->B.baseline || &dBase==d->B.baseline);
   d->B.baseline = NULL /* if it was set, it was &dBase */;
   if(rc && !f->error.code){
     if(dbR->error.code) fsl_cx_uplift_db_error(f, dbR);
@@ -5710,7 +5728,6 @@ int fsl_checkin_commit(fsl_cx * f, fsl_checkin_opt const * opt,
   rc = fsl_deck_save( d, opt->isPrivate );
   RC;
   assert(d->rid>0);
-  assert(d->uuid);
   /* Now get vfile back into shape. We do not do a vfile scan
      because that loses state like add/rm-queued files. */
   rc = fsl_db_exec_multi(dbC,
@@ -5723,7 +5740,7 @@ int fsl_checkin_commit(fsl_cx * f, fsl_checkin_opt const * opt,
                          "chnged=0, deleted=0, origname=NULL "
                          "WHERE fsl_is_enqueued(id)",
                          vid, d->rid);
-  if(!rc) rc = fsl_ckout_version_write(f, d->rid, d->uuid);
+  if(!rc) rc = fsl_ckout_version_write(f, d->rid, NULL);
   RC;
   assert(d->f == f);
   rc = fsl_checkin_add_unsent(f, d->rid);
@@ -5804,15 +5821,16 @@ int fsl_checkin_commit(fsl_cx * f, fsl_checkin_opt const * opt,
       if(!rc){
         if(newRid) *newRid = d->rid;
         if(newUuid){
-          *newUuid = d->uuid;
-          d->uuid = NULL /* transfer ownership */;
+          if(NULL==(*newUuid = fsl_rid_to_uuid(f, d->rid))){
+            rc = FSL_RC_OOM;
+          }
         }
       }
     }
   }
   if(rc && !f->error.code){
-    if(dbR->error.code) fsl_cx_uplift_db_error(f, dbR);
-    else if(f->dbMain->error.code) fsl_cx_uplift_db_error(f, f->dbMain);
+    if(f->dbMain->error.code) fsl_cx_uplift_db_error(f, f->dbMain);
+    else f->error.code = rc;
   }
   fsl_checkin_discard(f);
   fsl_deck_finalize(d);
@@ -6594,7 +6612,7 @@ int fsl_repo_open_ckout(fsl_cx *f, const fsl_repo_open_ckout_opt *opt){
   const char * dbName = opt->ckoutDbFile
     ? opt->ckoutDbFile : fsl_preferred_ckout_db_name();
   fsl_cx_err_reset(f);
-  int fsl_cx_attach_role(fsl_cx *, const char *, fsl_dbrole_e)
+  int fsl_cx_attach_role(fsl_cx * const , const char *, fsl_dbrole_e)
     /* defined in cx.c */;
   rc = fsl_cx_attach_role(f, dbName, FSL_DBROLE_CKOUT);
   if(rc) goto end;
@@ -6717,8 +6735,8 @@ int fsl_is_locally_modified(fsl_cx * f, const char * zFilename,
 }
 
 /**
-   Infrastructure for fsl_repo_ckout() and
-   fsl_ckout_update().
+   Infrastructure for fsl_repo_ckout(),
+   fsl_ckout_update(), and fsl_ckout_merge().
 */
 typedef struct {
   /** The pre-checkout vfile.vid. 0 if no version was
@@ -7319,19 +7337,21 @@ int fsl_repo_ckout(fsl_cx * f, fsl_ckup_opt const * cOpt){
     assert(f->ckout.rid==cOpt->checkinRid);
     assert(f->ckout.rid ? !!f->ckout.uuid : 1);
   }
-  /**
-    TODO: Implement db fingerprint.
-  */
   if(!rc && prevRid!=0){
     rc = fsl_repo_ckout_rm_list_fini(f, &rec);
     if(rc) goto end;
   }
   rc = fsl_ckout_manifest_write(f, -1, -1, -1, NULL);
+
   end:
   if(!rc){
     rc = fsl_vfile_unload_except(f, cOpt->checkinRid);
     if(!rc) rc = fsl_ckout_clear_merge_state(f);
   }
+  /*
+    TODO: if "repo-cksum" config db setting is set, confirm R-card of
+    cOpt->checkinRid against on-disk contents.
+  */
   if(cOpt->confirmer.callback){
     fsl_cx_confirmer(f, &oldConfirm, NULL);
   }
@@ -7436,8 +7456,8 @@ int fsl_ckout_update(fsl_cx * f, fsl_ckup_opt const *cuOpt){
   if( ckRid ){
     uint32_t nChng = 0;
     fsl_id_t * aChng = 0;
-    rc = fsl_cx_find_filename_changes(f, ckRid, tid,
-                                      true, &nChng, &aChng);
+    rc = fsl__find_filename_changes(f, ckRid, tid,
+                                    true, &nChng, &aChng);
     if(rc){
       assert(!aChng);
       assert(!nChng);
@@ -7577,7 +7597,6 @@ int fsl_ckout_update(fsl_cx * f, fsl_ckup_opt const *cuOpt){
      - file_unsafe_in_tree_path() (done, untested)
      - file_nondir_objects_on_path() (done, untested)
      - symlink_create() (done, untested)
-     - vfile_to_disk() (done, untested)
      - ...
   */
   bFullPath = fsl_cx_scratchpad(f);
@@ -7666,7 +7685,6 @@ int fsl_ckout_update(fsl_cx * f, fsl_ckup_opt const *cuOpt){
         uState.fileChangeType = FSL_CKUP_FCHANGE_ADDED;
       }
       //if( !dryRunFlag && !internalUpdate ) undo_save(zName);
-      //MARKER(("Here's where we would vfile_to_disk() %s\n", zName));
       if( !cuOpt->dryRun ){
         rc = fsl_vfile_to_ckout(f, idt, &wasWritten);
         if(rc) goto end;
@@ -8661,8 +8679,7 @@ int fsl_card_F_ckout_mtime(fsl_cx * const f,
   NULL/*appName*/,      \
   {/*clientFlags*/ \
     "."/*checkoutDir*/,      \
-    0/*verbose*/,            \
-    false/*dryRun*/ \
+    0/*verbose*/            \
   }, \
   {/*transient*/      \
     NULL/*repoDb*/,      \
@@ -8860,8 +8877,6 @@ static const fcli_cliflag FCliFlagsGlobal[] = {
   FCLI_FLAG("R","repo","REPO-FILE",&fcli.transient.repoDbArg,
             "Selects a specific repository database, ignoring the one "
             "used by the current directory's checkout (if any)."),
-  FCLI_FLAG_BOOL(NULL,"dry-run",&fcli.clientFlags.dryRun,
-                 "Enable dry-run mode (not supported by all apps)."),
   FCLI_FLAG(NULL,"user","username",&fcli.transient.userArg,
             "Sets the name of the fossil user name for this session."),
   FCLI_FLAG_BOOL_X(NULL, "no-checkout",NULL,fcli_flag_f_nocheckoutDir,
@@ -9428,7 +9443,6 @@ int fcli_setup(int argc, char const * const * argv ){
       }
       fcli_flag2(NULL,"user", &fcli.transient.userArg);
       fcli.config.traceSql =  fcli_flag2(NULL,"trace-sql", NULL);
-      fcli.clientFlags.dryRun = fcli_flag2(NULL,"dry-run", NULL);
       fcli_flag2("R", "repo", &fcli.transient.repoDbArg);
       rc = fcli_setup_common2();
     }
@@ -9858,6 +9872,21 @@ void fcli_diff_colors(fsl_diff_opt * const tgt, fcli_diff_colors_e theme){
   tgt->ansiColor.reset = zReset;
 }
 
+void fcli_dump_stmt_cache(bool forceVerbose){
+  int i = 0;
+  fsl_stmt * st;
+  fsl_db * const db = fsl_cx_db(fcli_cx());
+  assert(db);
+  for( st = db->cacheHead; st; st = st->next ) ++i;
+  f_out("%s(): Cached fsl_stmt count: %d\n", __func__, i);
+  if(i>0 && (forceVerbose || fcli_is_verbose()>1)){
+    for( i = 1, st = db->cacheHead; st; ++i, st = st->next ){
+      f_out("CACHED fsl_stmt #%d (%d hit(s)): %b\n", i,
+            (int)st->cachedHits, &st->sql);
+    }
+  }
+}
+
 #undef FCLI_V3
 #undef fcli_empty_m
 #undef fcli__error
@@ -9994,7 +10023,7 @@ int fsl_content_blob( fsl_cx * f, fsl_id_t blobRid, fsl_buffer * tgt ){
 }
 
 
-bool fsl_content_is_private(fsl_cx * f, fsl_id_t rid){
+bool fsl_content_is_private(fsl_cx * const f, fsl_id_t rid){
   fsl_stmt * s1 = NULL;
   fsl_db * db = fsl_cx_db_repo(f);
   int rc = db
@@ -10350,7 +10379,8 @@ static int fsl_after_dephantomize(fsl_cx * f, fsl_id_t rid, bool doCrosslink){
   return rc;
 }
 
-int fsl_content_put_ex( fsl_cx * f, fsl_buffer const * pBlob,
+int fsl_content_put_ex( fsl_cx * const f,
+                        fsl_buffer const * pBlob,
                         fsl_uuid_cstr zUuid,
                         fsl_id_t srcId,
                         fsl_size_t uncompSize,
@@ -10643,11 +10673,11 @@ int fsl_content_put_ex( fsl_cx * f, fsl_buffer const * pBlob,
   return rc;
 }
 
-int fsl_content_put( fsl_cx * f, fsl_buffer const * pBlob, fsl_id_t * newRid){
+int fsl_content_put( fsl_cx * const f, fsl_buffer const * pBlob, fsl_id_t * newRid){
   return fsl_content_put_ex(f, pBlob, NULL, 0, 0, 0, newRid);
 }
 
-int fsl_uuid_is_shunned(fsl_cx * f, fsl_uuid_cstr zUuid){
+int fsl_uuid_is_shunned(fsl_cx * const f, fsl_uuid_cstr zUuid){
   fsl_db * db = fsl_cx_db_repo(f);
   if( !db || zUuid==0 || zUuid[0]==0 ) return 0;
   else if(FSL_HPOLICY_SHUN_SHA1==f->cxConfig.hashPolicy
@@ -10966,7 +10996,7 @@ int fsl_repo_shun_artifacts(fsl_cx * f){
   return rc;
 }
 
-int fsl_content_make_public(fsl_cx * f, fsl_id_t rid){
+int fsl_content_make_public(fsl_cx * const f, fsl_id_t rid){
   int rc;
   fsl_db * db = f ? fsl_cx_db_repo(f) : NULL;
   if(!f) return FSL_RC_MISUSE;
@@ -12302,11 +12332,33 @@ const int StaticAssert_scratchpadsCounts[
 static volatile long sg_autoregctr = 0;
 #endif
 
+
+/**
+   Clears (most) dynamic state in f, but does not free f and does
+   not free "static" state (that set up by the init process). If
+   closeDatabases is true then any databases managed by f are
+   closed, else they are kept open.
+
+   Client code will not normally need this - it is intended for a
+   particular potential memory optimization case. If (and only if)
+   closeDatabases is true then after calling this, f may be legally
+   re-used as a target for fsl_cx_init().
+
+   This function does not trigger any finializers set for f's client
+   state or output channel.
+
+   Results are undefined if !f or f's memory has not been properly
+   initialized.
+*/
+static void fsl_cx_reset( fsl_cx * const f, bool closeDatabases );
+
+
 int fsl_cx_init( fsl_cx ** tgt, fsl_cx_init_opt const * param ){
   static fsl_cx_init_opt paramDefaults = fsl_cx_init_opt_default_m;
   int rc = 0;
   fsl_cx * f;
-  extern int fsl_cx_install_timeline_crosslinkers(fsl_cx *f);
+  extern int fsl_cx_install_timeline_crosslinkers(fsl_cx * const f)
+    /*in deck.c*/;
   if(!tgt) return FSL_RC_MISUSE;
   else if(!param){
     if(!paramDefaults.output.state){
@@ -12316,7 +12368,7 @@ int fsl_cx_init( fsl_cx ** tgt, fsl_cx_init_opt const * param ){
   }
   if(*tgt){
     void const * allocStamp = (*tgt)->allocStamp;
-    fsl_cx_reset(*tgt, 1) /* just to be safe */;
+    fsl_cx_reset(*tgt, true) /* just to be safe */;
     f = *tgt;
     *f = fsl_cx_empty;
     f->allocStamp = allocStamp;
@@ -12398,7 +12450,7 @@ static void fsl_cx_mcache_clear(fsl_cx *f){
   f->cache.mcache = fsl_mcache_empty;
 }
 
-void fsl_cx_reset(fsl_cx * f, bool closeDatabases){
+static void fsl_cx_reset(fsl_cx * const f, bool closeDatabases){
   fsl_checkin_discard(f);
 #define SFREE(X) fsl_free(X); X = NULL
   if(closeDatabases){
@@ -12434,6 +12486,10 @@ void fsl_cx_reset(fsl_cx * f, bool closeDatabases){
   fsl_id_bag_clear(&f->cache.leafCheck);
   fsl_id_bag_clear(&f->cache.toVerify);
   fsl_cx_clear_mf_seen(f);
+  if(f->xlinkers.list){
+    fsl_free(f->xlinkers.list);
+    f->xlinkers = fsl_xlinker_list_empty;
+  }
 #define SLIST(L) fsl_list_visit_free(L, 1)
 #define GLOBL(X) SLIST(&f->cache.globs.X)
   GLOBL(ignore);
@@ -12453,18 +12509,13 @@ void fsl_cx_finalize( fsl_cx * f ){
   void const * allocStamp = f ? f->allocStamp : NULL;
   if(!f) return;
 
-  if(f->xlinkers.list){
-    fsl_free(f->xlinkers.list);
-    f->xlinkers = fsl_xlinker_list_empty;
-  }
-
   if(f->clientState.finalize.f){
     f->clientState.finalize.f( f->clientState.finalize.state,
                                f->clientState.state );
   }
   f->clientState = fsl_state_empty;
   f->output = fsl_outputer_empty;
-  fsl_cx_reset(f, 1);
+  fsl_cx_reset(f, true);
   fsl_db_close(&f->dbMem);
   *f = fsl_cx_empty;
   if(&fsl_cx_empty == allocStamp){
@@ -12536,7 +12587,7 @@ int fsl_cx_err_get( fsl_cx * f, char const ** str, fsl_size_t * len ){
     : FSL_RC_MISUSE;
 }
 
-fsl_id_t fsl_cx_last_insert_id(fsl_cx * f){
+fsl_id_t fsl_cx_last_insert_id(fsl_cx * const f){
   return (f && f->dbMain && f->dbMain->dbh)
     ? fsl_db_last_insert_id(f->dbMain)
     : -1;
@@ -12691,13 +12742,15 @@ static int fsl_cx_detach_role(fsl_cx * f, fsl_dbrole_e r){
     Attaches the given db file to f with the given role. This function "should"
     be static but we need it in fsl_repo.c when creating a new repository.
 */
-int fsl_cx_attach_role(fsl_cx * f, const char *zDbName, fsl_dbrole_e r){
+int fsl_cx_attach_role(fsl_cx * const f, const char *zDbName,
+                       fsl_dbrole_e r){
   char const * label = fsl_db_role_label(r);
   fsl_db * db = fsl_cx_db_for_role(f, r);
   char ** nameDest = NULL;
   int rc;
   if(!f->dbMain){
-    assert(!"Misuse: f->dbMain has not been set: cannot attach role.");
+    fsl_fatal(FSL_RC_MISUSE,"Internal API misuse: f->dbMain has "
+              "not been set, so cannot attach role.");
     return FSL_RC_MISUSE;
   }
   else if(r & f->dbMain->role){
@@ -12757,164 +12810,13 @@ int fsl_cx_attach_role(fsl_cx * f, const char *zDbName, fsl_dbrole_e r){
   return rc;
 }
 
-
-/*
-  2020-03-04: this function has, since the switch to using ATTACH for
-  all major dbs, largely been supplanted by fsl_cx_attach_role(), but
-  should we ever return to a multi-db-handle world, this
-  implementation (or something close to it) is what we'll want.
-
-  Analog to fossil's db_open_or_attach().
-  
-  This function is still very much up for reconsideration. i'm not
-  terribly happy with the "db roles" here - i'd prefer to have them
-  each in their own struct, but understand that the roles may play a
-  part in query generation, so i haven't yet ruled them out. On
-  20140724 we got a fix which allows us to publish concrete names for
-  all dbs, regardless of which one is the "main", so much of the
-  reason for that concern has been alleviated. In late October, 2014,
-  Dave figured out that multi-attach leads to locking problems, so
-  the innards are being rewritten to use a :memory: db as the
-  permanent "main", and attaching the others.
-
-  Opens or attaches the given db file. zDbName is the
-  file name of the DB. role is the role of that db
-  in the framework (that determines its db name in SQL).
-  
-  The first time this is called, f->dbMain is set to point
-  to fsl_cx_db_for_role(f, role).
-  
-  If f->dbMain is already set then the db is attached using a
-  role-dependent name and role is added to f->dbMain->role's bitmask.
-  
-  If f->dbMain is not open then it is opened here and its role is set
-  to the given role. It is _also_ ATTACHED using its role name. This
-  allows us to publish the names of all Fossil-managed db handles
-  regardless of which one is "main". e.g. if repo is opened first, it
-  is addressable from SQL as both "main" or "repo".
-  
-  The given db zDbName is the name of a database file.  If f->dbMain
-  is not opened then that db is assigned to the given db file,
-  otherwise attach attach zDbName using the name zLabel.
-  
-  If pWasAttached is not NULL then it is set to a true value if the
-  db gets attached, else a false value. It is only modified on success.
-  
-  It is an error to open the same db role more than once, and trying
-  to do so results in a FSL_RC_ACCESS error (f's error state is
-  updated).
-*/
-static int fsl_cx_db_main_open_or_attach( fsl_cx * f,
-                                          const char *zDbName,
-                                          /* const char *zLabel, */
-                                          fsl_dbrole_e role,
-                                          int *pWasAttached){
-  int rc;
-  int wasAttached = 0;
-  fsl_db * db;
-  assert(f);
-  assert(zDbName && *zDbName);
-  assert((FSL_DBROLE_CONFIG==role)
-         || (FSL_DBROLE_CKOUT==role)
-         || (FSL_DBROLE_REPO==role));
-  if(!f || !zDbName) return FSL_RC_MISUSE;
-  else if((FSL_DBROLE_NONE==role) || !*zDbName) return FSL_RC_RANGE;
-  switch(role){
-    case FSL_DBROLE_REPO:
-    case FSL_DBROLE_CKOUT:
-    case FSL_DBROLE_CONFIG:
-      db = fsl_cx_db_for_role(f, role);
-      break;
-    default:
-      assert(!"not possible");
-      db = NULL;
-      /* We'll fall through and segfault in a moment... */
-  }
-  assert(db);
-  try_again:
-  if(!f->dbMain) {
-    assert(!"Not possible since moving to a :memory: main db.");
-    /* This is the first db. It is now our main db. */
-    assert( FSL_DBROLE_NONE==db->role );
-    assert( NULL==db->dbh );
-    assert( role == FSL_DBROLE_CONFIG
-            || role == FSL_DBROLE_REPO 
-            || role == FSL_DBROLE_CKOUT );
-    f->dbMain = db;
-    db->f = f;
-    rc = fsl_db_open( db, zDbName, FSL_OPEN_F_RW );
-    if(!rc){
-      db->role = role;
-      assert(!db->name);
-#if 0
-      db->name = fsl_strdup( fsl_db_role_label(FSL_DBROLE_MAIN) );
-      if(!db->name) rc = FSL_RC_OOM;
-#else
-      /* Many thanks to Simon Slavin, native resident of the sqlite3
-         mailing list, for this... we apply the db's "real" name via
-         an ATTACH, meaning that all the client-side kludgery to get the
-         proper DB name is now obsolete.
-      */
-      rc = fsl_db_attach( db, zDbName, fsl_db_role_label(role) );
-      if(!rc){
-        db->name = fsl_strdup( fsl_db_role_label(role) );
-        if(!db->name) rc = FSL_RC_OOM;
-      }
-#endif
-    }
-    /* MARKER(("db->role=%d\n",db->role)); */
-    /* g.db = fsl_db_open(zDbName); */
-    /* g.zMainDbType = zLabel; */
-    /* f->mainDbType = zLabel; */
-    /* f->dbMain.role = FSL_DBROLE_MAIN; */
-  }else{
-    /* Main db has already been opened. Attach this one to it... */
-    assert( (int)FSL_DBROLE_NONE!=f->dbMain->role );
-    assert( f == f->dbMain->f );
-    if(NULL == f->dbMain->dbh){
-      /* It was closed in the meantime. Re-assign dbMain... */
-      MARKER(("Untested: re-assigning f->dbMain after it has been closed.\n"));
-      assert(!"Broken by addition of f->dbMem.");
-      f->dbMain = NULL;
-      goto try_again;
-    }
-    if((int)role == db->role){
-      return fsl_cx_err_set(f, FSL_RC_ACCESS,
-                            "Cannot open/attach db role "
-                            "#%d (%s) more than once.",
-                            (int)role, fsl_db_role_label(role));
-    }
-    rc = fsl_cx_attach_role(f, zDbName, role);
-    wasAttached = 1;
-  }
-  if(!rc){
-    if(pWasAttached) *pWasAttached = wasAttached;
-  }else{
-    if(db->error.code){
-      fsl_cx_uplift_db_error(f, db);
-    }
-    if(db==f->dbMain) f->dbMain = NULL;
-    fsl_db_close(db);
-  }
-  return rc;
-}
-
-int fsl_config_close( fsl_cx * f ){
+int fsl_config_close( fsl_cx * const f ){
   if(!f) return FSL_RC_MISUSE;
   else{
     int rc;
-    fsl_db * db = &f->config.db;
-    if(db->dbh){
-      /* Config is our main db. Close them all */
-      assert(!"Not possible since f->dbMem added.");
-      assert(f->dbMain==db);
-      fsl_ckout_close(f);
-      fsl_repo_close(f);
-      rc = fsl_db_close(db);
-      f->dbMain = NULL;
-    }else if(f->dbMain && (FSL_DBROLE_CONFIG & f->dbMain->role)){
+    fsl_db * const db = &f->config.db;
+    if(f->dbMain && (FSL_DBROLE_CONFIG & f->dbMain->role)){
       /* Config db is ATTACHed. */
-      assert(f->dbMain!=db);
       rc = fsl_cx_detach_role(f, FSL_DBROLE_CONFIG);
     }
     else rc = FSL_RC_NOT_FOUND;
@@ -12924,22 +12826,14 @@ int fsl_config_close( fsl_cx * f ){
   }
 }
 
-int fsl_repo_close( fsl_cx * f ){
+int fsl_repo_close( fsl_cx * const f ){
   if(fsl_cx_transaction_level(f)){
     return fsl_cx_err_set(f, FSL_RC_MISUSE,
                           "Cannot close repo with opened transaction.");
   }else{
     int rc;
-    fsl_db * db = &f->repo.db;
-    if(db->dbh){
-      /* Repo is our main db. Close them all */
-      assert(!"Not possible since f->dbMem added.");
-      assert(f->dbMain==db);
-      fsl_config_close(f);
-      fsl_ckout_close(f);
-      rc = fsl_db_close(db);
-      f->dbMain = NULL;
-    }else if(f->dbMain && (FSL_DBROLE_REPO & f->dbMain->role)){
+    fsl_db * const db = &f->repo.db;
+    if(f->dbMain && (FSL_DBROLE_REPO & f->dbMain->role)){
       /* Repo db is ATTACHed. */
       if(FSL_DBROLE_CKOUT & f->dbMain->role){
         rc = fsl_cx_err_set(f, FSL_RC_MISUSE,
@@ -12957,52 +12851,15 @@ int fsl_repo_close( fsl_cx * f ){
   }
 }
 
-int fsl_ckout_close( fsl_cx * f ){
+int fsl_ckout_close( fsl_cx * const f ){
   if(fsl_cx_transaction_level(f)){
     return fsl_cx_err_set(f, FSL_RC_MISUSE,
                           "Cannot close checkout with opened transaction.");
   }else{
     int rc;
-    fsl_db * db = &f->ckout.db;
-#if 0
-    fsl_repo_close(f)
-        /*
-          Ignore error - it might not be opened.  Close it first
-          because it was (if things went normally) attached to
-          f->ckout.db resp. HOWEVER: we have a bug-in-waiting here,
-          potentially. If repo becomes the main db for an attached
-          checkout (which isn't current possibly because opening a
-          checkout closes/(re)opens the repo) then we stomp on our db
-          handle here. Hypothetically.
-
-          If the repo is dbMain:
-
-          a) we cannot have a checkout because fsl_repo_open()
-          fails if a repo is already opened.
-
-          b) fsl_repo_close() will clear f->dbMain,
-          leaving the code below to return FSL_RC_NOT_FOUND,
-          which would be misleading.
-
-          But that's all hypothetical - best we make it impossible
-          for the public API to have a checkout without a repo
-          or a repo/checkout mismatch.
-        */
-        ;
-#endif
-    if(db->dbh){
-      /* checkout is our main db. Close them all. */
-      assert(!"Not possible since f->dbMem added.");
-      assert(!f->repo.db.dbh);
-      assert(f->dbMain==db);
-      fsl_repo_close(f);
-      fsl_config_close(f);
-      rc = fsl_db_close(db);
-      f->dbMain = NULL;
-    }
-    else if(f->dbMain && (FSL_DBROLE_CKOUT & f->dbMain->role)){
+    fsl_db * const db = &f->ckout.db;
+    if(f->dbMain && (FSL_DBROLE_CKOUT & f->dbMain->role)){
       /* Checkout db is ATTACHed. */
-      assert(f->dbMain!=db);
       rc = fsl_cx_detach_role(f, FSL_DBROLE_CKOUT);
       fsl_repo_close(f) /*
                           Because the repo is implicitly opened, we
@@ -13013,8 +12870,7 @@ int fsl_ckout_close( fsl_cx * f ){
                           the checkout but keeping the repo opened.
                           The repo can always be re-opened by itself.
                         */;
-    }
-    else{
+    }else{
       rc = FSL_RC_NOT_FOUND;
     }
     fsl_free(f->ckout.uuid);
@@ -13043,65 +12899,59 @@ static int fsl_cx_ckout_open_db(fsl_cx * f, const char *zDbName){
                           "checkout db: %s",
                           zDbName);
   }
-  rc = fsl_cx_db_main_open_or_attach(f, zDbName,
-                                     FSL_DBROLE_CKOUT,
-                                     NULL);
+  rc = fsl_cx_attach_role(f, zDbName, FSL_DBROLE_CKOUT);
   return rc;
-#if 0
-  /* Historical bits: no longer needed(?). */
-
-  zVFileDef = fsl_db_text(0, "SELECT sql FROM %s.sqlite_master"
-                          " WHERE name=='vfile'",
-                          fsl_cx_db_name("localdb")); /* ==> "ckout" */
-  if( zVFileDef==0 ) return 0;
-
-  /* If the "isexe" column is missing from the vfile table, then
-     add it now.   This code added on 2010-03-06.  After all users have
-     upgraded, this code can be safely deleted.
-  */
-  if( !fsl_str_glob("* isexe *", zVFileDef) ){
-    fsl_db_multi_exec("ALTER TABLE vfile ADD COLUMN isexe BOOLEAN DEFAULT 0");
-  }
-
-  /* If "islink"/"isLink" columns are missing from tables, then
-     add them now.   This code added on 2011-01-17 and 2011-08-27.
-     After all users have upgraded, this code can be safely deleted.
-  */
-  if( !fsl_str_glob("* islink *", zVFileDef) ){
-    db_multi_exec("ALTER TABLE vfile ADD COLUMN islink BOOLEAN DEFAULT 0");
-    if( db_local_table_exists_but_lacks_column("stashfile", "isLink") ){
-      db_multi_exec("ALTER TABLE stashfile ADD COLUMN isLink BOOL DEFAULT 0");
-    }
-    if( db_local_table_exists_but_lacks_column("undo", "isLink") ){
-      db_multi_exec("ALTER TABLE undo ADD COLUMN isLink BOOLEAN DEFAULT 0");
-    }
-    if( db_local_table_exists_but_lacks_column("undo_vfile", "islink") ){
-      db_multi_exec("ALTER TABLE undo_vfile ADD COLUMN islink BOOL DEFAULT 0");
-    }
-  }
-#endif
-  return 0;
 }
 
 
-int fsl_cx_prepare( fsl_cx *f, fsl_stmt * tgt, char const * sql,
-                      ... ){
-  if(!f || !f->dbMain) return FSL_RC_MISUSE;
-  else{
-    int rc;
-    va_list args;
-    va_start(args,sql);
-    rc = fsl_db_preparev( f->dbMain, tgt, sql, args );
-    va_end(args);
-    return rc;
-  }
+int fsl_cx_execv( fsl_cx * const f, char const * sql, va_list args ){
+  int const rc = (f->dbMain && sql)
+    ? fsl_db_execv(f->dbMain, sql, args)
+    : FSL_RC_MISUSE;
+  return rc ? fsl_cx_uplift_db_error2(f, f->dbMain, rc) : 0;
 }
 
-int fsl_cx_preparev( fsl_cx *f, fsl_stmt * tgt, char const * sql,
-                       va_list args ){
-  return (f && f->dbMain && tgt)
+int fsl_cx_exec( fsl_cx * const f, char const * sql, ... ){
+  int rc;
+  va_list args;
+  va_start(args,sql);
+  rc = fsl_cx_execv( f, sql, args );
+  va_end(args);
+  return rc;
+}
+
+int fsl_cx_exec_multiv( fsl_cx * const f, char const * sql, va_list args ){
+  int const rc = (f->dbMain && sql)
+    ? fsl_db_exec_multiv(f->dbMain, sql, args)
+    : FSL_RC_MISUSE;
+  return rc ? fsl_cx_uplift_db_error2(f, f->dbMain, rc) : 0;
+}
+
+int fsl_cx_exec_multi( fsl_cx * const f, char const * sql, ... ){
+  int rc;
+  va_list args;
+  va_start(args,sql);
+  rc = fsl_cx_exec_multiv( f, sql, args );
+  va_end(args);
+  return rc;
+}
+
+int fsl_cx_preparev( fsl_cx * const f, fsl_stmt * const tgt, char const * sql,
+                     va_list args ){
+  int const rc = (f->dbMain && tgt)
     ? fsl_db_preparev(f->dbMain, tgt, sql, args)
     : FSL_RC_MISUSE;
+  return rc ? fsl_cx_uplift_db_error2(f, f->dbMain, rc) : 0;
+}
+
+int fsl_cx_prepare( fsl_cx * const f, fsl_stmt * const tgt, char const * sql,
+                      ... ){
+  int rc;
+  va_list args;
+  va_start(args,sql);
+  rc = fsl_cx_preparev( f, tgt, sql, args );
+  va_end(args);
+  return rc;
 }
 
 /**
@@ -13208,12 +13058,10 @@ int fsl_config_global_preferred_name(char ** zOut){
   return rc;
 }
 
-int fsl_config_open( fsl_cx * f, char const * openDbName ){
+int fsl_config_open( fsl_cx * const f, char const * openDbName ){
   int rc = 0;
   const char * zDbName = 0;
   char * zPrefName = 0;
-  bool useAttach = false /* TODO? Move this into a parameter?
-                            Do we need the fossil behaviour? */;
   if(!f) return FSL_RC_MISUSE;
   else if(f->config.db.dbh){
     fsl_config_close(f);
@@ -13244,19 +13092,7 @@ int fsl_config_open( fsl_cx * f, char const * openDbName ){
     goto end;
   }
 #endif
-
-  if( useAttach ){
-    rc = fsl_cx_attach_role(f, zDbName, FSL_DBROLE_CONFIG);
-  }else{
-    rc = fsl_cx_db_main_open_or_attach(f, zDbName,
-                                       FSL_DBROLE_CONFIG,
-                                       NULL);
-    /* rc = fsl_db_open(&f->config.db, zDbName, FSL_OPEN_F_RWC ); */
-  }
-  if(!rc && !f->dbMain){
-    assert(!"Not possible(?) since addition of f->dbMem");
-    f->dbMain = &f->config.db;
-  }
+  rc = fsl_cx_attach_role(f, zDbName, FSL_DBROLE_CONFIG);
   end:
   fsl_free(zPrefName);
   return rc;
@@ -13281,6 +13117,47 @@ static int fsl_cx_load_glob_lists(fsl_cx * f){
   if(!rc) rc = fsl_config_globs_load(f, &f->cache.globs.crnl, "crnl-glob");
   return rc;
 }
+
+int fsl_cx_glob_list( fsl_cx * const f,
+                      fsl_glob_category_e gtype,
+                      fsl_list **tgt,
+                      bool reload ){
+  fsl_list * li = NULL;
+  char const * reloadKey = NULL;
+  switch(gtype){
+    case FSL_GLOBS_IGNORE: li = &f->cache.globs.ignore;
+      reloadKey = "ignore-glob"; break;
+    case FSL_GLOBS_CRNL: li = &f->cache.globs.crnl;
+      reloadKey = "crnl-glob"; break;
+    case FSL_GLOBS_BINARY: li = &f->cache.globs.binary;
+      reloadKey = "binary-glob"; break;
+    default:
+      return FSL_RC_RANGE;
+  }
+  int rc = 0;
+  if(reload){
+    assert(reloadKey);
+    fsl_glob_list_clear(li);
+    rc = fsl_config_globs_load(f, li, reloadKey);
+  }
+  if(0==rc) *tgt = li;
+  return rc;
+}
+
+fsl_glob_category_e fsl_glob_name_to_category(char const * str){
+  if(str){
+#define CHECK(PRE,E) \
+    if(*str==PRE[0] &&                          \
+       (0==fsl_strcmp(PRE "-glob",str)          \
+        || 0==fsl_strcmp(PRE,str))) return E;
+    CHECK("ignore", FSL_GLOBS_IGNORE);
+    CHECK("binary", FSL_GLOBS_BINARY);
+    CHECK("crnl", FSL_GLOBS_CRNL);
+#undef CHECK
+  }
+  return FSL_GLOBS_INVALID;
+}
+
 
 /**
    To be called after a repo or checkout/repo combination has been
@@ -13309,22 +13186,19 @@ static void fsl_cx_fetch_hash_policy(fsl_cx * f){
   f->cxConfig.hashPolicy = p;
 }
 
-int fsl_repo_open( fsl_cx * f, char const * repoDbFile/* , bool readOnlyCurrentlyIgnored */ ){
-  if(!f || !repoDbFile || !*repoDbFile) return FSL_RC_MISUSE;
-  else if(fsl_cx_db_repo(f)){
+int fsl_repo_open( fsl_cx * const f, char const * repoDbFile
+                   /* , bool readOnlyCurrentlyIgnored */ ){
+  if(fsl_cx_db_repo(f)){
     return fsl_cx_err_set(f, FSL_RC_ACCESS,
                           "Context already has an opened repository.");
-  }
-  else {
+  }else{
     int rc;
     if(0!=fsl_file_access( repoDbFile, F_OK )){
       rc = fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
                           "Repository db [%s] not found or cannot be read.",
                           repoDbFile);
     }else{
-      rc = fsl_cx_db_main_open_or_attach(f, repoDbFile,
-                                         FSL_DBROLE_REPO,
-                                         NULL);
+      rc = fsl_cx_attach_role(f, repoDbFile, FSL_DBROLE_REPO);
       if(!rc && !(FSL_CX_F_IS_OPENING_CKOUT & f->flags)){
         rc = fsl_cx_after_open(f);
       }
@@ -13472,7 +13346,7 @@ static int fsl_cx_ckout_version_set(fsl_cx *f, fsl_id_t rid,
   assert(rid>=0);
   u = uuid
     ? fsl_strdup(uuid)
-    : (rid ? fsl_rid_to_uuid(f, rid) : 0);
+    : (rid ? fsl_rid_to_uuid(f, rid) : NULL);
   if(rid && !u) return FSL_RC_OOM;
   f->ckout.rid = rid;
   fsl_free(f->ckout.uuid);
@@ -13523,7 +13397,7 @@ void fsl_ckout_version_info(fsl_cx * const f, fsl_id_t * const rid,
 }
 
 int fsl_ckout_db_search( char const * dirName, bool checkParentDirs,
-                         fsl_buffer * pOut ){
+                         fsl_buffer * const pOut ){
   int rc;
   fsl_int_t dLen = 0, i;
   enum { DbCount = 2 };
@@ -13776,10 +13650,10 @@ fsl_xlinker * fsl_xlinker_by_name( fsl_cx * f, char const * name ){
   return NULL;
 }
 
-int fsl_xlink_listener( fsl_cx * f, char const * name,
+int fsl_xlink_listener( fsl_cx * const f, char const * name,
                         fsl_deck_xlink_f cb, void * cbState ){
   fsl_xlinker * x;
-  if(!f || !cb || !name || !*name) return FSL_RC_MISUSE;
+  if(!*name) return FSL_RC_MISUSE;
   x = fsl_xlinker_by_name(f, name);
   if(x){
     /* Replace existing entry */
@@ -13917,7 +13791,7 @@ char const * fsl_cx_filename_collation(fsl_cx const * f){
 }
 
 
-void fsl_cx_content_buffer_yield(fsl_cx * f){
+void fsl_cx_content_buffer_yield(fsl_cx * const f){
   enum { MaxSize = 1024 * 1024 * 2 };
   assert(f);
   if(f->fileContent.capacity>MaxSize){
@@ -13931,7 +13805,7 @@ fsl_error const * fsl_cx_err_get_e(fsl_cx const * f){
   return f ? &f->error : NULL;
 }
 
-int fsl_cx_close_dbs( fsl_cx * f ){
+int fsl_cx_close_dbs( fsl_cx * const f ){
   if(fsl_cx_transaction_level(f)){
     return fsl_cx_err_set(f, FSL_RC_MISUSE,
                           "Cannot close the databases when a "
@@ -13950,7 +13824,7 @@ int fsl_cx_close_dbs( fsl_cx * f ){
   return rc;
 }
 
-char const * fsl_cx_glob_matches( fsl_cx * f, int gtype,
+char const * fsl_cx_glob_matches( fsl_cx * const f, int gtype,
                                   char const * str ){
   int i, count = 0;
   char const * rv = NULL;
@@ -14398,18 +14272,15 @@ time_t fsl_cx_time_adj(fsl_cx const * f, time_t clock){
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
-  Copyright 2013-2021 Stephan Beal (https://wanderinghorse.net).
+  Copyright 2013-2021 The Libfossil Authors, see LICENSES/BSD-2-Clause.txt
 
+  SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+  SPDX-FileCopyrightText: 2021 The Libfossil Authors
+  SPDX-ArtifactOfProjectName: Libfossil
+  SPDX-FileType: Code
 
-  
-  This program is free software; you can redistribute it and/or
-  modify it under the terms of the Simplified BSD License (also
-  known as the "2-Clause License" or "FreeBSD License".)
-  
-  This program is distributed in the hope that it will be useful,
-  but without any warranty; without even the implied warranty of
-  merchantability or fitness for a particular purpose.
-  
+  Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
+
   *****************************************************************************
   This file contains the fsl_db_xxx() and fsl_stmt_xxx() parts of the
   API.
@@ -14433,7 +14304,7 @@ time_t fsl_cx_time_adj(fsl_cx const * f, time_t clock){
 #if 0
 /**
     fsl_list_visitor_f() impl which requires that obj be NULL or
-    a (fsl_st*), which it passed to fsl_stmt_finalize().
+    a (fsl_stmt*), which it passed to fsl_stmt_finalize().
  */
 static int fsl_list_v_fsl_stmt_finalize(void * obj, void * visitorState ){
   if(obj) fsl_stmt_finalize( (fsl_stmt*)obj );
@@ -14441,7 +14312,7 @@ static int fsl_list_v_fsl_stmt_finalize(void * obj, void * visitorState ){
 }
 #endif
 
-void fsl_db_clear_strings(fsl_db * db, bool alsoErrorState ){
+void fsl_db_clear_strings(fsl_db * const db, bool alsoErrorState ){
   fsl_free(db->filename);
   db->filename = NULL;
   fsl_free(db->name);
@@ -14449,13 +14320,13 @@ void fsl_db_clear_strings(fsl_db * db, bool alsoErrorState ){
   if(alsoErrorState) fsl_error_clear(&db->error);
 }
 
-int fsl_db_err_get( fsl_db const * db, char const ** msg, fsl_size_t * len ){
+int fsl_db_err_get( fsl_db const * const db, char const ** msg, fsl_size_t * len ){
   return db
     ? fsl_error_get(&db->error, msg, len)
     : FSL_RC_MISUSE;
 }
 
-fsl_db * fsl_stmt_db( fsl_stmt * stmt ){
+fsl_db * fsl_stmt_db( fsl_stmt * const stmt ){
   return stmt ? stmt->db : NULL;
 }
 
@@ -14467,7 +14338,7 @@ fsl_db * fsl_stmt_db( fsl_stmt * stmt ){
     long as db is opened). Results are undefined if !db or db is not
     opened.
  */
-static int fsl_err_from_db( fsl_db * db, int dbCode ){
+static int fsl_err_from_db( fsl_db * const db, int dbCode ){
   assert(db && db->dbh);
   db->error.msg.used =0 ;
   return fsl_error_set(&db->error, FSL_RC_DB,
@@ -14475,14 +14346,13 @@ static int fsl_err_from_db( fsl_db * db, int dbCode ){
                        dbCode, sqlite3_errmsg(db->dbh));
 }
 
-char const * fsl_stmt_sql( fsl_stmt * stmt, fsl_size_t * len ){
+char const * fsl_stmt_sql( fsl_stmt * const stmt, fsl_size_t * const len ){
   return stmt
     ? fsl_buffer_cstr2(&stmt->sql, len)
     : NULL;
 }
 
 char const * fsl_db_filename(fsl_db const * db, fsl_size_t * len){
-  if(!db) return NULL;
   if(len && db->filename) *len = fsl_strlen(db->filename);
   return db->filename;
 }
@@ -14496,12 +14366,24 @@ fsl_id_t fsl_db_last_insert_id(fsl_db *db){
 /**
     Cleans up db->beforeCommit and its contents.
  */
-static void fsl_db_cleanup_beforeCommit( fsl_db * db ){
+static void fsl_db_cleanup_beforeCommit( fsl_db * const db ){
   fsl_list_visit( &db->beforeCommit, -1, fsl_list_v_fsl_free, NULL );
   fsl_list_reserve(&db->beforeCommit, 0);
 }
 
-fsl_size_t fsl_db_stmt_cache_clear(fsl_db * db){
+
+/**
+   Immediately cleans up all cached statements (if any) and returns
+   the number of statements cleaned up. It is illegal to call this
+   while any of the cached statements are actively being used (have
+   not been fsl_stmt_cached_yield()ed), and doing so will lead to
+   undefined results if the statement(s) in question are used after
+   this function completes.
+
+   @see fsl_db_prepare_cached()
+   @see fsl_stmt_cached_yield()
+*/
+static fsl_size_t fsl_db_stmt_cache_clear(fsl_db * const db){
   fsl_size_t rc = 0;
   if(db && db->cacheHead){
     fsl_stmt * st;
@@ -14516,65 +14398,64 @@ fsl_size_t fsl_db_stmt_cache_clear(fsl_db * db){
   return rc;
 }
 
-int fsl_db_close( fsl_db * db ){
-  if(!db) return FSL_RC_MISUSE;
-  else{
-    void const * allocStamp = db->allocStamp;
-    fsl_cx * f = db->f;
-    fsl_db_stmt_cache_clear(db);
-    if(db->f && db->f->dbMain==db){
-      /*
-         Horrible, horrible dependency, and only necessary if the
-         fsl_cx API gets sloppy or repo/checkout/config DBs are
-         otherwised closed improperly (i.e. not via the fsl_cx API).
-      */
-      assert(0 != db->role);
-      f->dbMain = NULL;
-    }
-    while(db->beginCount>0){
-      fsl_db_transaction_end(db, 1);
-    }
-    if(0!=db->openStatementCount){
-      MARKER(("WARNING: %d open statement(s) left on db [%s].\n",
-              (int)db->openStatementCount, db->filename));
-    }
-    if(db->dbh){
-      sqlite3_close(db->dbh);
-      /* ignoring results in the style of "destructors may not
-         throw". */
-    }
-    fsl_db_clear_strings(db, 1);
-    fsl_db_cleanup_beforeCommit(db);
-    *db = fsl_db_empty;
-    if(&fsl_db_empty == allocStamp){
-      fsl_free( db );
-    }else{
-      db->allocStamp = allocStamp;
-      db->f = f;
-    }
-    return 0;
+void fsl_db_close( fsl_db * db ){
+  if(!db) return;
+  void const * allocStamp = db->allocStamp;
+  fsl_cx * const f = db->f;
+  fsl_db_stmt_cache_clear(db);
+  if(db->f && db->f->dbMain==db){
+    /*
+      Horrible, horrible dependency, and only necessary if the
+      fsl_cx API gets sloppy or repo/checkout/config DBs are
+      otherwised closed improperly (i.e. not via the fsl_cx API).
+    */
+    assert(0 != db->role);
+    f->dbMain = NULL;
   }
+  while(db->beginCount>0){
+    fsl_db_transaction_end(db, 1);
+  }
+  if(0!=db->openStatementCount){
+    MARKER(("WARNING: %d open statement(s) left on db [%s].\n",
+            (int)db->openStatementCount, db->filename));
+  }
+  if(db->dbh){
+    sqlite3_close(db->dbh);
+    /* ignoring results in the style of "destructors may not
+       throw". */
+  }
+  fsl_db_clear_strings(db, 1);
+  fsl_db_cleanup_beforeCommit(db);
+  fsl_buffer_clear(&db->cachePrepBuf);
+  *db = fsl_db_empty;
+  if(&fsl_db_empty == allocStamp){
+    fsl_free( db );
+  }else{
+    db->allocStamp = allocStamp;
+    db->f = f;
+  }
+  return;
 }
 
-void fsl_db_err_reset( fsl_db * db ){
+void fsl_db_err_reset( fsl_db * const db ){
   if(db && (db->error.code||db->error.msg.used)){
     fsl_error_reset(&db->error);
   }
 }
 
 
-int fsl_db_attach(fsl_db * db, const char *zDbName, const char *zLabel){
+int fsl_db_attach(fsl_db * const db, const char *zDbName, const char *zLabel){
   return (db && db->dbh && zDbName && *zDbName && zLabel && *zLabel)
     ? fsl_db_exec(db, "ATTACH DATABASE %Q AS %s", zDbName, zLabel)
     : FSL_RC_MISUSE;
 }
-int fsl_db_detach(fsl_db * db, const char *zLabel){
+int fsl_db_detach(fsl_db * const db, const char *zLabel){
   return (db && db->dbh && zLabel && *zLabel)
     ? fsl_db_exec(db, "DETACH DATABASE %s /*%s()*/", zLabel, __func__)
     : FSL_RC_MISUSE;
 }
 
-char const * fsl_db_name(fsl_db const * db){
+char const * fsl_db_name(fsl_db const * const db){
   return db ? db->name : NULL;
 }
 
@@ -14600,9 +14481,9 @@ const char * fsl_db_role_label(fsl_dbrole_e r){
   }
 }
 
-char * fsl_db_julian_to_iso8601( fsl_db * db, double j,
-                                 char msPrecision,
-                                 char localTime){
+char * fsl_db_julian_to_iso8601( fsl_db * const db, double j,
+                                 bool msPrecision,
+                                 bool localTime){
   char * s = NULL;
   fsl_stmt * st = NULL;
   if(db && db->dbh && (j>=0.0)){
@@ -14628,7 +14509,7 @@ char * fsl_db_julian_to_iso8601( fsl_db * db, double j,
   return s;
 }
 
-char * fsl_db_unix_to_iso8601( fsl_db * db, fsl_time_t t, char localTime ){
+char * fsl_db_unix_to_iso8601( fsl_db * const db, fsl_time_t t, bool localTime ){
   char * s = NULL;
   fsl_stmt st = fsl_stmt_empty;
   if(db && db->dbh && (t>=0)){
@@ -14665,7 +14546,7 @@ FSL_STMT_F_CACHE_HELD = 0x01,
 FSL_STMT_F_PREP_CACHE = 0x10
 };
 
-int fsl_db_preparev( fsl_db *db, fsl_stmt * tgt, char const * sql, va_list args ){
+int fsl_db_preparev( fsl_db  * const db, fsl_stmt * const tgt, char const * sql, va_list args ){
   if(!db || !tgt || !sql) return FSL_RC_MISUSE;
   else if(!db->dbh){
     return fsl_error_set(&db->error, FSL_RC_NOT_FOUND, "Db is not opened.");
@@ -14747,7 +14628,7 @@ int fsl_db_preparev( fsl_db *db, fsl_stmt * tgt, char const * sql, va_list args 
   }
 }
 
-int fsl_db_prepare( fsl_db *db, fsl_stmt * tgt, char const * sql, ... ){
+int fsl_db_prepare( fsl_db * const db, fsl_stmt * const tgt, char const * sql, ... ){
   int rc;
   va_list args;
   va_start(args,sql);
@@ -14756,18 +14637,37 @@ int fsl_db_prepare( fsl_db *db, fsl_stmt * tgt, char const * sql, ... ){
   return rc;
 }
 
-int fsl_db_preparev_cached( fsl_db * db, fsl_stmt ** rv,
+
+int fsl_db_preparev_cached( fsl_db * const db, fsl_stmt ** rv,
                             char const * sql, va_list args ){
   int rc = 0;
-  fsl_buffer buf = fsl_buffer_empty;
+  fsl_buffer * const buf = &db->cachePrepBuf;
   fsl_stmt * st = NULL;
   fsl_stmt * cs = NULL;
   if(!db || !rv || !sql) return FSL_RC_MISUSE;
   else if(!*sql) return FSL_RC_RANGE;
-  rc = fsl_buffer_appendfv( &buf, sql, args );
+  if(!buf->capacity && fsl_buffer_reserve(buf, 1024*2)){
+    return FSL_RC_OOM;
+  }
+  fsl_buffer_reuse(buf);
+  rc = fsl_buffer_appendfv(buf, sql, args);
   if(rc) goto end;
+  /**
+     Hash buf's contents using a very primitive algo and stores the
+     hash in buf->cursor. This is a blatant abuse of that member but
+     we're otherwise not using it on these buffer instances. We use
+     this to slightly speed up lookup of previously-cached entries and
+     reduce the otherwise tremendous number of calls to
+     fsl_buffer_compare() libfossil makes.
+  */
+  for(fsl_size_t i = 0; i < buf->used; ++i){
+    //buf->cursor = (buf->cursor<<3) ^ buf->cursor ^ buf->mem[i];
+    buf->cursor = 31 * buf->cursor + (buf->mem[i] * 307);
+  }
   for( cs = db->cacheHead; cs; cs = cs->next ){
-    if(0==fsl_buffer_compare(&buf, &cs->sql)){
+    if(cs->sql.cursor==buf->cursor/*hash value!*/
+       && buf->used==cs->sql.used
+       && 0==fsl_buffer_compare(buf, &cs->sql)){
       if(cs->flags & FSL_STMT_F_CACHE_HELD){
         rc = fsl_error_set(&db->error, FSL_RC_ACCESS,
                            "Cached statement is already in use. "
@@ -14779,6 +14679,7 @@ int fsl_db_preparev_cached( fsl_db * db, fsl_stmt ** rv,
         goto end;
       }
       cs->flags |= FSL_STMT_F_CACHE_HELD;
+      ++cs->cachedHits;
       *rv = cs;
       goto end;
     }
@@ -14789,18 +14690,18 @@ int fsl_db_preparev_cached( fsl_db * db, fsl_stmt ** rv,
     goto end;
   }
   st->flags |= FSL_STMT_F_PREP_CACHE;
-  rc = fsl_db_prepare( db, st, "%b", &buf );
+  rc = fsl_db_prepare( db, st, "%b", buf );
   if(rc){
     fsl_free(st);
     st = 0;
   }else{
+    st->sql.cursor = buf->cursor/*hash value!*/;
     st->next = db->cacheHead;
     db->cacheHead = st;
     st->flags = FSL_STMT_F_CACHE_HELD;
     *rv = st;
   }
   end:
-  fsl_buffer_clear(&buf);
   return rc;
 }
 
@@ -14813,7 +14714,7 @@ int fsl_db_prepare_cached( fsl_db * db, fsl_stmt ** st, char const * sql, ... ){
   return rc;
 }
 
-int fsl_stmt_cached_yield( fsl_stmt * st ){
+int fsl_stmt_cached_yield( fsl_stmt * const st ){
   if(!st || !st->db || !st->stmt) return FSL_RC_MISUSE;
   else if(!(st->flags & FSL_STMT_F_CACHE_HELD)) {
     return fsl_error_set(&st->db->error, FSL_RC_MISUSE,
@@ -14828,7 +14729,7 @@ int fsl_stmt_cached_yield( fsl_stmt * st ){
   }
 }
 
-int fsl_db_before_commitv( fsl_db * db, char const * sql,
+int fsl_db_before_commitv( fsl_db * const db, char const * const sql,
                            va_list args ){
   int rc = 0;
   char * cp = NULL;
@@ -14844,7 +14745,7 @@ int fsl_db_before_commitv( fsl_db * db, char const * sql,
   return rc;
 }
 
-int fsl_db_before_commit( fsl_db *db, char const * sql, ... ){
+int fsl_db_before_commit( fsl_db * const db, char const * const sql, ... ){
   int rc;
   va_list args;
   va_start(args,sql);
@@ -14853,7 +14754,7 @@ int fsl_db_before_commit( fsl_db *db, char const * sql, ... ){
   return rc;
 }
 
-int fsl_stmt_finalize( fsl_stmt * stmt ){
+int fsl_stmt_finalize( fsl_stmt * const stmt ){
   if(!stmt) return FSL_RC_MISUSE;
   else{
     void const * allocStamp = stmt->allocStamp;
@@ -14902,7 +14803,7 @@ int fsl_stmt_finalize( fsl_stmt * stmt ){
   }
 }
 
-int fsl_stmt_step( fsl_stmt * stmt ){
+int fsl_stmt_step( fsl_stmt * const stmt ){
   if(!stmt || !stmt->stmt) return FSL_RC_MISUSE;
   else{
     int const rc = sqlite3_step(stmt->stmt);
@@ -14914,10 +14815,9 @@ int fsl_stmt_step( fsl_stmt * stmt ){
       case SQLITE_DONE:
         return FSL_RC_STEP_DONE;
       default:
-        fsl_error_set(&stmt->db->error, FSL_RC_STEP_ERROR,
-                      "sqlite error #%d: %s",
-                      rc, sqlite3_errmsg(stmt->db->dbh));
-        return FSL_RC_STEP_ERROR;
+        return fsl_error_set(&stmt->db->error, FSL_RC_STEP_ERROR,
+                             "sqlite3_step(): sqlite error #%d: %s",
+                             rc, sqlite3_errmsg(stmt->db->dbh));
     }
   }
 }
@@ -14975,8 +14875,8 @@ int fsl_stmt_each( fsl_stmt * stmt, fsl_stmt_each_f callback,
   }
 }
 
-int fsl_stmt_reset2( fsl_stmt * stmt, bool resetRowCounter ){
-  if(!stmt || !stmt->stmt || !stmt->db) return FSL_RC_MISUSE;
+int fsl_stmt_reset2( fsl_stmt * const stmt, bool resetRowCounter ){
+  if(!stmt->stmt || !stmt->db) return FSL_RC_MISUSE;
   else{
     int const rc = sqlite3_reset(stmt->stmt);
     if(resetRowCounter) stmt->rowCount = 0;
@@ -14987,24 +14887,24 @@ int fsl_stmt_reset2( fsl_stmt * stmt, bool resetRowCounter ){
   }
 }
 
-int fsl_stmt_reset( fsl_stmt * stmt ){
+int fsl_stmt_reset( fsl_stmt * const stmt ){
   return fsl_stmt_reset2(stmt, 0);
 }
 
-int fsl_stmt_col_count( fsl_stmt const * stmt ){
+int fsl_stmt_col_count( fsl_stmt const * const stmt ){
   return (!stmt || !stmt->stmt)
     ? -1
     : stmt->colCount
     ;
 }
 
-char const * fsl_stmt_col_name(fsl_stmt * stmt, int index){
+char const * fsl_stmt_col_name(fsl_stmt * const stmt, int index){
   return (stmt && stmt->stmt && (index>=0 && index<stmt->colCount))
     ? sqlite3_column_name(stmt->stmt, index)
     : NULL;
 }
 
-int fsl_stmt_param_count( fsl_stmt const * stmt ){
+int fsl_stmt_param_count( fsl_stmt const * const stmt ){
   return (!stmt || !stmt->stmt)
     ? -1
     : stmt->paramCount;
@@ -15132,42 +15032,42 @@ int fsl_stmt_bind_step( fsl_stmt * st, char const * fmt, ... ){
   if(!(stmt && stmt->stmt && stmt->db && stmt->db->dbh)) return FSL_RC_MISUSE; else
 #define BIND_PARAM_CHECK2 BIND_PARAM_CHECK \
   if(ndx<1 || ndx>stmt->paramCount) return FSL_RC_RANGE; else
-int fsl_stmt_bind_null( fsl_stmt * stmt, int ndx ){
+int fsl_stmt_bind_null( fsl_stmt * const stmt, int ndx ){
   BIND_PARAM_CHECK2 {
     int const rc = sqlite3_bind_null( stmt->stmt, ndx );
     return rc ? fsl_err_from_db(stmt->db, rc) : 0;
   }
 }
 
-int fsl_stmt_bind_int32( fsl_stmt * stmt, int ndx, int32_t v ){
+int fsl_stmt_bind_int32( fsl_stmt * const stmt, int ndx, int32_t v ){
   BIND_PARAM_CHECK2 {
     int const rc = sqlite3_bind_int( stmt->stmt, ndx, (int)v );
     return rc ? fsl_err_from_db(stmt->db, rc) : 0;
   }
 }
 
-int fsl_stmt_bind_int64( fsl_stmt * stmt, int ndx, int64_t v ){
+int fsl_stmt_bind_int64( fsl_stmt * const stmt, int ndx, int64_t v ){
   BIND_PARAM_CHECK2 {
     int const rc = sqlite3_bind_int64( stmt->stmt, ndx, (sqlite3_int64)v );
     return rc ? fsl_err_from_db(stmt->db, rc) : 0;
   }
 }
 
-int fsl_stmt_bind_id( fsl_stmt * stmt, int ndx, fsl_id_t v ){
+int fsl_stmt_bind_id( fsl_stmt * const stmt, int ndx, fsl_id_t v ){
   BIND_PARAM_CHECK2 {
     int const rc = sqlite3_bind_int64( stmt->stmt, ndx, (sqlite3_int64)v );
     return rc ? fsl_err_from_db(stmt->db, rc) : 0;
   }
 }
 
-int fsl_stmt_bind_double( fsl_stmt * stmt, int ndx, double v ){
+int fsl_stmt_bind_double( fsl_stmt * const stmt, int ndx, double v ){
   BIND_PARAM_CHECK2 {
     int const rc = sqlite3_bind_double( stmt->stmt, ndx, (double)v );
     return rc ? fsl_err_from_db(stmt->db, rc) : 0;
   }
 }
 
-int fsl_stmt_bind_blob( fsl_stmt * stmt, int ndx, void const * src,
+int fsl_stmt_bind_blob( fsl_stmt * const stmt, int ndx, void const * src,
                         fsl_size_t len, bool makeCopy ){
   BIND_PARAM_CHECK2 {
     int rc;
@@ -15177,7 +15077,7 @@ int fsl_stmt_bind_blob( fsl_stmt * stmt, int ndx, void const * src,
   }
 }
 
-int fsl_stmt_bind_text( fsl_stmt * stmt, int ndx, char const * src,
+int fsl_stmt_bind_text( fsl_stmt * const stmt, int ndx, char const * src,
                         fsl_int_t len, bool makeCopy ){
   BIND_PARAM_CHECK {
     int rc;
@@ -15188,7 +15088,7 @@ int fsl_stmt_bind_text( fsl_stmt * stmt, int ndx, char const * src,
   }
 }
 
-int fsl_stmt_bind_null_name( fsl_stmt * stmt, char const * param ){
+int fsl_stmt_bind_null_name( fsl_stmt * const stmt, char const * param ){
   BIND_PARAM_CHECK{
     return fsl_stmt_bind_null( stmt,
                                sqlite3_bind_parameter_index( stmt->stmt,
@@ -15196,7 +15096,7 @@ int fsl_stmt_bind_null_name( fsl_stmt * stmt, char const * param ){
   }
 }
 
-int fsl_stmt_bind_int32_name( fsl_stmt * stmt, char const * param, int32_t v ){
+int fsl_stmt_bind_int32_name( fsl_stmt * const stmt, char const * param, int32_t v ){
   BIND_PARAM_CHECK {
     return fsl_stmt_bind_int32( stmt,
                                 sqlite3_bind_parameter_index( stmt->stmt,
@@ -15205,7 +15105,7 @@ int fsl_stmt_bind_int32_name( fsl_stmt * stmt, char const * param, int32_t v ){
   }
 }
 
-int fsl_stmt_bind_int64_name( fsl_stmt * stmt, char const * param, int64_t v ){
+int fsl_stmt_bind_int64_name( fsl_stmt * const stmt, char const * param, int64_t v ){
   BIND_PARAM_CHECK {
     return fsl_stmt_bind_int64( stmt,
                                 sqlite3_bind_parameter_index( stmt->stmt,
@@ -15214,7 +15114,7 @@ int fsl_stmt_bind_int64_name( fsl_stmt * stmt, char const * param, int64_t v ){
   }
 }
 
-int fsl_stmt_bind_id_name( fsl_stmt * stmt, char const * param, fsl_id_t v ){
+int fsl_stmt_bind_id_name( fsl_stmt * const stmt, char const * param, fsl_id_t v ){
   BIND_PARAM_CHECK {
     return fsl_stmt_bind_id( stmt,
                              sqlite3_bind_parameter_index( stmt->stmt,
@@ -15223,7 +15123,7 @@ int fsl_stmt_bind_id_name( fsl_stmt * stmt, char const * param, fsl_id_t v ){
   }
 }
 
-int fsl_stmt_bind_double_name( fsl_stmt * stmt, char const * param, double v ){
+int fsl_stmt_bind_double_name( fsl_stmt * const stmt, char const * param, double v ){
   BIND_PARAM_CHECK {
     return fsl_stmt_bind_double( stmt,
                                  sqlite3_bind_parameter_index( stmt->stmt,
@@ -15232,7 +15132,7 @@ int fsl_stmt_bind_double_name( fsl_stmt * stmt, char const * param, double v ){
   }
 }
 
-int fsl_stmt_bind_text_name( fsl_stmt * stmt, char const * param,
+int fsl_stmt_bind_text_name( fsl_stmt * const stmt, char const * param,
                              char const * v, fsl_int_t n,
                              bool makeCopy ){
   BIND_PARAM_CHECK {
@@ -15243,7 +15143,7 @@ int fsl_stmt_bind_text_name( fsl_stmt * stmt, char const * param,
   }
 }
 
-int fsl_stmt_bind_blob_name( fsl_stmt * stmt, char const * param,
+int fsl_stmt_bind_blob_name( fsl_stmt * const stmt, char const * param,
                              void const * v, fsl_int_t len,
                              bool makeCopy ){
   BIND_PARAM_CHECK {
@@ -15254,7 +15154,7 @@ int fsl_stmt_bind_blob_name( fsl_stmt * stmt, char const * param,
   }
 }
 
-int fsl_stmt_param_index( fsl_stmt * stmt, char const * param){
+int fsl_stmt_param_index( fsl_stmt * const stmt, char const * const param){
   return (stmt && stmt->stmt)
     ? sqlite3_bind_parameter_index( stmt->stmt, param)
     : -1;
@@ -15266,27 +15166,27 @@ int fsl_stmt_param_index( fsl_stmt * stmt, char const * param){
 #define GET_CHECK if(!stmt || !stmt->colCount) return FSL_RC_MISUSE; \
   else if((ndx<0) || (ndx>=stmt->colCount)) return FSL_RC_RANGE; else
 
-int fsl_stmt_get_int32( fsl_stmt * stmt, int ndx, int32_t * v ){
+int fsl_stmt_get_int32( fsl_stmt * const stmt, int ndx, int32_t * v ){
   GET_CHECK {
     if(v) *v = (int32_t)sqlite3_column_int(stmt->stmt, ndx);
     return 0;
   }
 }
-int fsl_stmt_get_int64( fsl_stmt * stmt, int ndx, int64_t * v ){
+int fsl_stmt_get_int64( fsl_stmt * const stmt, int ndx, int64_t * v ){
   GET_CHECK {
     if(v) *v = (int64_t)sqlite3_column_int64(stmt->stmt, ndx);
     return 0;
   }
 }
 
-int fsl_stmt_get_double( fsl_stmt * stmt, int ndx, double * v ){
+int fsl_stmt_get_double( fsl_stmt * const stmt, int ndx, double * v ){
   GET_CHECK {
     if(v) *v = (double)sqlite3_column_double(stmt->stmt, ndx);
     return 0;
   }
 }
 
-int fsl_stmt_get_id( fsl_stmt * stmt, int ndx, fsl_id_t * v ){
+int fsl_stmt_get_id( fsl_stmt * const stmt, int ndx, fsl_id_t * v ){
   GET_CHECK {
     if(v) *v = (4==sizeof(fsl_id_t))
       ? (fsl_id_t)sqlite3_column_int(stmt->stmt, ndx)
@@ -15295,7 +15195,7 @@ int fsl_stmt_get_id( fsl_stmt * stmt, int ndx, fsl_id_t * v ){
   }
 }
 
-int fsl_stmt_get_text( fsl_stmt * stmt, int ndx, char const **out,
+int fsl_stmt_get_text( fsl_stmt * const stmt, int ndx, char const **out,
                        fsl_size_t * outLen ){
   GET_CHECK {
     unsigned char const * t = (out || outLen)
@@ -15310,7 +15210,7 @@ int fsl_stmt_get_text( fsl_stmt * stmt, int ndx, char const **out,
   }
 }
 
-int fsl_stmt_get_blob( fsl_stmt * stmt, int ndx, void const **out,
+int fsl_stmt_get_blob( fsl_stmt * const stmt, int ndx, void const **out,
                        fsl_size_t * outLen ){
   GET_CHECK {
     void const * t = (out || outLen)
@@ -15330,28 +15230,28 @@ int fsl_stmt_get_blob( fsl_stmt * stmt, int ndx, void const **out,
 
 #undef GET_CHECK
 
-fsl_id_t fsl_stmt_g_id( fsl_stmt * stmt, int index ){
+fsl_id_t fsl_stmt_g_id( fsl_stmt * const stmt, int index ){
   fsl_id_t rv = -1;
   fsl_stmt_get_id(stmt, index, &rv);
   return rv;
 }
-int32_t fsl_stmt_g_int32( fsl_stmt * stmt, int index ){
+int32_t fsl_stmt_g_int32( fsl_stmt * const stmt, int index ){
   int32_t rv = 0;
   fsl_stmt_get_int32(stmt, index, &rv);
   return rv;
 }
-int64_t fsl_stmt_g_int64( fsl_stmt * stmt, int index ){
+int64_t fsl_stmt_g_int64( fsl_stmt * const stmt, int index ){
   int64_t rv = 0;
   fsl_stmt_get_int64(stmt, index, &rv);
   return rv;
 }
-double fsl_stmt_g_double( fsl_stmt * stmt, int index ){
+double fsl_stmt_g_double( fsl_stmt * const stmt, int index ){
   double rv = 0;
   fsl_stmt_get_double(stmt, index, &rv);
   return rv;
 }
 
-char const * fsl_stmt_g_text( fsl_stmt * stmt, int index,
+char const * fsl_stmt_g_text( fsl_stmt * const stmt, int index,
                               fsl_size_t * outLen ){
   char const * rv = NULL;
   fsl_stmt_get_text(stmt, index, &rv, outLen);
@@ -15733,6 +15633,50 @@ static void fsl_db_match_vfile_or_dir(
   goto end;
 }
 
+/**
+   F(glob-list-name, filename)
+
+   Returns 1 if the 2nd argument matches any glob in the fossil glob
+   list named by the first argument. The first argument must be a name
+   resolvable via fsl_glob_name_to_category() or an error is
+   triggered. The second value is intended to be a string, but NULL is
+   accepted (but never matches anything).
+
+   If no match is found, 0 is returned. An empty glob list never matches
+   anything.
+*/
+static void fsl_db_cx_glob_udf(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  fsl_cx * const f = (fsl_cx*)sqlite3_user_data(context);
+  fsl_list * li = NULL;
+  fsl_glob_category_e globType;
+  char const * p1;
+  char const * p2;
+  p2 = (const char*)sqlite3_value_text(argv[1])/*value to check*/;
+  if(NULL==p2 || 0==p2[0]){
+    sqlite3_result_int(context, 0);
+    return;
+  }
+  p1 = (const char*)sqlite3_value_text(argv[0])/*glob set name*/;
+  globType  = fsl_glob_name_to_category(p1);
+  if(FSL_GLOBS_INVALID==globType){
+    char buf[100] = {0};
+    buf[sizeof(buf)-1] = 0;
+    fsl_snprintf(buf, (fsl_size_t)sizeof(buf)-1,
+                 "Unknown glob pattern name: %#.*s",
+                 50, p1 ? p1 : "NULL");
+    sqlite3_result_error(context, buf, -1);
+    return;
+  }
+  fsl_cx_glob_list(f, globType, &li, false);
+  assert(li);
+  sqlite3_result_int(context, fsl_glob_list_matches(li, p2) ? 1 : 0);
+}
+
+
 fsl_db * fsl_db_malloc(){
   fsl_db * rc = (fsl_db *)fsl_malloc(sizeof(fsl_db));
   if(rc){
@@ -15955,6 +15899,13 @@ int fsl_db_open( fsl_db * db, char const * dbFile,
       sqlite3_create_function(dbh, "fsl_match_vfile_or_dir", 2,
                               SQLITE_ANY | SQLITE_DETERMINISTIC,
                               f, fsl_db_match_vfile_or_dir,0,0 );
+      sqlite3_create_function(dbh, "fsl_glob", 2,
+                              SQLITE_UTF8 | SQLITE_DETERMINISTIC,
+                              /* noting that ^^^^^ it's only deterministic
+                                 for a given statement execution IF no SQL
+                                 triggers an effect which forces the globs to
+                                 reload. That "shouldn't ever happen." */
+                              f, fsl_db_cx_glob_udf, 0, 0 );
 
 #if 0
       /* functions registered in v1 by db.c:db_open(). */
@@ -17186,16 +17137,15 @@ static void fsl_deck_clean_string(fsl_deck *m, char **member){
   fsl_deck_free_string(m, *member);
   *member = 0;
 }
-static void fsl_deck_clean_version(fsl_deck *m){
-  fsl_deck_clean_string(m, &m->uuid);
+static void fsl_deck_clean_version(fsl_deck *const m){
   m->rid = 0;
 }
-static void fsl_deck_clean_A(fsl_deck *m){
+static void fsl_deck_clean_A(fsl_deck *const m){
   SFREE(A.name);
   SFREE(A.tgt);
   SFREE(A.src);
 }
-static void fsl_deck_clean_B(fsl_deck *m){
+static void fsl_deck_clean_B(fsl_deck * const m){
   if(m->B.baseline){
     assert(!m->B.baseline->B.uuid && "Baselines cannot have a B-card. API misuse?");
     fsl_deck_finalize(m->B.baseline);
@@ -17203,63 +17153,63 @@ static void fsl_deck_clean_B(fsl_deck *m){
   }
   SFREE(B.uuid);
 }
-static void fsl_deck_clean_C(fsl_deck *m){
+static void fsl_deck_clean_C(fsl_deck * const m){
   fsl_deck_clean_string(m, &m->C);
 }
-static void fsl_deck_clean_E(fsl_deck *m){
+static void fsl_deck_clean_E(fsl_deck * const m){
   fsl_deck_clean_string(m, &m->E.uuid);
   m->E = fsl_deck_empty.E;
 }
-static void fsl_deck_clean_F(fsl_deck *m){
+static void fsl_deck_clean_F(fsl_deck * const m){
   if(m->F.list){
     fsl_card_F_list_finalize(&m->F);
     m->F = fsl_deck_empty.F;
   }
 }
-static void fsl_deck_clean_G(fsl_deck *m){
+static void fsl_deck_clean_G(fsl_deck * const m){
   fsl_deck_clean_string(m, &m->G);
 }
-static void fsl_deck_clean_H(fsl_deck *m){
+static void fsl_deck_clean_H(fsl_deck * const m){
   fsl_deck_clean_string(m, &m->H);
 }
-static void fsl_deck_clean_I(fsl_deck *m){
+static void fsl_deck_clean_I(fsl_deck * const m){
   fsl_deck_clean_string(m, &m->I);
 }
-static void fsl_deck_clean_J(fsl_deck *m, bool alsoListMem){
+static void fsl_deck_clean_J(fsl_deck * const m, bool alsoListMem){
   fsl_card_J_list_free(&m->J, alsoListMem);
 }
-static void fsl_deck_clean_K(fsl_deck *m){
+static void fsl_deck_clean_K(fsl_deck * const m){
   fsl_deck_clean_string(m, &m->K);
 }
-static void fsl_deck_clean_L(fsl_deck *m){
+static void fsl_deck_clean_L(fsl_deck * const m){
   fsl_deck_clean_string(m, &m->L);
 }
-static void fsl_deck_clean_M(fsl_deck *m){
+static void fsl_deck_clean_M(fsl_deck * const m){
   SLIST(M);
 }
-static void fsl_deck_clean_N(fsl_deck *m){
+static void fsl_deck_clean_N(fsl_deck * const m){
   fsl_deck_clean_string(m, &m->N);
 }
-static void fsl_deck_clean_P(fsl_deck *m){
+static void fsl_deck_clean_P(fsl_deck * const m){
   fsl_list_clear(&m->P, fsl_list_v_card_string_free, m);
 }
-static void fsl_deck_clean_Q(fsl_deck *m){
+static void fsl_deck_clean_Q(fsl_deck * const m){
   fsl_list_clear(&m->Q, fsl_list_v_card_Q_free, NULL);
 }
-static void fsl_deck_clean_R(fsl_deck *m){
+static void fsl_deck_clean_R(fsl_deck * const m){
   fsl_deck_clean_string(m, &m->R);
 }
-static void fsl_deck_clean_T(fsl_deck *m){
+static void fsl_deck_clean_T(fsl_deck * const m){
   fsl_list_clear(&m->T, fsl_list_v_card_T_free, NULL);
 }
-static void fsl_deck_clean_U(fsl_deck *m){
+static void fsl_deck_clean_U(fsl_deck * const m){
   fsl_deck_clean_string(m, &m->U);
 }
-static void fsl_deck_clean_W(fsl_deck *m){
+static void fsl_deck_clean_W(fsl_deck * const m){
   CBUF(W);
 }
 
-void fsl_deck_clean2(fsl_deck *m, fsl_buffer *xferBuf){
+void fsl_deck_clean2(fsl_deck * const m, fsl_buffer * const xferBuf){
   if(!m) return;
   fsl_deck_clean_version(m);  
   fsl_deck_clean_A(m);
@@ -17302,11 +17252,11 @@ void fsl_deck_clean2(fsl_deck *m, fsl_buffer *xferBuf){
 #undef SFREE
 #undef SLIST
 
-void fsl_deck_clean(fsl_deck *m){
+void fsl_deck_clean(fsl_deck * const m){
   fsl_deck_clean2(m, NULL);
 }
 
-void fsl_deck_finalize(fsl_deck *m){
+void fsl_deck_finalize(fsl_deck * const m){
   void const * allocStamp;
   if(!m) return;
   allocStamp = m->allocStamp;
@@ -17458,10 +17408,7 @@ bool fsl_deck_has_required_cards( fsl_deck const * d ){
         (d41d8cd98f00b204e9800998ecf8427e, the initial MD5 hash
         state).
 
-        R-card calculation is runtime-configurable option. Rather
-        than rely on d->f being set (so d->f->flags can tell us
-        whether or not to calculate an R-card), we'll rely on
-        downstream code to check for an R-card if needed.
+        R-card calculation is runtime-configurable option.
       */
       NEED(D,d->D > 0);
       NEED(C,d->C);
@@ -17516,7 +17463,6 @@ bool fsl_deck_has_required_cards( fsl_deck const * d ){
   }
 #undef NEED
 }
-
 
 char const * fsl_satype_cstr(fsl_satype_e t){
   switch(t){
@@ -17576,7 +17522,7 @@ static bool fsl_deck_check_type( fsl_deck * d, char card ){
    updated no error. n<0 means to use fsl_strlen() to count the
    length.
 */
-static int fsl_deck_strcheck_ctrl_chars(fsl_deck * mf, char cardName, char const * v, fsl_int_t n){
+static int fsl_deck_strcheck_ctrl_chars(fsl_deck * const mf, char cardName, char const * v, fsl_int_t n){
   const char * z = v;
   int rc = 0;
   if(v && n<0) n = fsl_strlen(v);
@@ -17604,7 +17550,7 @@ static int fsl_deck_strcheck_ctrl_chars(fsl_deck * mf, char cardName, char const
   If value is NULL then it is removed from the card instead
   (semantically freed), *mfMember is set to NULL, and 0 is returned.
 */
-static int fsl_deck_sethex_impl( fsl_deck * mf, fsl_uuid_cstr value,
+static int fsl_deck_sethex_impl( fsl_deck * const mf, fsl_uuid_cstr value,
                                  char letter,
                                  fsl_size_t assertLen,
                                  char ** mfMember ){
@@ -17635,7 +17581,7 @@ static int fsl_deck_sethex_impl( fsl_deck * mf, fsl_uuid_cstr value,
 /**
     Implements fsl_set_set_XXX() where XXX is a fsl_buffer member of fsl_deck.
  */
-static int fsl_deck_b_setuffer_impl( fsl_deck * mf, char const * value,
+static int fsl_deck_b_setuffer_impl( fsl_deck * const mf, char const * value,
                                      fsl_int_t valLen,
                                      char letter, fsl_buffer * buf){
   assert(mf);  
@@ -17650,7 +17596,7 @@ static int fsl_deck_b_setuffer_impl( fsl_deck * mf, char const * value,
   }
 }
 
-int fsl_deck_B_set( fsl_deck * mf, fsl_uuid_cstr uuidBaseline){
+int fsl_deck_B_set( fsl_deck * const mf, fsl_uuid_cstr uuidBaseline){
   if(!mf) return FSL_RC_MISUSE;
   else{
     int const bLen = uuidBaseline ? fsl_is_uuid(uuidBaseline) : 0;
@@ -17672,7 +17618,7 @@ int fsl_deck_B_set( fsl_deck * mf, fsl_uuid_cstr uuidBaseline){
     member. Replaces and frees any prior value. Passing NULL for the
     4th argument unsets the given card (assigns NULL to it).
  */
-static int fsl_deck_set_string( fsl_deck * mf, char letter, char ** member, char const * v, fsl_int_t n ){
+static int fsl_deck_set_string( fsl_deck * const mf, char letter, char ** member, char const * v, fsl_int_t n ){
   if(!fsl_deck_check_type(mf, letter)) return mf->f->error.code;
   fsl_deck_free_string(mf, *member);
   *member = v ? fsl_strndup(v, n) : NULL;
@@ -17680,29 +17626,29 @@ static int fsl_deck_set_string( fsl_deck * mf, char letter, char ** member, char
   else return 0;
 }
 
-int fsl_deck_C_set( fsl_deck * mf, char const * v, fsl_int_t n){
+int fsl_deck_C_set( fsl_deck * const mf, char const * v, fsl_int_t n){
   return fsl_deck_set_string( mf, 'C', &mf->C, v, n );
 }
 
-int fsl_deck_G_set( fsl_deck * mf, fsl_uuid_cstr uuid){
+int fsl_deck_G_set( fsl_deck * const mf, fsl_uuid_cstr uuid){
   int const uLen = fsl_is_uuid(uuid);
   return uLen
     ? fsl_deck_sethex_impl(mf, uuid, 'G', uLen, &mf->G)
     : FSL_RC_SYNTAX;
 }
 
-int fsl_deck_H_set( fsl_deck * mf, char const * v, fsl_int_t n){
+int fsl_deck_H_set( fsl_deck * const mf, char const * v, fsl_int_t n){
   if(v && mf->I) return FSL_RC_SYNTAX;
   return fsl_deck_set_string( mf, 'H', &mf->H, v, n );
 }
 
-int fsl_deck_I_set( fsl_deck * mf, fsl_uuid_cstr uuid){
+int fsl_deck_I_set( fsl_deck * const mf, fsl_uuid_cstr uuid){
   if(uuid && mf->H) return FSL_RC_SYNTAX;
   int const uLen = uuid ? fsl_is_uuid(uuid) : 0;
   return fsl_deck_sethex_impl(mf, uuid, 'I', uLen, &mf->I);
 }
 
-int fsl_deck_J_add( fsl_deck * mf, char isAppend,
+int fsl_deck_J_add( fsl_deck * const mf, char isAppend,
                     char const * field, char const * value){
   if(!field) return FSL_RC_MISUSE;
   else if(!*field) return FSL_RC_SYNTAX;
@@ -17719,20 +17665,20 @@ int fsl_deck_J_add( fsl_deck * mf, char isAppend,
 }
 
 
-int fsl_deck_K_set( fsl_deck * mf, fsl_uuid_cstr uuid){
+int fsl_deck_K_set( fsl_deck * const mf, fsl_uuid_cstr uuid){
   int const uLen = fsl_is_uuid(uuid);
   return uLen
     ? fsl_deck_sethex_impl(mf, uuid, 'K', uLen, &mf->K)
     : FSL_RC_SYNTAX;
 }
 
-int fsl_deck_L_set( fsl_deck * mf, char const * v, fsl_int_t n){
+int fsl_deck_L_set( fsl_deck * const mf, char const * v, fsl_int_t n){
   return mf
     ? fsl_deck_set_string(mf, 'L', &mf->L, v, n)
     : FSL_RC_SYNTAX;
 }
 
-int fsl_deck_M_add( fsl_deck * mf, char const *uuid){
+int fsl_deck_M_add( fsl_deck * const mf, char const *uuid){
   int rc;
   char * dupe;
   int const uLen = uuid ? fsl_is_uuid(uuid) : 0;
@@ -17750,7 +17696,7 @@ int fsl_deck_M_add( fsl_deck * mf, char const *uuid){
   return rc;
 }
 
-int fsl_deck_N_set( fsl_deck * mf, char const * v, fsl_int_t n){
+int fsl_deck_N_set( fsl_deck * const mf, char const * v, fsl_int_t n){
   int rc = 0;
   if(v && n!=0){
     if(n<0) n = fsl_strlen(v);
@@ -17760,17 +17706,32 @@ int fsl_deck_N_set( fsl_deck * mf, char const * v, fsl_int_t n){
 }
 
 
-int fsl_deck_P_add( fsl_deck * mf, char const *parentUuid){
+/**
+   Adds either parentUuid or takeParentUuid to mf->P. ONE
+   of those must e non-NULL and the other must be NULL. If
+   takeParentUuid is not NULL then ownership of it is transfered
+   to this function regardless of success or failure.
+*/
+static int fsl__deck_P_add_impl( fsl_deck * const mf,
+                                 fsl_uuid_cstr parentUuid,
+                                 fsl_uuid_str takeParentUuid){
+  if(!fsl_deck_check_type(mf, 'P')){
+    fsl_free(takeParentUuid);
+    return mf->f->error.code;
+  }
   int rc;
   char * dupe;
-  int const uLen = parentUuid ? fsl_is_uuid(parentUuid) : 0;
-  if(!mf || !parentUuid || !*parentUuid) return FSL_RC_MISUSE;
-  else if(!fsl_deck_check_type(mf, 'P')) return mf->f->error.code;
-  else if(!uLen){
+  fsl_uuid_cstr z = parentUuid ? parentUuid : takeParentUuid;
+  assert(parentUuid ? !takeParentUuid : !!takeParentUuid);
+  int const uLen = fsl_is_uuid(z);
+  if(!uLen){
+    fsl_free(takeParentUuid);
     return fsl_cx_err_set(mf->f, FSL_RC_SYNTAX,
                          "Invalid UUID for P-card.");
   }
-  dupe = fsl_strndup(parentUuid, uLen);
+  dupe = takeParentUuid
+    ? takeParentUuid
+    : fsl_strndup(parentUuid, uLen);
   if(!dupe) rc = FSL_RC_OOM;
   else{
     rc = fsl_list_append( &mf->P, dupe );
@@ -17781,14 +17742,25 @@ int fsl_deck_P_add( fsl_deck * mf, char const *parentUuid){
   return rc;
 }
 
-fsl_id_t fsl_deck_P_get_id(fsl_deck * d, int index){
+
+int fsl_deck_P_add(fsl_deck * const mf, char const *parentUuid){
+  return fsl__deck_P_add_impl(mf, parentUuid, NULL);
+}
+
+int fsl_deck_P_add_rid( fsl_deck * const mf, fsl_id_t rid ){
+  fsl_uuid_str pU = fsl_rid_to_uuid(mf->f, rid);
+  return pU ? fsl__deck_P_add_impl(mf, NULL, pU) : mf->f->error.code;
+}
+
+
+fsl_id_t fsl_deck_P_get_id(fsl_deck * const d, int index){
   if(!d->f) return -1;
   else if(index>(int)d->P.used) return 0;
   else return fsl_uuid_to_rid(d->f, (char const *)d->P.list[index]);
 }
 
 
-int fsl_deck_Q_add( fsl_deck * mf, int type,
+int fsl_deck_Q_add( fsl_deck * const mf, int type,
                     fsl_uuid_cstr target,
                     fsl_uuid_cstr baseline ){
   if(!target) return FSL_RC_MISUSE;
@@ -17833,7 +17805,7 @@ static void fsl_card_F_list_sort(fsl_card_F_list * li){
   }
 }
 
-static void fsl_deck_F_sort(fsl_deck * mf){
+static void fsl_deck_F_sort(fsl_deck * const mf){
   fsl_card_F_list_sort(&mf->F);
 }
 
@@ -17842,13 +17814,13 @@ int fsl_card_F_compare_name( fsl_card_F const * const lhs,
   return (lhs == rhs) ? 0 : fsl_card_F_cmp( lhs, rhs );
 }
 
-int fsl_deck_R_set( fsl_deck * mf, fsl_uuid_cstr md5){
+int fsl_deck_R_set( fsl_deck * const mf, fsl_uuid_cstr md5){
   return mf
     ? fsl_deck_sethex_impl(mf, md5, 'R', md5 ? FSL_STRLEN_MD5 : 0, &mf->R)
     : FSL_RC_MISUSE;
 }
 
-int fsl_deck_R_calc2(fsl_deck *mf, char ** tgt){
+int fsl_deck_R_calc2(fsl_deck * const mf, char ** tgt){
   fsl_cx * const f = mf->f;
   char const * theHash = 0;
   char hex[FSL_STRLEN_MD5+1];
@@ -17865,7 +17837,7 @@ int fsl_deck_R_calc2(fsl_deck *mf, char ** tgt){
     int rc = 0;
     fsl_card_F const * fc;
     fsl_id_t fileRid;
-    fsl_buffer * buf = &f->fileContent;
+    fsl_buffer * const buf = &f->fileContent;
     unsigned char digest[16];
     fsl_md5_cx md5 = fsl_md5_cx_empty;
     enum { NumBufSize = 40 };
@@ -17916,7 +17888,7 @@ int fsl_deck_R_calc2(fsl_deck *mf, char ** tgt){
       numBuf[0] = 0;
       fsl_snprintf(numBuf, NumBufSize,
                    " %"FSL_SIZE_T_PFMT"\n",
-                   (fsl_size_t)buf->used);
+                   buf->used);
       fsl_md5_update_cstr(&md5, numBuf, -1);
       fsl_md5_update_buffer(&md5, buf);
     }
@@ -17943,14 +17915,14 @@ int fsl_deck_R_calc2(fsl_deck *mf, char ** tgt){
   }
 }
 
-int fsl_deck_R_calc(fsl_deck * mf){
+int fsl_deck_R_calc(fsl_deck * const mf){
   char R[FSL_STRLEN_MD5+1] = {0};
   char * r = R;
   const int rc = fsl_deck_R_calc2(mf, &r);
   return rc ? rc : fsl_deck_R_set(mf, r);
 }
 
-int fsl_deck_T_add2( fsl_deck * mf, fsl_card_T * t){
+int fsl_deck_T_add2( fsl_deck * const mf, fsl_card_T * t){
   if(!t) return FSL_RC_MISUSE;
   else if(!fsl_deck_check_type(mf, 'T')){
     return mf->f->error.code;
@@ -17982,7 +17954,7 @@ int fsl_deck_T_add2( fsl_deck * mf, fsl_card_T * t){
   return fsl_list_append(&mf->T, t);
 }
 
-int fsl_deck_T_add( fsl_deck * mf, fsl_tagtype_e tagType,
+int fsl_deck_T_add( fsl_deck * const mf, fsl_tagtype_e tagType,
                     char const * uuid, char const * name,
                     char const * value){
   if(!name) return FSL_RC_MISUSE;
@@ -18043,15 +18015,15 @@ int fsl_deck_branch_set( fsl_deck * d, char const * branchName ){
   return rc;
 }
 
-int fsl_deck_U_set( fsl_deck * mf, char const * v){
+int fsl_deck_U_set( fsl_deck * const mf, char const * v){
   return fsl_deck_set_string( mf, 'U', &mf->U, v, -1 );
 }
 
-int fsl_deck_W_set( fsl_deck * mf, char const * v, fsl_int_t n){
+int fsl_deck_W_set( fsl_deck * const mf, char const * v, fsl_int_t n){
   return fsl_deck_b_setuffer_impl(mf, v, n, 'W', &mf->W);
 }
 
-int fsl_deck_A_set( fsl_deck * mf, char const * name,
+int fsl_deck_A_set( fsl_deck * const mf, char const * name,
                     char const * tgt,
                     char const * uuidSrc ){
   int const uLen = (uuidSrc && *uuidSrc) ? fsl_is_uuid(uuidSrc) : 0;
@@ -18086,7 +18058,7 @@ int fsl_deck_A_set( fsl_deck * mf, char const * name,
 }
 
 
-int fsl_deck_D_set( fsl_deck * mf, double date){
+int fsl_deck_D_set( fsl_deck * const mf, double date){
   if(date<0) return FSL_RC_RANGE;
   else if(date>0 && !fsl_deck_check_type(mf, 'D')){
     return mf->f->error.code;
@@ -18096,7 +18068,7 @@ int fsl_deck_D_set( fsl_deck * mf, double date){
   }
 }
 
-int fsl_deck_E_set( fsl_deck * mf, double date, char const * uuid){
+int fsl_deck_E_set( fsl_deck * const mf, double date, char const * uuid){
   int const uLen = uuid ? fsl_is_uuid(uuid) : 0;
   if(!mf || !uLen) return FSL_RC_MISUSE;
   else if(date<=0){
@@ -18114,7 +18086,7 @@ int fsl_deck_E_set( fsl_deck * mf, double date, char const * uuid){
   }
 }
 
-int fsl_deck_F_add( fsl_deck * mf, char const * name,
+int fsl_deck_F_add( fsl_deck * const mf, char const * name,
                     char const * uuid,
                     fsl_fileperm_e perms, 
                     char const * oldName){
@@ -19561,7 +19533,7 @@ int fsl_deck_F_set( fsl_deck * d, char const * zName,
                     char const * priorName){
   uint32_t fcNdx = 0;
   fsl_card_F * fc = 0;
-  if(d->uuid || d->rid>0){
+  if(d->rid>0){
     return fsl_cx_err_set(d->f, FSL_RC_MISUSE,
                           "%s() cannot be applied to a saved deck.",
                           __func__);
@@ -19617,7 +19589,7 @@ int fsl_deck_F_set_content( fsl_deck * d, char const * zName,
   fsl_id_t rid = 0;
   fsl_id_t prevRid = 0;
   int rc = 0;
-  if(d->uuid || d->rid>0){
+  if(d->rid>0){
     return fsl_cx_err_set(d->f, FSL_RC_MISUSE,
                           "%s() cannot be applied to a saved deck.",
                           __func__);
@@ -19687,14 +19659,26 @@ void fsl_deck_clean_cards(fsl_deck * d, char const * letters){
   }
 }
 
-int fsl_deck_derive(fsl_deck * d){
+int fsl_deck_derive(fsl_deck * const d){
   int rc = 0;
-  if(!d->uuid || d->rid<=0) return FSL_RC_MISUSE;
-  else if(FSL_SATYPE_CHECKIN!=d->type) return FSL_RC_TYPE;
+  if(d->rid<=0) return FSL_RC_MISUSE;
+  assert(d->f);
+  if(FSL_SATYPE_CHECKIN!=d->type) return FSL_RC_TYPE;
   fsl_deck_clean_P(d);
-  rc = fsl_list_append(&d->P, d->uuid);
-  if(rc) return rc;
-  d->uuid = NULL;
+  {
+    fsl_uuid_str pUuid = fsl_rid_to_uuid(d->f, d->rid);
+    if(pUuid){
+      rc = fsl_list_append(&d->P, pUuid);
+      if(rc){
+        assert(NULL==d->P.list);
+        fsl_free(pUuid);
+      }
+    }else{
+      assert(d->f->error.code);
+      rc = d->f->error.code;
+    }
+    if(rc) return rc;
+  }
   d->rid = 0;
   fsl_deck_clean_cards(d, "ACDEGHIJKLMNQRTUW");
   while(d->B.uuid){
@@ -20822,7 +20806,7 @@ static int fsl_deck_xlink_f_wiki(fsl_deck * d, void * state){
     requiring them to understand the rest of the required schema
     updates.
 */
-int fsl_cx_install_timeline_crosslinkers(fsl_cx *f){
+int fsl_cx_install_timeline_crosslinkers(fsl_cx * const f){
   int rc;
   assert(!f->xlinkers.used);
   assert(!f->xlinkers.list);
@@ -21141,9 +21125,9 @@ static int fsl_deck_crosslink_ticket(fsl_deck * const d){
   return rc;
 }
 
-int fsl_deck_crosslink_one( fsl_deck * d ){
+int fsl_deck_crosslink_one( fsl_deck * const d ){
   int rc;
-  if(!d || !d->f) return FSL_RC_MISUSE;
+  if(!d->f) return FSL_RC_MISUSE;
   rc = fsl_crosslink_begin(d->f);
   if(rc) return rc;
   rc = fsl_deck_crosslink(d);
@@ -21158,7 +21142,7 @@ int fsl_deck_crosslink_one( fsl_deck * d ){
   return rc;
 }
 
-int fsl_deck_crosslink( fsl_deck /* const */ * d ){
+int fsl_deck_crosslink( fsl_deck /* const */ * const d ){
   int rc = 0;
   fsl_cx * f = d->f;
   fsl_db * db = f ? fsl_needs_repo(f) : NULL;
@@ -21180,15 +21164,14 @@ int fsl_deck_crosslink( fsl_deck /* const */ * d ){
        libfossil. */
     return 0;
   }
-  if(FSL_SATYPE_CHECKIN==d->type){
-    if(d->B.uuid && !d->B.baseline){
-      rc = fsl_deck_baseline_fetch(d);
-      if(rc) goto end;
-      assert(d->B.baseline);
-    }
-  }
   rc = fsl_db_transaction_begin(db);
   if(rc) goto end;
+  if(FSL_SATYPE_CHECKIN==d->type
+     && d->B.uuid && !d->B.baseline){
+    rc = fsl_deck_baseline_fetch(d);
+    if(rc) goto end;
+    assert(d->B.baseline);
+  }
   switch(d->type){
     case FSL_SATYPE_CHECKIN:
       rc = fsl_deck_crosslink_checkin(d, &parentid);
@@ -21246,9 +21229,9 @@ int fsl_deck_crosslink( fsl_deck /* const */ * d ){
       if(!f->error.code){
         fsl_cx_err_set(f, rc, "Crosslink callback handler "
                        "'%s' failed with code %d (%s) for "
-                       "artifact [%.12s].",
+                       "artifact RID #%" FSL_ID_T_PFMT ".",
                        xl->name, rc, fsl_rc_cstr(rc),
-                       d->uuid);
+                       d->rid);
       }
     }
   }/*end crosslink callbacks*/
@@ -21458,7 +21441,7 @@ bool fsl_might_be_artifact(fsl_buffer const * src){
   return 1;
 }
 
-int fsl_deck_parse2(fsl_deck * d, fsl_buffer * src, fsl_id_t rid){
+int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_id_t rid){
 #ifdef ERROR
 #  undef ERROR
 #endif
@@ -21477,7 +21460,6 @@ int fsl_deck_parse2(fsl_deck * d, fsl_buffer * src, fsl_id_t rid){
   unsigned char * uuid;
   double ts;
   int cardCount = 0;
-  fsl_db * db;
   fsl_cx * f;
   fsl_error * err;
   int stealBuf = 0 /* gets incremented if we need to steal src->mem. */;
@@ -21507,51 +21489,19 @@ int fsl_deck_parse2(fsl_deck * d, fsl_buffer * src, fsl_id_t rid){
                          "Invalid (negative) RID %"FSL_ID_T_PFMT
                          " for fsl_deck_parse()", rid);
   }
-  db = fsl_cx_db_repo(f);
-  seen = f ? &f->cache.mfSeen : NULL;
-  if(seen){
-    if((0==rid) || fsl_id_bag_contains(seen,rid)){
-      isRepeat = 1;
-    }else{
-      isRepeat = 0;
-      rc = fsl_id_bag_insert(seen, rid);
-      if(rc){
-        assert(FSL_RC_OOM==rc);
-        return rc;
-      }
+  seen = &f->cache.mfSeen;
+  if((0==rid) || fsl_id_bag_contains(seen,rid)){
+    isRepeat = 1;
+  }else{
+    isRepeat = 0;
+    rc = fsl_id_bag_insert(seen, rid);
+    if(rc){
+      assert(FSL_RC_OOM==rc);
+      return rc;
     }
   }
   fsl_deck_clean(d);
   fsl_deck_init(f, d, FSL_SATYPE_ANY);
-  /* We have to hash BEFORE parsing, as parsing modifies
-     the input */
-  if(rid){
-    assert(rid>0);
-    d->rid = rid;
-    d->uuid = fsl_rid_to_uuid(f, rid);
-    if(!d->uuid){
-      rc = f->error.code ? f->error.code : FSL_RC_OOM;
-      goto end;
-    }
-  }else if(db){
-    rc = fsl_repo_blob_lookup(f, src, &d->rid, &d->uuid);
-    if(FSL_RC_NOT_FOUND==rc){
-      /* Non-fatal */
-      rc = 0;
-    }
-  }else{
-    fsl_buffer hash = fsl_buffer_empty;
-    rc = fsl_cx_hash_buffer(f, false, src, &hash);
-    if(rc){
-      fsl_buffer_clear(&hash);
-    }else{
-      d->uuid = fsl_buffer_str(&hash);
-    }
-  }
-  if(rc) return rc;
-
-  /* legacy: not yet clear if we need this:
-     if( !isRepeat ) g.parseCnt[0]++; */
 
   /*
     Verify that the first few characters of the artifact look like a
@@ -21578,6 +21528,9 @@ int fsl_deck_parse2(fsl_deck * d, fsl_buffer * src, fsl_id_t rid){
   if( fsl_deck_verify_Z_card(z, n) < 0 ){
     ERROR(FSL_RC_CONSISTENCY, "Z-card checksum mismatch");
   }
+
+  /* legacy: not yet clear if we need this:
+     if( !isRepeat ) g.parseCnt[0]++; */
 
   /*
     Reminder: parsing modifies the input (to simplify the
@@ -22281,6 +22234,7 @@ int fsl_deck_parse2(fsl_deck * d, fsl_buffer * src, fsl_id_t rid){
     d->content = *src;
     *src = fsl_buffer_empty;
   }
+  d->rid = rid;
   d->F.flags &= ~FSL_CARD_F_LIST_NEEDS_SORT/*we know all cards were read in order*/;
   return 0;
 
@@ -22305,15 +22259,14 @@ int fsl_deck_parse2(fsl_deck * d, fsl_buffer * src, fsl_id_t rid){
 #undef ERROR
 }
 
-int fsl_deck_parse(fsl_deck * d, fsl_buffer * src){
+int fsl_deck_parse(fsl_deck * const d, fsl_buffer * const src){
   return fsl_deck_parse2(d, src, 0);
 }
 
-int fsl_deck_load_rid( fsl_cx * f, fsl_deck * d,
+int fsl_deck_load_rid( fsl_cx * const f, fsl_deck * const d,
                        fsl_id_t rid, fsl_satype_e type ){
   fsl_buffer buf = fsl_buffer_empty;
   int rc = 0;
-  if(!f || !d) return FSL_RC_SYNTAX;
   if(0==rid) rid = f->ckout.rid;
   if(rid<0){
     return fsl_cx_err_set(f, FSL_RC_RANGE,
@@ -22321,10 +22274,11 @@ int fsl_deck_load_rid( fsl_cx * f, fsl_deck * d,
                           "%"FSL_ID_T_PFMT, rid);
   }
   fsl_deck_clean(d);
+  d->f = f;
   if(fsl_cx_mcache_search(f, rid, d)){
     assert(d->f);
     if(type!=FSL_SATYPE_ANY && type!=d->type){
-      rc = fsl_cx_err_set(f, FSL_RC_ERROR,
+      rc = fsl_cx_err_set(f, FSL_RC_TYPE,
                           "Unexpected match of RID #%" FSL_ID_T_PFMT " "
                           "to a different artifact type (%d) "
                           "than requested (%d).",
@@ -22356,7 +22310,6 @@ int fsl_deck_load_rid( fsl_cx * f, fsl_deck * d,
 #endif
   rc = fsl_deck_parse(d, &buf);
   if(!rc){
-    assert(rid == d->rid);
     if( type!=FSL_SATYPE_ANY && d->type!=type ){
       rc = fsl_cx_err_set(f, FSL_RC_TYPE,
                           "RID %"FSL_ID_T_PFMT" is of type %s, "
@@ -22364,17 +22317,17 @@ int fsl_deck_load_rid( fsl_cx * f, fsl_deck * d,
                           rid,
                           fsl_satype_cstr(d->type),
                           fsl_satype_cstr(type));
+    }else if(d->B.uuid ){
+      rc = fsl_cx_update_seen_delta_mf(f);
     }
   }
-  if( !rc && d->B.uuid ){
-    rc = fsl_cx_update_seen_delta_mf(f);
-  }
   end:
+  if(0==rc) d->rid = rid;
   fsl_buffer_clear(&buf);
   return rc;
 }
 
-int fsl_deck_load_sym( fsl_cx * f, fsl_deck * d,
+int fsl_deck_load_sym( fsl_cx * const f, fsl_deck * const d,
                        char const * symbolicName, fsl_satype_e type ){
   if(!symbolicName || !d) return FSL_RC_MISUSE;
   else{
@@ -22539,22 +22492,25 @@ int fsl_deck_F_next( fsl_deck * d, fsl_card_F const ** rv ){
 #undef FCARD
 }
 
-int fsl_deck_save( fsl_deck * d, bool isPrivate ){
+int fsl_deck_save( fsl_deck * const d, bool isPrivate ){
   int rc;
-  fsl_cx * f = d ? d->f : NULL;
-  fsl_db * db = f ? fsl_needs_repo(f) : NULL;
-  fsl_buffer buf = fsl_buffer_empty;
+  fsl_cx * const f = d->f;
+  fsl_db * const db = fsl_needs_repo(f);
+  fsl_buffer * const buf = &d->f->fileContent;
   fsl_id_t newRid = 0;
-  bool const oldPrivate = f ? f->cache.markPrivate : 0;
-  bool const isNew = d && !d->uuid;
+  bool const oldPrivate = f->cache.markPrivate;
   if(!f || !d ) return FSL_RC_MISUSE;
   else if(!db) return FSL_RC_NOT_A_REPO;
-  else if( (d->rid>0 && !d->uuid) ||
-           (d->rid<=0 && d->uuid)){
-    return fsl_cx_err_set(f, FSL_RC_MISUSE,
-                          "The input deck must have either rid _and_ UUID "
-                          "or neither of rid/UUID. A mixture is ambiguous.");
-  }else if(d->B.uuid && fsl_repo_forbids_delta_manifests(f)){
+  if(d->rid>0){
+#if 1
+    return 0;
+#else
+    return fsl_cx_err_set(f, FSL_RC_ALREADY_EXISTS,
+                          "Cannot re-save an existing deck, as that could "
+                          "lead to inconsistent data.");
+#endif
+  }
+  if(d->B.uuid && fsl_repo_forbids_delta_manifests(f)){
     return fsl_cx_err_set(f, FSL_RC_ACCESS,
                           "This deck is a delta manifest, but this "
                           "repository has disallowed those via the "
@@ -22562,71 +22518,51 @@ int fsl_deck_save( fsl_deck * d, bool isPrivate ){
   }
 
   fsl_cx_err_reset(f);
-  rc = fsl_deck_output(d, fsl_output_f_buffer, &buf);
+  fsl_size_t const reserveSize =
+    (1024 * 10)
+    + (50 * d->T.used)
+    + (50 * d->M.used)
+    + (120 * d->F.used)
+    + d->W.used;
+  fsl_buffer_reuse(buf);
+  rc = fsl_buffer_reserve(buf, reserveSize);
+  if(0==rc) rc = fsl_deck_output(d, fsl_output_f_buffer, buf);
   if(rc){
-    fsl_buffer_clear(&buf);
+    fsl_buffer_reuse(buf);
     return rc;
   }
 
   rc = fsl_db_transaction_begin(db);
   if(rc){
-    fsl_buffer_clear(&buf);
+    fsl_buffer_reuse(buf);
     return rc;
   }
   if(0){
-    MARKER(("Saving deck:\n%s\n", fsl_buffer_cstr(&buf)));
+    MARKER(("Saving deck:\n%s\n", fsl_buffer_cstr(buf)));
   }
 
   /* Starting here, don't return, use (goto end) instead. */
 
   f->cache.markPrivate = isPrivate;
-  rc = fsl_content_put_ex(f, &buf, d->uuid, 0,
-                          0U, isPrivate, &newRid);
-  if(rc) goto end;
-  assert(newRid>0);
-
-  rc = fsl_cx_hash_buffer( f, false, &buf, &buf );
-  if(rc) goto end;
-
-  /* We need d->uuid and d->rid for crosslinking purposes, but will
-     unset them on error (if we set them) because their values will no
-     longer be in the db after rollback...
-  */
-#if 0
-  /* practice shows that this is not needed/desired. There are cases
-     where round-tripping a manifest results in a 1-millisecond
-     difference in the D-card (Julian Day/double), which changes the
-     has but otherwise has no difference on the meaning. That said,
-     the way we use decks means that we really don't care (for
-     purposes of this function) what their initial UUID is except for
-     the purpose of fsl_content_put_ex(), above.
-  */
-  if(d->uuid){
-    /* Compare original and resulting hashes. */
-    if(0 != fsl_uuidcmp(fsl_buffer_cstr(&buf), d->uuid)){
-      rc = fsl_cx_err_set(f, FSL_RC_CONSISTENCY,
-                          "Input deck's original UUID and resulting UUID "
-                          "do not match: [%s] vs [%b]",
-                          d->uuid, &buf);
-      goto end;
-    }
-    /* ??? assert(d->rid==newRid); */
-    d->rid = newRid;
-  }else
-#endif  
   {
-    fsl_free(d->uuid);
-    d->uuid = fsl_buffer_str(&buf) /* transfer ownership */;
-    buf = fsl_buffer_empty;
-    d->rid = newRid;
+    rc = fsl_content_put_ex(f, buf, NULL, 0,
+                            0U, isPrivate, &newRid);
+    if(rc) goto end;
+    assert(newRid>0);
   }
 
-#if 0
-  /* Something to consider: if d is new and has a parent, deltify the
-     parent. The branch operation does this, but it is not yet clear
-     whether that is a general pattern for manifests.
+  /* We need d->rid for crosslinking purposes, but will unset it on
+     error because its value will no longer be in the db after
+     rollback...
   */
-  if(isNew && d->P.used){
+  d->rid = newRid;
+
+#if 0
+  /* Something to consider: has a parent, deltify the parent. The
+     branch operation does this, but it is not yet clear whether that
+     is a general pattern for manifests.
+  */
+  if(d->P.used){
     fsl_id_t pid;
     assert(FSL_SATYPE_CHECKIN == d->type);
     pid = fsl_uuid_to_rid(f, (char const *)d->P.list[0]);
@@ -22637,7 +22573,7 @@ int fsl_deck_save( fsl_deck * d, bool isPrivate ){
   }
 #endif
 
-  if(isNew && (FSL_SATYPE_WIKI==d->type)){
+  if(FSL_SATYPE_WIKI==d->type){
     /* Analog to fossil's wiki.c:wiki_put(): */
     /*
       MISSING:
@@ -22659,7 +22595,6 @@ int fsl_deck_save( fsl_deck * d, bool isPrivate ){
         }
         goto end;
       }
-
       rc = fsl_content_deltify(f, pid, d->rid, 0);
       if(rc) goto end;
     }
@@ -22681,19 +22616,15 @@ int fsl_deck_save( fsl_deck * d, bool isPrivate ){
 
   end:
   f->cache.markPrivate = oldPrivate;
-  if(!rc) rc = fsl_db_transaction_end( db, 0);
+  if(!rc) rc = fsl_db_transaction_end(db, 0);
   else fsl_db_transaction_end(db, 1);
   if(rc){
-    if(isNew){
-      fsl_free(d->uuid);
-      d->uuid = NULL;
-      d->rid = 0;
-    }
+    d->rid = 0 /* this blob.rid will be lost after rollback */;
     if(!f->error.code && db->error.code){
       rc = fsl_cx_uplift_db_error(f, db);
     }
   }
-  fsl_buffer_clear(&buf);
+  fsl_buffer_reuse(buf);
   return rc;
 }
 
@@ -28986,7 +28917,7 @@ int fsl_file_mtime_set(const char *zFilename, fsl_time_t newMTime){
 
 
 
-void fsl_pathfinder_clear(fsl_pathfinder * pf){
+void fsl_pathfinder_clear(fsl_pathfinder * const pf){
   if(pf){
     fsl_list_visit_free(&pf->ext, 1);
     fsl_list_visit_free(&pf->dirs, 1);
@@ -28995,7 +28926,7 @@ void fsl_pathfinder_clear(fsl_pathfinder * pf){
   }
 }
 
-static int fsl_pathfinder_add(fsl_list * li, char const * str){
+static int fsl_pathfinder_add(fsl_list * const li, char const * str){
   char * cp = fsl_strdup(str);
   int rc;
   if(!cp) rc = FSL_RC_OOM;
@@ -29006,22 +28937,22 @@ static int fsl_pathfinder_add(fsl_list * li, char const * str){
   return rc;
 }
 
-int fsl_pathfinder_dir_add(fsl_pathfinder * pf, char const * dir){
+int fsl_pathfinder_dir_add(fsl_pathfinder * const pf, char const * const dir){
   return (pf && dir)
     ? fsl_pathfinder_add(&pf->dirs, dir)
     : FSL_RC_MISUSE;
 }
 
-int fsl_pathfinder_ext_add(fsl_pathfinder * pf, char const * ext){
+int fsl_pathfinder_ext_add(fsl_pathfinder * const pf, char const * const ext){
   return (pf && ext)
     ? fsl_pathfinder_add(&pf->ext, ext)
     : FSL_RC_MISUSE;
 }
 
-int fsl_pathfinder_search(fsl_pathfinder * pf,
-                          char const * base,
+int fsl_pathfinder_search(fsl_pathfinder * const pf,
+                          char const * const base,
                           char const ** pOut,
-                          fsl_size_t * outLen ){
+                          fsl_size_t * const outLen ){
   fsl_buffer * buf = pf ? &pf->buf : NULL;
   fsl_list * ext;
   fsl_list * dirs;
@@ -29479,14 +29410,15 @@ int fsl_glob_list_parse( fsl_list * tgt, char const * zPatternList ){
 }
 
 
-char const * fsl_glob_list_matches( fsl_list const * globList, char const * zHaystack ){
-  if(!globList || !zHaystack || !*zHaystack || !globList->used) return NULL;
+char const * fsl_glob_list_matches( fsl_list const * const globList,
+                                    char const * zNeedle ){
+  if(!zNeedle || !*zNeedle || !globList->used) return NULL;
   else{
     char const * glob;
     fsl_size_t i = 0;
     for( ; i < globList->used; ++i){
       glob = (char const *)globList->list[i];
-      if( fsl_str_glob( glob, zHaystack ) ) return glob;
+      if( fsl_str_glob( glob, zNeedle ) ) return glob;
     }
     return NULL;
   }
@@ -29506,7 +29438,7 @@ int fsl_glob_list_append( fsl_list * tgt, char const * zGlob ){
 }
 
 
-void fsl_glob_list_clear( fsl_list * globList ){
+void fsl_glob_list_clear( fsl_list * const globList ){
   if(globList) fsl_list_visit_free(globList, 1);
 }
 
@@ -29548,13 +29480,13 @@ static int fsl_output_f_fsl_output( void * state, void const * s,
 }
 
 
-int fsl_outputfv( fsl_cx * f, char const * fmt, va_list args ){
+int fsl_outputfv( fsl_cx * const f, char const * fmt, va_list args ){
   if(!f || !fmt) return FSL_RC_MISUSE;
   else if(!*fmt) return FSL_RC_RANGE;
   return fsl_appendfv( fsl_output_f_fsl_output, f, fmt, args );
 }
     
-int fsl_outputf( fsl_cx * f, char const * fmt, ... ){
+int fsl_outputf( fsl_cx * const f, char const * fmt, ... ){
   if(!f || !fmt) return FSL_RC_MISUSE;
   else if(!*fmt) return FSL_RC_RANGE;
   else{
@@ -29567,40 +29499,33 @@ int fsl_outputf( fsl_cx * f, char const * fmt, ... ){
   }
 }
 
-int fsl_output( fsl_cx * cx, void const * src, fsl_size_t n ){
-  if(!cx || !src) return FSL_RC_MISUSE;
-  else if(!n || !cx->output.out) return 0;
+int fsl_output( fsl_cx * const cx, void const * const src, fsl_size_t n ){
+  if(!n || !cx->output.out) return 0;
   else return cx->output.out( cx->output.state, src, n );
 }
 
-int fsl_flush( fsl_cx * f ){
-  return f
-    ? (f->output.flush
+int fsl_flush( fsl_cx * const f ){
+  return f->output.flush
        ? f->output.flush(f->output.state)
-       : 0)
-    : FSL_RC_MISUSE;
+       : 0;
 }
 
 
 int fsl_flush_f_FILE(void * _FILE){
-  return _FILE
-    ? (fflush((FILE*)_FILE) ? fsl_errno_to_rc(errno, FSL_RC_IO) : 0)
-    : FSL_RC_MISUSE;
+  return fflush((FILE*)_FILE) ? fsl_errno_to_rc(errno, FSL_RC_IO) : 0;
 }
 
 int fsl_output_f_FILE( void * state,
                        void const * src, fsl_size_t n ){
-  if(!state || !src) return FSL_RC_MISUSE;
-  else if(!n) return 0;
+  if(!n) return 0;
   else return (1 == fwrite(src, n, 1, state ? (FILE*)state : stdout))
          ? 0
          : FSL_RC_IO;
 }
 
 int fsl_input_f_FILE( void * state, void * dest, fsl_size_t * n ){
+  if( !*n ) return FSL_RC_RANGE;
   FILE * f = (FILE*) state;
-  if( !state || !dest || !n ) return FSL_RC_MISUSE;
-  else if( !*n ) return FSL_RC_RANGE;
   *n = (fsl_size_t)fread( dest, 1, *n, f );
   return *n
     ? 0
@@ -29701,10 +29626,10 @@ int fsl_repo_leaves_rebuild(fsl_cx * f){
   );
 }
 
-fsl_int_t fsl_count_nonbranch_children(fsl_cx * f, fsl_id_t rid){
+fsl_int_t fsl_count_nonbranch_children(fsl_cx * const f, fsl_id_t rid){
   int32_t rv = 0;
   int rc;
-  fsl_db * db = f ? fsl_cx_db_repo(f) : NULL;
+  fsl_db * const db = fsl_cx_db_repo(f);
   if(!db || !db->dbh || (rid<=0)) return -1;
   rc = fsl_db_get_int32(db, &rv,
                         "SELECT count(*) FROM plink "
@@ -29718,7 +29643,7 @@ fsl_int_t fsl_count_nonbranch_children(fsl_cx * f, fsl_id_t rid){
   return rc ? -2 : rv;
 }
 
-bool fsl_rid_is_leaf(fsl_cx * f, fsl_id_t rid){
+bool fsl_rid_is_leaf(fsl_cx * const f, fsl_id_t rid){
   int rv = -1;
   int rc;
   fsl_db * db = f ? fsl_cx_db_repo(f) : NULL;
@@ -29757,6 +29682,15 @@ bool fsl_rid_is_leaf(fsl_cx * f, fsl_id_t rid){
     assert(0==rv || 1==rv);
   }
   return rc ? 0 : (rv==1);
+}
+
+bool fsl_rid_is_version(fsl_cx * const f, fsl_id_t rid){
+  fsl_db * const db = fsl_cx_db_repo(f);
+  if(!db) return false;
+  return 1==fsl_db_g_int32(db, 0,
+                           "SELECT 1 FROM event "
+                           "WHERE objid=%" FSL_ID_T_PFMT
+                           " AND type='ci'", rid);
 }
 
 int fsl_repo_leaf_check(fsl_cx * f, fsl_id_t rid){
@@ -31033,8 +30967,11 @@ static fsl_int_t assert_mema_lengths(){
   return mmLen;
 }
 
-int fsl_buffer_merge3(fsl_buffer *pPivot, fsl_buffer *pV1, fsl_buffer *pV2, fsl_buffer *pOut,
-                      unsigned int *conflictCount){
+int fsl_buffer_merge3(fsl_buffer * const pPivot,
+                      fsl_buffer * const pV1,
+                      fsl_buffer * const pV2,
+                      fsl_buffer * const pOut,
+                      unsigned int * const conflictCount){
   int *aC1 = 0;          /* Changes from pPivot to pV1 */
   int *aC2 = 0;          /* Changes from pPivot to pV2 */
   int i1, i2;            /* Index into aC1[] and aC2[] */
@@ -32058,12 +31995,13 @@ int fsl_sym_to_uuid( fsl_cx * f, char const * sym, fsl_satype_e type,
   return rc;
 }
 
-fsl_id_t fsl_uuid_to_rid( fsl_cx * f, char const * uuid ){
+fsl_id_t fsl_uuid_to_rid( fsl_cx * const f, char const * uuid ){
   fsl_db * const db = fsl_needs_repo(f);
   fsl_size_t const uuidLen = (uuid && db) ? fsl_strlen(uuid) : 0;
-  if(!f || !uuid || !uuidLen) return -1;
+  if(!uuid || !uuidLen) return -1;
   else if(!db){
     /* f's error state has already been set */
+    assert(FSL_RC_NOT_A_REPO == f->error.code);
     return -2;
   }
   else if(!fsl_validate16(uuid, uuidLen)){
@@ -32219,7 +32157,8 @@ int fsl_repo_filename_fnid2( fsl_cx * f, char const * fn, fsl_id_t * rv, bool cr
   return rc;
 }
 
-int fsl_delta_src_id( fsl_cx * f, fsl_id_t deltaRid, fsl_id_t * rv ){
+int fsl_delta_src_id( fsl_cx * const f, fsl_id_t deltaRid,
+                      fsl_id_t * rv ){
   fsl_db * const dbR = fsl_cx_db_repo(f);
   if(!rv) return FSL_RC_MISUSE;
   else if(deltaRid<=0) return FSL_RC_RANGE;
@@ -32270,7 +32209,7 @@ void fsl_repo_verify_cancel( fsl_cx * f ){
   fsl_id_bag_clear(&f->cache.toVerify);
 }
 
-int fsl_rid_to_uuid2(fsl_cx * f, fsl_id_t rid, fsl_buffer *uuid){
+int fsl_rid_to_uuid2(fsl_cx * const f, fsl_id_t rid, fsl_buffer *uuid){
   fsl_db * db = f ? fsl_cx_db_repo(f) : NULL;
   if(!f || !db || (rid<=0)){
     return fsl_cx_err_set(f, FSL_RC_MISUSE,
@@ -32302,21 +32241,24 @@ int fsl_rid_to_uuid2(fsl_cx * f, fsl_id_t rid, fsl_buffer *uuid){
       }
       fsl_stmt_cached_yield(st);
       if(rc && !f->error.code){
-        assert(db->error.code);
-        fsl_cx_uplift_db_error(f, db);
+        if(db->error.code){
+          fsl_cx_uplift_db_error(f, db);
+        }else{
+          fsl_cx_err_set(f, rc, NULL);
+        }
       }
     }
     return rc;
   }
 }
 
-fsl_uuid_str fsl_rid_to_uuid(fsl_cx * f, fsl_id_t rid){
+fsl_uuid_str fsl_rid_to_uuid(fsl_cx * const f, fsl_id_t rid){
   fsl_buffer uuid = fsl_buffer_empty;
   fsl_rid_to_uuid2(f, rid, &uuid);
   return fsl_buffer_take(&uuid);
 }
 
-fsl_uuid_str fsl_rid_to_artifact_uuid(fsl_cx * f, fsl_id_t rid, fsl_satype_e type){
+fsl_uuid_str fsl_rid_to_artifact_uuid(fsl_cx * const f, fsl_id_t rid, fsl_satype_e type){
   fsl_db * db = f ? fsl_cx_db_repo(f) : NULL;
   if(!f || !db || (rid<=0)) return NULL;
   else{
@@ -33239,6 +33181,7 @@ int fsl_repo_fingerprint_search( fsl_cx *f, fsl_id_t rcvid, char ** zOut ){
    * native Linux versus running under valgrind.
    */
   if(0==version){
+    fsl_stmt_finalize(&q);
     rc = fsl_buffer_append(sql,
                           "SELECT rcvid, quote(uid), quote(mtime), "
                           "quote(nonce), quote(ipaddr) "
@@ -33504,8 +33447,8 @@ static char fsl_satype_letter(fsl_satype_e t){
   }
 }
 
-int fsl_search_doc_touch(fsl_cx *f, fsl_satype_e saType, fsl_id_t rid,
-                         const char * docName){
+int fsl_search_doc_touch(fsl_cx * const f, fsl_satype_e saType,
+                         fsl_id_t rid, const char * docName){
   if(!fsl_search_ndx_exists(f) || fsl_content_is_private(f, rid)) return 0;
   char zType[2] = {0,0};
   zType[0] = fsl_satype_letter(saType);
@@ -37245,7 +37188,7 @@ int fsl_branch_create(fsl_cx * f, fsl_branch_opt const * opt, fsl_id_t * newRid 
   rc = fsl_deck_U_set(&deck, user);
   if(rc) goto end;
 
-  rc = fsl_deck_P_add(&deck, parent.uuid);
+  rc = fsl_deck_P_add_rid(&deck, parent.rid);
   if(rc) goto end;
 
   if(opt->comment && *opt->comment){
@@ -37823,7 +37766,7 @@ fsl_size_t fsl_strlen_utf8( char const * str, fsl_int_t len ){
     printf pfexp;                                                   \
   } while(0)
 
-int fsl_vfile_load(fsl_cx * f, fsl_id_t vid,
+int fsl_vfile_load(fsl_cx * const f, fsl_id_t vid,
                    bool clearOtherVersions,
                    uint32_t * missingCount){
   fsl_db * dbC = f ? fsl_needs_ckout(f) : NULL;
@@ -37844,7 +37787,8 @@ int fsl_vfile_load(fsl_cx * f, fsl_id_t vid,
   rc = fsl_db_transaction_begin(dbC);
   if(rc) return rc;
   alreadyHad = fsl_db_exists(dbC,
-                             "SELECT 1 FROM vfile WHERE vid=%"FSL_ID_T_PFMT,
+                             "SELECT 1 FROM vfile "
+                             "WHERE vid=%" FSL_ID_T_PFMT,
                              vid);
   if(clearOtherVersions){
     /* Reminder to self: DO NOT clear vmerge here. Doing so will break
@@ -37857,8 +37801,7 @@ int fsl_vfile_load(fsl_cx * f, fsl_id_t vid,
     rc = 0;
     goto end;
   }
-  if(rc) goto end;
-
+  assert(0==rc);
   if(0==vid){
     /* This is either misuse or an empty/initial repo with no
        checkins. Let's assume the latter, since that's what triggered
@@ -37874,7 +37817,8 @@ int fsl_vfile_load(fsl_cx * f, fsl_id_t vid,
   rc = fsl_db_prepare(dbC, &qIns,
                       "INSERT INTO vfile"
                       "(vid,isexe,islink,rid,mrid,pathname,mhash) "
-                      "VALUES(:vid,:isexe,:islink,:id,:id,:name,null)");
+                      "VALUES(:vid,:isexe,:islink,:id,:id,:name,null)"
+                      /* 2021-10-15: why do we not set mtime here? */);
   if(rc) goto end;
   rc = fsl_db_prepare(dbR, &qRid,
                       "SELECT rid,size FROM blob WHERE uuid=?");
@@ -37883,7 +37827,9 @@ int fsl_vfile_load(fsl_cx * f, fsl_id_t vid,
   while( !rc && !(rc=fsl_deck_F_next(&d, &fc)) && fc){
     fsl_id_t rid;
     int64_t size;
-    assert(fc->uuid && "We couldn't get F-card deletions via fsl_deck_F_next()");
+    assert(fc->uuid &&
+           "We should never see F-card deletions "
+           "via fsl_deck_F_next()");
     if(fsl_uuid_is_shunned(f,fc->uuid)) continue;
     rc = fsl_stmt_bind_text(&qRid, 1, fc->uuid, -1, 0);
     if(rc) break;
@@ -37925,7 +37871,6 @@ int fsl_vfile_load(fsl_cx * f, fsl_id_t vid,
   if(!rc && vid>0){
     if(!alreadyHad){
       assert(d.rid>0);
-      assert(d.uuid);
     }
   }
   fsl_deck_finalize(&d);
@@ -37938,7 +37883,7 @@ int fsl_vfile_load(fsl_cx * f, fsl_id_t vid,
   return rc;
 }
 
-static int fsl_vfile_unload_impl(fsl_cx * f, fsl_id_t vid,
+static int fsl_vfile_unload_impl(fsl_cx * const f, fsl_id_t vid,
                                  bool oneVersion){
   fsl_db * const db = fsl_needs_ckout(f);
   if(!db) return FSL_RC_NOT_A_CKOUT;
@@ -37950,10 +37895,10 @@ static int fsl_vfile_unload_impl(fsl_cx * f, fsl_id_t vid,
                              vid, __func__);
   return rc ? fsl_cx_uplift_db_error2(f, db, rc) : 0;
 }
-int fsl_vfile_unload(fsl_cx * f, fsl_id_t vid){
+int fsl_vfile_unload(fsl_cx * const f, fsl_id_t vid){
   return fsl_vfile_unload_impl(f, vid, true);
 }
-int fsl_vfile_unload_except(fsl_cx * f, fsl_id_t vid){
+int fsl_vfile_unload_except(fsl_cx * const f, fsl_id_t vid){
   return fsl_vfile_unload_impl(f, vid, false);
 }
 
@@ -37989,7 +37934,7 @@ static int fsl_vfile_recheck_file_hash( fsl_cx * const f, const char * const zNa
 }
 
 
-int fsl_vfile_changes_scan(fsl_cx * f, fsl_id_t vid, unsigned cksigFlags){
+int fsl_vfile_changes_scan(fsl_cx * const f, fsl_id_t vid, unsigned cksigFlags){
   fsl_stmt * stUpdate = NULL;
   fsl_stmt q = fsl_stmt_empty;
   int rc = 0;
@@ -38668,8 +38613,8 @@ struct NameChange {
 };
 const NameChange NameChange_empty =  {0,0,0,0};
 
-int fsl_cx_find_filename_changes(
-  fsl_cx * f,
+int fsl__find_filename_changes(
+  fsl_cx * const f,
   fsl_id_t iFrom,          /* Ancestor check-in */
   fsl_id_t iTo,            /* Recent check-in */
   bool revOK,              /* OK to move backwards (child->parent) if true */
@@ -39532,8 +39477,8 @@ int fsl_repo_zip_sym_to_filename( fsl_cx * f, char const * sym,
         rc = fsl_zip_file_add( &zs.z, rootDir, NULL, FSL_FILE_PERM_REGULAR );
       }else{
         rc = fsl_cx_err_set(f, FSL_RC_RANGE, "Cowardly refusing to create "
-                            "empty ZIP file for repo version [%.*s].",
-                            12, mf.uuid);
+                            "empty ZIP file for repo version [%s].",
+                            sym);
       }
       if(rc) goto end;
     }
