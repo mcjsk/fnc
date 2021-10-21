@@ -228,14 +228,18 @@ static struct fnc_setup {
 	},
 
 	{ /* cmd_args available app commands. */
-	    {"timeline", "Show chronologically descending commit history of "
-	    "the repository.", cmd_timeline, fnc_init.cliflags_timeline},
-	    {"diff", "Show changes to versioned files introduced with a given "
-	    "commit.", cmd_diff, fnc_init.cliflags_diff},
-	    {"tree", "Show repository tree corresponding to a given commit",
+	    {"timeline", "tl\0time\0ti\0log\0",
+	    "Show chronologically descending commit history of the repository.",
+	    cmd_timeline, fnc_init.cliflags_timeline},
+	    {"diff", "di\0",
+	    "Show changes to versioned files introduced with a given commit.",
+	    cmd_diff, fnc_init.cliflags_diff},
+	    {"tree", "tr\0dir\0",
+	    "Show repository tree corresponding to a given commit",
 	    cmd_tree, fnc_init.cliflags_tree},
-	    {"blame", "Show commit attribution history for each line of a "
-	    "file.", cmd_blame, fnc_init.cliflags_blame},
+	    {"blame", "bl\0praise\0pr\0annotate\0an\0",
+	    "Show commit attribution history for each line of a file.",
+	    cmd_blame, fnc_init.cliflags_blame},
 	    {NULL,NULL,NULL, NULL}	/* Sentinel. */
 	},
 

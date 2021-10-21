@@ -1,115 +1,4 @@
 #include "libfossil.h"
-/* start of file fossil-ext_regexp.h */
-/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
-/* vim: set ts=2 et sw=2 tw=80: */
-/*
-** 2012-11-13
-**
-** The author disclaims copyright to this source code.  In place of
-** a legal notice, here is a blessing:
-**
-**    May you do good and not evil.
-**    May you find forgiveness for yourself and forgive others.
-**    May you share freely, never taking more than you give.
-**
-******************************************************************************
-**
-** The code in this file implements a compact but reasonably
-** efficient regular-expression matcher for posix extended regular
-** expressions against UTF8 text.
-**
-** This file is an SQLite extension.  It registers a single function
-** named "regexp(A,B)" where A is the regular expression and B is the
-** string to be matched.  By registering this function, SQLite will also
-** then implement the "B regexp A" operator.  Note that with the function
-** the regular expression comes first, but with the operator it comes
-** second.
-**
-**  The following regular expression syntax is supported:
-**
-**     X*      zero or more occurrences of X
-**     X+      one or more occurrences of X
-**     X?      zero or one occurrences of X
-**     X{p,q}  between p and q occurrences of X
-**     (X)     match X
-**     X|Y     X or Y
-**     ^X      X occurring at the beginning of the string
-**     X$      X occurring at the end of the string
-**     .       Match any single character
-**     \c      Character c where c is one of \{}()[]|*+?.
-**     \c      C-language escapes for c in afnrtv.  ex: \t or \n
-**     \uXXXX  Where XXXX is exactly 4 hex digits, unicode value XXXX
-**     \xXX    Where XX is exactly 2 hex digits, unicode value XX
-**     [abc]   Any single character from the set abc
-**     [^abc]  Any single character not in the set abc
-**     [a-z]   Any single character in the range a-z
-**     [^a-z]  Any single character not in the range a-z
-**     \b      Word boundary
-**     \w      Word character.  [A-Za-z0-9_]
-**     \W      Non-word character
-**     \d      Digit
-**     \D      Non-digit
-**     \s      Whitespace character
-**     \S      Non-whitespace character
-**
-** A nondeterministic finite automaton (NFA) is used for matching, so the
-** performance is bounded by O(N*M) where N is the size of the regular
-** expression and M is the size of the input string.  The matcher never
-** exhibits exponential behavior.  Note that the X{p,q} operator expands
-** to p copies of X following by q-p copies of X? and that the size of the
-** regular expression in the O(N*M) performance bound is computed after
-** this expansion.
-*/
-#if !defined NET_FOSSIL_SCM_REGEXP_H_INCLUDED
-#define NET_FOSSIL_SCM_REGEXP_H_INCLUDED
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-struct sqlite3_api_routines;
-
-/*(this file is derived from sqlite3 regexp.c; I wanted to expose
-the engine to also be used directly*/
-
-typedef struct sqlite3_ReCompiled sqlite3_ReCompiled;
-
-
-/*
-** Compile a textual regular expression in zIn[] into a compiled regular
-** expression suitable for us by sqlite3re_match() and return a pointer to the
-** compiled regular expression in *ppRe.  Return NULL on success or an
-** error message if something goes wrong.
-*/
-const char* sqlite3re_compile ( sqlite3_ReCompiled** ppRe, const char* zIn, int noCase );
-
-
-/* Free and reclaim all the memory used by a previously compiled
-** regular expression.  Applications should invoke this routine once
-** for every call to re_compile() to avoid memory leaks.
-*/
-void sqlite3re_free ( sqlite3_ReCompiled* pRe );
-
-
-/* Run a compiled regular expression on the zero-terminated input
-** string zIn[].  Return true on a match and false if there is no match.
-*/
-int sqlite3re_match ( sqlite3_ReCompiled* pRe, const unsigned char* zIn, int nIn );
-
-
-
-/*registers the REGEXP extension function into a sqlite3 database instance */
-int sqlite3_regexp_init ( sqlite3* db, char** pzErrMsg,
-    const struct sqlite3_api_routines* pApi );
-
-
-#ifdef __cplusplus
-}
-#endif
-
-#else
-#endif  /*#ifndef NET_FOSSIL_SCM_REGEXP_H_INCLUDED*/
-/* end of file fossil-ext_regexp.h */
 /* start of file fsl.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
@@ -8660,6 +8549,7 @@ int fsl_card_F_ckout_mtime(fsl_cx * const f,
   Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
 */
 
+#include <string.h> /* for strchr() */
 
 /* Only for debugging */
 #include <stdio.h>
@@ -9560,7 +9450,7 @@ int fcli_dispatch_commands( fcli_command const * cmd,
       helpState = 1;
       helpPos = orig;
       arg = fcli_next_arg(1); // consume it
-    }else if(0==fsl_strcmp(arg,cmd->name)){
+    }else if(0==fsl_strcmp(arg,cmd->name) || fcli_cmd_aliascmp(cmd,arg)){
       if(!cmd->f){
         rc = fcli_err_set(FSL_RC_NYI,
                                "Command [%s] has no "
@@ -9614,6 +9504,17 @@ int fcli_dispatch_commands( fcli_command const * cmd,
   return rc;
 }
 
+bool fcli_cmd_aliascmp(fcli_command const * cmd, char const * arg){
+  char const * alias = cmd->aliases;
+  while ( alias && *alias!=0 ){
+    if( 0==fsl_strcmp(alias, arg) ){
+      return true;
+    }
+    alias = strchr(alias, 0) + 1;
+  }
+  return false;
+}
+
 void fcli_command_help(fcli_command const * cmd, bool onlyOne){
   fcli_command const * c = cmd;
   for( ; c->name; ++c ){
@@ -9621,11 +9522,25 @@ void fcli_command_help(fcli_command const * cmd, bool onlyOne){
     if(c->briefDescription){
       f_out("  %s\n", c->briefDescription);
     }
+    if(c->aliases){
+      f_out("  (aliases: ", c->name);
+      fcli_help_show_aliases(c->aliases);
+    }else{
+      f_out("\n");
+    }
     if(c->flags){
       f_out("\n");
       fcli_cliflag_help(c->flags);
     }
     if(onlyOne) break;
+  }
+}
+
+void fcli_help_show_aliases(char const * aliases){
+  char const * alias = aliases;
+  while ( *alias!=0 ){
+    f_out("%s%s", alias, *(strchr(alias, 0) + 1) ? ", " : ")\n");
+    alias = strchr(alias, 0) + 1;
   }
 }
 
@@ -12378,6 +12293,7 @@ int fsl_cx_init( fsl_cx ** tgt, fsl_cx_init_opt const * param ){
 
     *tgt = f;
   }
+  memset(&f->cache.mcache, 0, sizeof(f->cache.mcache));
   f->output = param->output;
   f->cxConfig = param->config;
 
@@ -16829,7 +16745,7 @@ static void fsl_cx_mcache_insert(fsl_cx *f, fsl_deck * d){
     fsl_deck_finalize(d);
     return;
   }
-  const unsigned cacheLen =
+  static const unsigned cacheLen =
     (unsigned)(sizeof(fsl_mcache_empty.aAge)
                /sizeof(fsl_mcache_empty.aAge[0]));
   fsl_mcache * const mc = &f->cache.mcache;
@@ -16878,7 +16794,7 @@ static void fsl_cx_mcache_insert(fsl_cx *f, fsl_deck * d){
 */
 static bool fsl_cx_mcache_search(fsl_cx * f, fsl_id_t rid, fsl_deck * tgt){
   if(!(f->flags & FSL_CX_F_MANIFEST_CACHE)) return false;
-  const unsigned cacheLen =
+  static const unsigned cacheLen =
     (int)(sizeof(fsl_mcache_empty.aAge)
           /sizeof(fsl_mcache_empty.aAge[0]));
   unsigned i;
@@ -19798,7 +19714,7 @@ static bool fsl_repo_has_mlink_pmid_mid( fsl_db * repo, fsl_id_t pmid, fsl_id_t 
     (2) Invoke this routine recursively for merge-parents if pParent
         is the primary parent.
 */
-static int fsl_mlink_add( fsl_cx * f,
+static int fsl_mlink_add( fsl_cx * const f,
                           fsl_id_t pmid, fsl_deck /*const*/ * pParent,
                           fsl_id_t cid, fsl_deck /*const*/ * pChild,
                           bool isPrimary){
@@ -19832,7 +19748,7 @@ static int fsl_mlink_add( fsl_cx * f,
   }
 
   if(otherRid && !fsl_cx_mcache_search(f, otherRid, &dOther)){
-    rc = otherRid ? fsl_content_get(f, otherRid, &otherContent) : 0;
+    rc = fsl_content_get(f, otherRid, &otherContent);
     if(rc){
       /* fossil(1) simply ignores errors here and returns. We'll ignore
          the phantom case because (1) erroring out here would be bad and

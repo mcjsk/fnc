@@ -20602,6 +20602,8 @@ typedef int (*fcli_command_f)(fcli_command const *);
 struct fcli_command {
   /** The name of the command. */
   char const * name;
+  /** NUL-delimited string containing optional aliases of the command name. */
+  char const * aliases;
   /** Brief description, for use in generating help text. */
   char const * briefDescription;
   /** The callback for this command. */
@@ -20636,6 +20638,12 @@ struct fcli_command {
 */
 FSL_EXPORT int fcli_dispatch_commands( fcli_command const * cmdList,
                                        bool reportErrors);
+
+/**
+   Parse fcli_command->aliases for a matching argv string. Return true if
+   found. Note that fcli_command->aliases _must_ be double-NUL terminated.
+*/
+FSL_EXPORT bool fcli_cmd_aliascmp( fcli_command const * cmd, char const * arg );
 
 /**
    A minor helper function intended to be passed the pending result
@@ -20738,6 +20746,11 @@ FSL_EXPORT void fcli_cliflag_help(fcli_cliflag const *defs);
    object is output, not any adjacent array members (if any).
 */
 FSL_EXPORT void fcli_command_help(fcli_command const * cmd, bool onlyOne);
+
+/**
+   Pretty print fcli_command->aliases (if any exist).
+*/
+FSL_EXPORT void fcli_help_show_aliases(char const * aliases);
 
 /**
    If fcli has a checkout opened, this dumps various info about it
