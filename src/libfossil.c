@@ -780,23 +780,23 @@ static void fsl_cpu_times(uint64_t *piUser, uint64_t *piKernel){
 }
 
 
-void fsl_timer_start(fsl_timer_state * ft){
+void fsl_timer_start(fsl_timer_state * const ft){
   fsl_cpu_times( &ft->user, &ft->system );
 }
 
-uint64_t fsl_timer_fetch(fsl_timer_state const * t){
+uint64_t fsl_timer_fetch(fsl_timer_state const * const t){
   uint64_t eu = 0, es = 0;
   fsl_cpu_times( &eu, &es );
   return (eu - t->user) + (es - t->system);
 }
 
-uint64_t fsl_timer_reset(fsl_timer_state * t){
+uint64_t fsl_timer_reset(fsl_timer_state * const t){
   uint64_t const rc = fsl_timer_fetch(t);
   fsl_cpu_times( &t->user, &t->system );
   return rc;
 }
 
-uint64_t fsl_timer_stop(fsl_timer_state *t){
+uint64_t fsl_timer_stop(fsl_timer_state * const t){
   uint64_t const rc = fsl_timer_fetch(t);
   *t = fsl_timer_state_empty;
   return rc;
@@ -1053,6 +1053,7 @@ struct Annotator {
     double mtime;   /* [event].[mtime] db entry */
   } *aVers;         /* For each check-in analyzed */
   unsigned int naVers; /* # of entries allocated in this->aVers */
+  fsl_timer_state timer;
 };
 
 static const Annotator Annotator_empty = {
@@ -1064,7 +1065,8 @@ false/*bMoreToDo*/,
 0/*origId*/,
 0/*showId*/,
 NULL/*aVers*/,
-0U/*naVerse*/
+0U/*naVerse*/,
+fsl_timer_state_empty_m
 };
 
 static void fsl__annotator_clean(Annotator * const a){
@@ -1207,7 +1209,6 @@ static int fsl__annotate_file(fsl_cx * const f,
   fsl_stmt q = fsl_stmt_empty;
   bool openedTransaction = false;
   fsl_db * const db = fsl_needs_repo(f);
-
   if(!db) return FSL_RC_NOT_A_REPO;
   rc = fsl_cx_transaction_begin(f);
   if(rc) goto dberr;
@@ -1258,10 +1259,13 @@ static int fsl__annotate_file(fsl_cx * const f,
   
   while(FSL_RC_STEP_ROW==fsl_stmt_step(&q)){
     if(a->nVers>=3){
-      /*Process at least 3 rows before imposing any limit.
-        Note that we do not impose a time-based limit here like
-        fossil does, but may want to add that at some point.*/
-      if(opt->limit>0 && a->nVers>=opt->limit){
+      /* Process at least 3 rows before imposing any limit. That is
+         historical behaviour inherited from fossil(1). */
+      if(opt->limitMs>0 &&
+         fsl_timer_fetch(&a->timer)/1000 >= opt->limitMs){
+        a->bMoreToDo = true;
+        break;
+      }else if(opt->limitVersions>0 && a->nVers>=opt->limitVersions){
         a->bMoreToDo = true;
         break;
       }
@@ -1401,6 +1405,7 @@ int fsl_annotate( fsl_cx * const f, fsl_annotate_opt const * const opt ){
   fsl_annotate_step aStep;
   assert(opt->out);
 
+  if(opt->limitMs>0) fsl_timer_start(&ann.timer);
   rc = fsl__annotate_file(f, &ann, opt);
   if(rc) goto end;
   memset(&aStep,0,sizeof(fsl_annotate_step));

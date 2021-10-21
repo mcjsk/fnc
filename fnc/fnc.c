@@ -6962,8 +6962,11 @@ run_blame(struct fnc_view *view)
 	fcli_fax((char *)opt->filename);
 	rc = fsl_sym_to_rid(f, s->blamed_commit->id, FSL_SATYPE_CHECKIN,
 	    &opt->versionRid);
+	if (rc)
+		goto end;
 	opt->originRid = blame->origin;    /* tip when -r is passed */
-	opt->limit = blame->ndepth;
+	opt->limitVersions = blame->ndepth;
+	//opt->limitMs = 2000;
 	opt->out = blame_cb;
 	opt->outState = &blame->cb_cx;
 

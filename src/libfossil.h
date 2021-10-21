@@ -4886,7 +4886,7 @@ FSL_EXPORT const fsl_timer_state fsl_timer_state_empty;
    @see fsl_timer_reset()
    @see fsl_timer_stop()
 */
-FSL_EXPORT void fsl_timer_start(fsl_timer_state * t);
+FSL_EXPORT void fsl_timer_start(fsl_timer_state * const t);
 
 /**
    Returns the difference in _CPU_ times in microseconds since t was
@@ -4894,7 +4894,7 @@ FSL_EXPORT void fsl_timer_start(fsl_timer_state * t);
    return 0 due to system-level precision restrictions. Note that this
    is not useful for measuring wall times.
 */
-FSL_EXPORT uint64_t fsl_timer_fetch(fsl_timer_state const * t);
+FSL_EXPORT uint64_t fsl_timer_fetch(fsl_timer_state const * const t);
 
 /**
    Resets t to the current time and returns the number of microseconds
@@ -4903,7 +4903,7 @@ FSL_EXPORT uint64_t fsl_timer_fetch(fsl_timer_state const * t);
    @see fsl_timer_start()
    @see fsl_timer_reset()
 */
-FSL_EXPORT uint64_t fsl_timer_reset(fsl_timer_state * t);
+FSL_EXPORT uint64_t fsl_timer_reset(fsl_timer_state * const t);
 
 /**
    Clears t's state and returns the difference (in uSec) between the
@@ -4912,7 +4912,7 @@ FSL_EXPORT uint64_t fsl_timer_reset(fsl_timer_state * t);
    @see fsl_timer_start()
    @see fsl_timer_reset()
 */
-FSL_EXPORT uint64_t fsl_timer_stop(fsl_timer_state *t);
+FSL_EXPORT uint64_t fsl_timer_stop(fsl_timer_state * const t);
 
 /**
    For the given red/green/blue values (all in the range of 0 to
@@ -13626,7 +13626,23 @@ struct fsl_annotate_opt {
      based on processing time, e.g. to 1500ms. We may or may not add
      that in this library.
   */
-  uint32_t limit;
+  uint32_t limitVersions;
+
+  /**
+     An approximate number of milliseconds of processing time to limit
+     the annotation to. Note that this is measured in CPU time, not
+     "wall clock" time. This value is rough minimum approximation,
+     and the annotation will stop at the first processing step after which
+     this limit has been hit or surpassed.
+
+     Even with this limit in place, the annotation engine may impose a
+     minimum number of versions to step through before it enforces
+     this limit.
+
+     If both this and limitVersions are set to positive values, the
+     first limit which is exceeded is applied.
+  */
+  uint32_t limitMs;
   /**
      - 0 = do not ignore any spaces.
      - <0 = ignore trailing end-of-line spaces.
@@ -13671,7 +13687,8 @@ struct fsl_annotate_opt {
 #define fsl_annotate_opt_empty_m {\
   NULL/*filename*/, \
   0/*versionRid*/,0/*originRid*/,    \
-  0U/*limit*/, 0/*spacePolicy*/, \
+  0U/*limitVersions*/, 0U/*limitMs*/,\
+  0/*spacePolicy*/,                         \
   false/*praise*/, false/*fileVersions*/,     \
   false/*dumpVersions*/,                  \
   NULL/*out*/, NULL/*outState*/               \
