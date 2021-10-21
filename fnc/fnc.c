@@ -4274,7 +4274,7 @@ diff_file(fsl_buffer *buf, fsl_buffer *bminus, const char *zminus,
 	fsl_cx		*f = fcli_cx();
 	fsl_buffer	 bplus = fsl_buffer_empty;
 	fsl_buffer	 xplus = fsl_buffer_empty;
-	const char	*zplus;
+	const char	*zplus = 0;
 	int		 rc = 0;
 	bool		 verbose;
 
@@ -5252,7 +5252,7 @@ cmd_diff(fcli_command const *argv)
 	fsl_cx				*f = fcli_cx();
 	struct fnc_view			*view;
 	struct fnc_commit_artifact	*commit = NULL;
-	const char			*artifact1, *artifact2;
+	const char			*artifact1 = 0, *artifact2 = 0;
 	fsl_id_t			 prid = -1, rid = -1;
 	int				 context = DIFF_DEF_CTXT, rc = 0;
 
