@@ -6685,7 +6685,7 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 				    {FNC_TREE_LINK, COLOR_MAGENTA},
 				    {FNC_TREE_DIR, COLOR_CYAN},
 				    {FNC_TREE_EXEC, COLOR_GREEN},
-				    {FNC_COMMIT_ID, COLOR_MAGENTA}
+				    {FNC_COMMIT_ID, COLOR_GREEN}
 				  };
 	int			  pairs_timeline[][2] = {
 				    {FNC_COMMIT_ID, COLOR_GREEN},
@@ -6693,7 +6693,7 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 				    {FNC_DATE_STR, COLOR_YELLOW}
 				  };
 	int			  pairs_blame[][2] = {
-				    {FNC_COMMIT_ID, COLOR_CYAN}
+				    {FNC_COMMIT_ID, COLOR_GREEN}
 				  };
 	int			(*pairs)[2], rc = 0;
 	fsl_size_t		  idx, n;

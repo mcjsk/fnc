@@ -1586,7 +1586,8 @@ enum PrintfCategory {etRADIX = 1, /* Integer types.  %d, %x, %o, and so forth */
                      etSQLESCAPE = 11, /* Strings with '\'' doubled.  %q */
                      etSQLESCAPE2 = 12, /* Strings with '\'' doubled and enclosed in '',
                                            NULL pointers replaced by SQL NULL.  %Q */
-                     etSQLESCAPE3 = 16, /* %w -> Strings with '\"' doubled */
+                     etSQLESCAPE3 = 14, /* %!Q -> identifiers wrapped in \"
+                                            with inner  '\"' doubled */
                      etBLOBSQL = 13, /* %B -> Works like %Q,
                                         but requires a (fsl_buffer*) argument. */
 #endif /* !FSLPRINTF_OMIT_SQL */
@@ -1754,10 +1755,10 @@ static const et_info fmtinfo[] = {
 {'t'/*116*/,  0, FLAG_STRING, etURLENCODE, 0, 0 },
 {'u'/*117*/, 10, 0, etRADIX,      0,  0 },
 {'v'/*118*/, 0, 0, 0, 0, 0 },
-#if FSLPRINTF_OMIT_SQL
+#if 1 || FSLPRINTF_OMIT_SQL
 {'w'/*119*/, 0, 0, 0, 0, 0 },
 #else
-/* TODO: remap this to %!Q. %w is not currently used/documented. */
+/* This role is filled by %!Q. %w is not currently used/documented. */
 {'w'/*119*/, 0, FLAG_STRING, etSQLESCAPE3, 0, 0 },
 #endif
 {'x'/*120*/, 16, 0, etRADIX,      16, 1  },
@@ -2060,60 +2061,42 @@ static int spech_urldecode( fsl_output_f pf, void * pfArg,
 
 #if !FSLPRINTF_OMIT_SQL
 /**
-   Quotes the (char *) varg as an SQL string 'should'
-   be quoted. The exact type of the conversion
-   is specified by xtype, which must be one of
-   etSQLESCAPE, etSQLESCAPE2, or etSQLESCAPE3.
+   Quotes the (char *) varg as an SQL string 'should' be quoted. The
+   exact type of the conversion is specified by xtype, which must be
+   one of etSQLESCAPE, etSQLESCAPE2, etSQLESCAPE3.
 
-   Search this file for those constants to find
-   the associated documentation.
+   Search this file for those constants to find the associated
+   documentation.
 */
-static int spech_sqlstring_main( int xtype, fsl_output_f pf,
-                                 void * pfArg, unsigned int pfLen,
-                                 void * varg ){
-  unsigned int i, n;
-  int j, ch, isnull;
-  int needQuote;
-  char q = ((xtype==etSQLESCAPE3)?'"':'\'');   /* Quote character */
+static int spech_sqlstring( int xtype, fsl_output_f pf,
+                            void * pfArg, unsigned int pfLen,
+                            void * varg ){
+  enum { BufLen = 512 };
+  char buf[BufLen];
+  unsigned int i = 0, j = 0;
+  int ch;
+  char const q = xtype==etSQLESCAPE3 ?'"':'\''; /* Quote character */
   char const * escarg = (char const *) varg;
-  char * bufpt = NULL;
-  int rc;
-  isnull = escarg==0;
-  if( isnull ) escarg = (xtype==etSQLESCAPE2 ? "NULL" : "(NULL)");
-  for(i=n=0; (i<pfLen) && ((ch=escarg[i])!=0); ++i){
-    if( ch==q ) ++n;
+  bool const isnull = escarg==0;
+  bool const needQuote =
+    !isnull && (xtype==etSQLESCAPE2 || xtype==etSQLESCAPE3);
+  if( isnull ){
+    escarg = (xtype==etSQLESCAPE2||xtype==etSQLESCAPE3)
+      ? "NULL" : "(NULL)";
   }
-  needQuote = !isnull && xtype==etSQLESCAPE2;
-  n += i + 1 + needQuote*2;
-  /* FIXME: use a static buffer here instead of malloc()! Shame on you! */
-  bufpt = (char *)fsl_malloc( n );
-  if( ! bufpt ) return FSL_RC_OOM;
-  j = 0;
-  if( needQuote ) bufpt[j++] = q;
-  for(i=0; (ch=escarg[i])!=0; i++){
-    bufpt[j++] = ch;
-    if( ch==q ) bufpt[j++] = ch;
+  if( needQuote ) buf[j++] = q;
+  for(i=0; (ch=escarg[i])!=0 && i<pfLen; ++i){
+    buf[j++] = ch;
+    if( ch==q ) buf[j++] = ch;
+    if(j+2>=BufLen){
+      int const rc = pf( pfArg, &buf[0], j );
+      if(rc) return rc;
+      j = 0;
+    }
   }
-  if( needQuote ) bufpt[j++] = q;
-  bufpt[j] = 0;
-  rc = pf( pfArg, bufpt, j );
-  fsl_free( bufpt );
-  return rc;
-}
-
-static int spech_sqlstring1( fsl_output_f pf, void * pfArg,
-                             unsigned int pfLen, void * varg ){
-  return spech_sqlstring_main( etSQLESCAPE, pf, pfArg, pfLen, varg );
-}
-
-static int spech_sqlstring2( fsl_output_f pf, void * pfArg,
-                             unsigned int pfLen, void * varg ){
-  return spech_sqlstring_main( etSQLESCAPE2, pf, pfArg, pfLen, varg );
-}
-
-static int spech_sqlstring3( fsl_output_f pf, void * pfArg,
-                             unsigned int pfLen, void * varg ){
-  return spech_sqlstring_main( etSQLESCAPE3, pf, pfArg, pfLen, varg );
+  if( needQuote ) buf[j++] = q;
+  buf[j] = 0;
+  return j>0 ? pf( pfArg, &buf[0], j ) : 0;
 }
 
 #endif /* !FSLPRINTF_OMIT_SQL */
@@ -3027,24 +3010,21 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
       case etSQLESCAPE:
       case etSQLESCAPE2:
       case etSQLESCAPE3: {
-        fsl_appendf_spec_handler spf =
-          (xtype==etSQLESCAPE)
-          ? spech_sqlstring1
-          : (((xtype==etSQLESCAPE2)||(etBLOBSQL==xtype))
-             ? spech_sqlstring2
-             : spech_sqlstring3
-             );
+        if(flag_altform2 && etSQLESCAPE2==xtype){
+          xtype = etSQLESCAPE3;
+        }
         if(etBLOBSQL==xtype){
-          fsl_buffer * b = va_arg(ap,fsl_buffer*);
-          bufpt = fsl_buffer_str(b);
-          length = (int)fsl_buffer_size(b);
+          fsl_buffer * const b = va_arg(ap,fsl_buffer*);
+          bufpt = b ? fsl_buffer_str(b) : NULL;
+          length = b ? (int)fsl_buffer_size(b) : 0;
+          if(flag_altform2) xtype = etSQLESCAPE3;
         }else{
           bufpt = va_arg(ap,char*);
-          length = bufpt ? strlen(bufpt) : 0;
+          length = bufpt ? (int)strlen(bufpt) : 0;
         }
-        pfrc = spf( pfAppend, pfAppendArg,
-                    (precision<length) ? precision : length,
-                    bufpt );
+        pfrc = spech_sqlstring( xtype, pfAppend, pfAppendArg,
+                                (precision<length) ? precision : length,
+                                bufpt );
         FSLPRINTF_CHECKERR;
         length = 0;
       }
@@ -9528,7 +9508,6 @@ void fcli_command_help(fcli_command const * cmd, bool onlyOne){
       f_out("  %s\n", c->briefDescription);
     }
     if(c->aliases){
-      f_out("  (aliases: ", c->name);
       fcli_help_show_aliases(c->aliases);
     }else{
       f_out("\n");
@@ -9543,6 +9522,7 @@ void fcli_command_help(fcli_command const * cmd, bool onlyOne){
 
 void fcli_help_show_aliases(char const * aliases){
   char const * alias = aliases;
+  f_out("  (aliases: ");
   while ( *alias!=0 ){
     f_out("%s%s", alias, *(strchr(alias, 0) + 1) ? ", " : ")\n");
     alias = strchr(alias, 0) + 1;
@@ -9897,9 +9877,8 @@ bool fsl_content_is_available(fsl_cx * f, fsl_id_t rid){
 
 
 int fsl_content_blob( fsl_cx * f, fsl_id_t blobRid, fsl_buffer * tgt ){
-  fsl_db * dbR = f ? fsl_cx_db_repo(f) : NULL;
-  if(!f || !tgt) return FSL_RC_MISUSE;
-  else if(blobRid<=0) return FSL_RC_RANGE;
+  fsl_db * const dbR = fsl_cx_db_repo(f);
+  if(blobRid<=0) return FSL_RC_RANGE;
   else if(!dbR) return FSL_RC_NOT_A_REPO;
   else{
     int rc;
@@ -14278,7 +14257,7 @@ char const * fsl_db_filename(fsl_db const * db, fsl_size_t * len){
   return db->filename;
 }
 
-fsl_id_t fsl_db_last_insert_id(fsl_db *db){
+fsl_id_t fsl_db_last_insert_id(fsl_db * const db){
   return (db && db->dbh)
     ? (fsl_id_t)sqlite3_last_insert_rowid(db->dbh)
     : -1;
@@ -14319,7 +14298,7 @@ static fsl_size_t fsl_db_stmt_cache_clear(fsl_db * const db){
   return rc;
 }
 
-void fsl_db_close( fsl_db * db ){
+void fsl_db_close( fsl_db * const db ){
   if(!db) return;
   void const * allocStamp = db->allocStamp;
   fsl_cx * const f = db->f;
@@ -15084,7 +15063,7 @@ int fsl_stmt_param_index( fsl_stmt * const stmt, char const * const param){
 #undef BIND_PARAM_CHECK
 #undef BIND_PARAM_CHECK2
 
-#define GET_CHECK if(!stmt || !stmt->colCount) return FSL_RC_MISUSE; \
+#define GET_CHECK if(!stmt->colCount) return FSL_RC_MISUSE; \
   else if((ndx<0) || (ndx>=stmt->colCount)) return FSL_RC_RANGE; else
 
 int fsl_stmt_get_int32( fsl_stmt * const stmt, int ndx, int32_t * v ){
@@ -15857,7 +15836,7 @@ int fsl_db_open( fsl_db * db, char const * dbFile,
   return rc;
 }
 
-int fsl_db_exec_multiv( fsl_db * db, const char * sql, va_list args){
+int fsl_db_exec_multiv( fsl_db * const db, const char * sql, va_list args){
   if(!db || !db->dbh || !sql) return FSL_RC_MISUSE;
   else{
     fsl_buffer buf = fsl_buffer_empty;
@@ -15890,7 +15869,7 @@ int fsl_db_exec_multiv( fsl_db * db, const char * sql, va_list args){
   }
 }
 
-int fsl_db_exec_multi( fsl_db * db, const char * sql, ...){
+int fsl_db_exec_multi( fsl_db * const db, const char * sql, ...){
   if(!db || !db->dbh || !sql) return FSL_RC_MISUSE;
   else{
     int rc;
@@ -15902,7 +15881,7 @@ int fsl_db_exec_multi( fsl_db * db, const char * sql, ...){
   }
 }
 
-int fsl_db_execv( fsl_db * db, const char * sql, va_list args){
+int fsl_db_execv( fsl_db * const db, const char * sql, va_list args){
   if(!db || !db->dbh || !sql) return FSL_RC_MISUSE;
   else{
     fsl_stmt st = fsl_stmt_empty;
@@ -15918,7 +15897,7 @@ int fsl_db_execv( fsl_db * db, const char * sql, va_list args){
   }
 }
 
-int fsl_db_exec( fsl_db * db, const char * sql, ...){
+int fsl_db_exec( fsl_db * const db, const char * sql, ...){
   if(!db || !db->dbh || !sql) return FSL_RC_MISUSE;
   else{
     int rc;
@@ -15930,13 +15909,13 @@ int fsl_db_exec( fsl_db * db, const char * sql, ...){
   }
 }
 
-int fsl_db_changes_recent(fsl_db * db){
+int fsl_db_changes_recent(fsl_db * const db){
   return (db && db->dbh)
     ? sqlite3_changes(db->dbh)
     : 0;
 }
 
-int fsl_db_changes_total(fsl_db * db){
+int fsl_db_changes_total(fsl_db * const db){
   return (db && db->dbh)
     ? sqlite3_total_changes(db->dbh)
     : 0;
@@ -15944,12 +15923,12 @@ int fsl_db_changes_total(fsl_db * db){
 
 /**
     Sets db->priorChanges to sqlite3_total_changes(db->dbh).
- */
-static void fsl_db_reset_change_count(fsl_db * db){
+*/
+static void fsl_db_reset_change_count(fsl_db * const db){
   db->priorChanges = sqlite3_total_changes(db->dbh);
 }
 
-int fsl_db_transaction_begin(fsl_db * db){
+int fsl_db_transaction_begin(fsl_db * const db){
   if(!db || !db->dbh) return FSL_RC_MISUSE;
   else {
     int rc = (0==db->beginCount)
@@ -15964,23 +15943,23 @@ int fsl_db_transaction_begin(fsl_db * db){
   }
 }
 
-int fsl_db_transaction_level(fsl_db * db){
+int fsl_db_transaction_level(fsl_db * const db){
   return db->doRollback ? -db->beginCount : db->beginCount;
 }
 
-int fsl_db_transaction_commit(fsl_db * db){
+int fsl_db_transaction_commit(fsl_db * const db){
   return (db && db->dbh)
     ? fsl_db_transaction_end(db, 0)
     : FSL_RC_MISUSE;
 }
 
-int fsl_db_transaction_rollback(fsl_db * db){
+int fsl_db_transaction_rollback(fsl_db * const db){
   return (db && db->dbh)
     ? fsl_db_transaction_end(db, 1)
     : FSL_RC_MISUSE;
 }
 
-int fsl_db_rollback_force( fsl_db * db ){
+int fsl_db_rollback_force( fsl_db * const db ){
   if(!db || !db->dbh) return FSL_RC_MISUSE;
   else{
     int rc;
@@ -15992,7 +15971,7 @@ int fsl_db_rollback_force( fsl_db * db ){
   }
 }
 
-int fsl_db_transaction_end(fsl_db * db, bool doRollback){
+int fsl_db_transaction_end(fsl_db * const db, bool doRollback){
   int rc = 0;
   if(!db || !db->dbh) return FSL_RC_MISUSE;
   else if (db->beginCount<=0){
@@ -16508,7 +16487,7 @@ double fsl_db_string_to_julian(fsl_db * db, char const * str){
   return rc;
 }
 
-bool fsl_db_existsv(fsl_db * db, char const * sql, va_list args ){
+bool fsl_db_existsv(fsl_db * const db, char const * sql, va_list args ){
   if(!db || !db->dbh || !sql) return 0;
   else if(!*sql) return 0;
   else{
@@ -16523,7 +16502,7 @@ bool fsl_db_existsv(fsl_db * db, char const * sql, va_list args ){
 
 }
 
-bool fsl_db_exists(fsl_db * db, char const * sql, ... ){
+bool fsl_db_exists(fsl_db * const db, char const * sql, ... ){
   bool rc;
   va_list args;
   va_start(args,sql);
@@ -16532,10 +16511,7 @@ bool fsl_db_exists(fsl_db * db, char const * sql, ... ){
   return rc;
 }
 
-/*
-** Return TRUE if zTable exists.
-*/
-bool fsl_db_table_exists(fsl_db * db,
+bool fsl_db_table_exists(fsl_db * const db,
                         fsl_dbrole_e whichDb,
                         const char *zTable
 ){
@@ -16547,24 +16523,18 @@ bool fsl_db_table_exists(fsl_db * db,
   return rc==SQLITE_OK ? true : false;
 }
 
-
-/*
-   Returns non-0 if the database (which must be open) table identified
-   by zTableName has a column named zColName (case-sensitive), else
-   returns 0.
-*/
-char fsl_db_table_has_column( fsl_db * db, char const *zTableName, char const *zColName ){
+bool fsl_db_table_has_column( fsl_db * const db, char const *zTableName, char const *zColName ){
   fsl_stmt q = fsl_stmt_empty;
   int rc = 0;
-  char rv = 0;
-  if(!db || !zTableName || !*zTableName || !zColName || !*zColName) return 0;
+  bool rv = 0;
+  if(!zTableName || !*zTableName || !zColName || !*zColName) return false;
   rc = fsl_db_prepare(db, &q, "PRAGMA table_info(%Q)", zTableName );
   if(!rc) while(FSL_RC_STEP_ROW==fsl_stmt_step(&q)){
     /* Columns: (cid, name, type, notnull, dflt_value, pk) */
     fsl_size_t colLen = 0;
     char const * zCol = fsl_stmt_g_text(&q, 1, &colLen);
     if(0==fsl_strncmp(zColName, zCol, colLen)){
-      rv = 1;
+      rv = true;
       break;
     }
   }
@@ -16615,7 +16585,7 @@ int fsl_db_select_slistv( fsl_db * db, fsl_list * tgt,
   }
 }
 
-int fsl_db_select_slist( fsl_db * db, fsl_list * tgt,
+int fsl_db_select_slist( fsl_db * const db, fsl_list * tgt,
                          char const * fmt, ... ){
   int rc;
   va_list va;
@@ -16625,7 +16595,7 @@ int fsl_db_select_slist( fsl_db * db, fsl_list * tgt,
   return rc;
 }
 
-void fsl_db_sqltrace_enable( fsl_db * db, FILE * outStream ){
+void fsl_db_sqltrace_enable( fsl_db * const db, FILE * outStream ){
   if(db && db->dbh){
     sqlite3_trace(db->dbh, fsl_db_sql_trace, outStream);
   }

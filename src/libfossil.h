@@ -1872,82 +1872,80 @@ FSL_EXPORT void fsl_fclose(FILE * f);
 
    Current (documented) printf extensions:
 
-   (If you are NOT reading this via doxygen-processed sources: the
-   percent signs below are doubled for the sake of doxygen, and
-   each pair refers to only a single percent sign in the format
-   string.)
-
-   %%s works like conventional printf %%s except that any precision
+   `%s` works like conventional printf `%s` except that any precision
    value can be modified via the '#' flag to counts in UTF8 characters
-   instead of bytes! That is, if an "%%#.10s" argument has a byte
+   instead of bytes! That is, if an `%#.10s` argument has a byte
    length of 20, a precision of 10, and contains only 8 UTF8, its
    precision will allow it to output all 8 characters, even though
    they total 20 bytes. The '#' flag works this way for both width and
    precision.
 
-   %%z works exactly like %%s, but takes a non-const (char *) and
+   `%z` works exactly like `%s`, but takes a non-const (char *) and
    deletes the string (using fsl_free()) after appending it to the
    output.
 
-   %%h (HTML) works like %%s but (A) does not support the '#' flag and
+   `%h` (HTML) works like `%s` but (A) does not support the '#' flag and
    (B) converts certain characters (namely '<' and '&') to their HTML
    escaped equivalents.
 
-   %%t (URL encode) works like %%h but converts certain characters
+   `%t` (URL encode) works like `%h` but converts certain characters
    into a representation suitable for use in an HTTP URL. (e.g. ' ' 
-   gets converted to %%20)
+   gets converted to `%20`)
 
-   %%T (URL decode) does the opposite of %%t - it decodes
+   `%T` (URL decode) does the opposite of `%t` - it decodes
    URL-encoded strings and outputs their decoded form. ACHTUNG:
-   fossil(1) interprets this the same as %%t except that it leaves
-   '/' characters unescaped (did that change at some point? This
-   code originally derived from that one some years ago!). It is
-   still to be determined whether we "really need" that behaviour
-   (we don't really need either one, seeing as the library is not
-   CGI-centric like fossil(1) is).
+   fossil(1) interprets this the same as `%t` except that it leaves
+   '/' characters unescaped (did that change at some point? This code
+   originally derived from that one some years ago!). It is still to
+   be determined whether we "really need" that behaviour (we don't
+   really need either one, seeing as the library is not CGI-centric
+   like fossil(1) is).
 
-   %%r requires an int and renders it in "ordinal form". That is,
+   `%r` requires an int and renders it in "ordinal form". That is,
    the number 1 converts to "1st" and 398 converts to "398th".
 
-   %%q quotes a string as required for SQL. That is, '\''
+   `%q` quotes a string as required for SQL. That is, '\''
    characters get doubled. It does NOT included the outer quotes
    and NULL values get replaced by the string "(NULL)" (without
-   quotes). See %%Q...
+   quotes). See `%Q`...
 
-   %%Q works like %%q, but includes the outer '\'' characters and
+   `%Q` works like `%q`, but includes the outer '\'' characters and
    NULL pointers get output as the string literal "NULL" (without
-   quotes), i.e. an SQL NULL.
+   quotes), i.e. an SQL NULL. If modified with `%!Q` then it instead
+   uses double quotes, the intent being for use with identifiers.
+   In that form it still emits `NULL` without quotes, but it is not
+   intended to be used with `NULL` values.
 
-   %%S works like %%.16s. It is intended for fossil hashes. The '!'
+   `%S` works like `%.16s`. It is intended for fossil hashes. The '!'
    modifier removes the length limit, resulting in the whole hash
-   (making this formatting option equivalent to %%s).  (Sidebar: in
+   (making this formatting option equivalent to `%s`).  (Sidebar: in
    fossil(1) this length is runtime configurable but that requires
    storing that option in global state, which is not an option for
    this implementation.)
 
-   %%/: works mostly like %%s but normalizes path-like strings by
+   `%/`: works mostly like `%s` but normalizes path-like strings by
    replacing backslashes with the One True Slash.
 
-   %%b: works like %%s but takes its input from a (fsl_buffer
+   `%b`: works like `%s` but takes its input from a (fsl_buffer
    const*) argument. It does not support the '#' flag.
 
-   %%B: works like %%Q but takes its input from a (fsl_buffer
+   `%B`: works like `%Q` but takes its input from a (fsl_buffer
    const*) argument.
 
-   %%F: works like %%s but runs the output through
+   `%F`: works like `%s` but runs the output through
    fsl_bytes_fossilize().  This requires dynamic memory allocation, so
    is less efficient than re-using a client-provided buffer with
    fsl_bytes_fossilize() if the client needs to fossilize more than
    one element. Does not support the '#' flag.
 
-   %%j: works like %%s but JSON-encodes the string. It does not
+   `%j`: works like `%s` but JSON-encodes the string. It does not
    include the outer quotation marks by default, but using the '!'
-   flag, i.e. %%!j, causes those to be added. The length and precision
+   flag, i.e. `%!j`, causes those to be added. The length and precision
    flags are NOT supported for this format. Results are undefined if
    given input which is not legal UTF8. By default non-ASCII
    characters with values less than 0xffff are emitted as as literal
    characters (no escaping), but the '#' modifier flag will cause it
-   to emit such characters in the \\u#### form. It always encodes
+   to emit such characters in the `\u####` form. It always encodes
    characters above 0xFFFF as UTF16 surrogate pairs (as JSON
    requires). Invalid UTF8 characters may get converted to '?' or may
    produce invalid JSON output. As a special case, if the value is NULL
@@ -8711,7 +8709,8 @@ FSL_EXPORT int fsl_stmt_bind_blob_name( fsl_stmt * const stmt, char const * para
    Gets an integer value from the given 0-based result set column,
    assigns *v to that value, and returns 0 on success.
 
-   Returns FSL_RC_RANGE if index is out of range for stmt.
+   Returns FSL_RC_RANGE if index is out of range for stmt, FSL_RC_MISUSE
+   if stmt has no result columns.
 */
 FSL_EXPORT int fsl_stmt_get_int32( fsl_stmt * const stmt, int index, int32_t * v );
 
@@ -8719,7 +8718,8 @@ FSL_EXPORT int fsl_stmt_get_int32( fsl_stmt * const stmt, int index, int32_t * v
    Gets an integer value from the given 0-based result set column,
    assigns *v to that value, and returns 0 on success.
 
-   Returns FSL_RC_RANGE if index is out of range for stmt.
+   Returns FSL_RC_RANGE if index is out of range for stmt, FSL_RC_MISUSE
+   if stmt has no result columns.
 */
 FSL_EXPORT int fsl_stmt_get_int64( fsl_stmt * const stmt, int index, int64_t * v );
 
@@ -8771,7 +8771,8 @@ FSL_EXPORT char const * fsl_stmt_g_text( fsl_stmt * const stmt, int index, fsl_s
    Gets double value from the given 0-based result set column,
    assigns *v to that value, and returns 0 on success.
 
-   Returns FSL_RC_RANGE if index is out of range for stmt.
+   Returns FSL_RC_RANGE if index is out of range for stmt, FSL_RC_MISUSE
+   if stmt has no result columns.
 */
 FSL_EXPORT int fsl_stmt_get_double( fsl_stmt * const stmt, int index, double * v );
 
@@ -8783,7 +8784,8 @@ FSL_EXPORT int fsl_stmt_get_double( fsl_stmt * const stmt, int index, double * v
    by the statement and the caller should immediately copy it if
    it will be needed for much longer.
 
-   Returns FSL_RC_RANGE if index is out of range for stmt.
+   Returns FSL_RC_RANGE if index is out of range for stmt, FSL_RC_MISUSE
+   if stmt has no result columns.
 */
 FSL_EXPORT int fsl_stmt_get_text( fsl_stmt * const stmt, int index, char const **out,
                        fsl_size_t * outLen );
@@ -8794,7 +8796,8 @@ FSL_EXPORT int fsl_stmt_get_text( fsl_stmt * const stmt, int index, char const *
    differs, and it fetches the data as a raw blob, without any sort
    of string interpretation.
 
-   Returns FSL_RC_RANGE if index is out of range for stmt.
+   Returns FSL_RC_RANGE if index is out of range for stmt, FSL_RC_MISUSE
+   if stmt has no result columns.
 */
 FSL_EXPORT int fsl_stmt_get_blob( fsl_stmt * const stmt, int index, void const **out, fsl_size_t * outLen );
 
@@ -8803,24 +8806,24 @@ FSL_EXPORT int fsl_stmt_get_blob( fsl_stmt * const stmt, int index, void const *
    collect. Returns 0 on success, non-0 on error.  On error
    db->error might be updated to report the problem.
 */
-FSL_EXPORT int fsl_db_exec_multi( fsl_db * db, const char * sql, ...);
+FSL_EXPORT int fsl_db_exec_multi( fsl_db * const db, const char * sql, ...);
 
 /**
    va_list counterpart of db_exec_multi().
 */
-FSL_EXPORT int fsl_db_exec_multiv( fsl_db * db, const char * sql, va_list args);
+FSL_EXPORT int fsl_db_exec_multiv( fsl_db * const db, const char * sql, va_list args);
 
 /**
    Executes a single SQL statement, skipping over any results
    it may have. Returns 0 on success. On error db's error state
    may be updated.
 */
-FSL_EXPORT int fsl_db_exec( fsl_db * db, char const * sql, ... );
+FSL_EXPORT int fsl_db_exec( fsl_db * const db, char const * sql, ... );
 
 /**
    va_list counterpart of fs_db_exec().
 */
-FSL_EXPORT int fsl_db_execv( fsl_db * db, char const * sql, va_list args );
+FSL_EXPORT int fsl_db_execv( fsl_db * const db, char const * sql, va_list args );
 
 /**
    Begins a transaction on the given db. Nested transactions are
@@ -8858,17 +8861,17 @@ FSL_EXPORT int fsl_db_execv( fsl_db * db, char const * sql, va_list args );
    rollback (which would, in effect, hide the error from the
    client).
 */
-FSL_EXPORT int fsl_db_transaction_begin(fsl_db * db);
+FSL_EXPORT int fsl_db_transaction_begin(fsl_db * const db);
 
 /**
    Equivalent to fsl_db_transaction_end(db, 0).
 */
-FSL_EXPORT int fsl_db_transaction_commit(fsl_db * db);
+FSL_EXPORT int fsl_db_transaction_commit(fsl_db * const db);
 
 /**
    Equivalent to fsl_db_transaction_end(db, 1).
 */
-FSL_EXPORT int fsl_db_transaction_rollback(fsl_db * db);
+FSL_EXPORT int fsl_db_transaction_rollback(fsl_db * const db);
 
 /**
    Forces a rollback of any pending transaction in db, regardless
@@ -8881,7 +8884,7 @@ FSL_EXPORT int fsl_db_transaction_rollback(fsl_db * db);
 
    Returns 0 on success.
 */
-FSL_EXPORT int fsl_db_rollback_force(fsl_db * db);
+FSL_EXPORT int fsl_db_rollback_force(fsl_db * const db);
 
 /**
    Decrements the transaction counter incremented by
@@ -8909,7 +8912,7 @@ FSL_EXPORT int fsl_db_rollback_force(fsl_db * db);
    checking the result code is particularly important for those
    cases.
 */
-FSL_EXPORT int fsl_db_transaction_end(fsl_db * db, bool doRollback);
+FSL_EXPORT int fsl_db_transaction_end(fsl_db * const db, bool doRollback);
 
 /**
    Returns the given db's current transaction depth. If the value is
@@ -8917,19 +8920,19 @@ FSL_EXPORT int fsl_db_transaction_end(fsl_db * db, bool doRollback);
    that a rollback is pending. If it is positive, the transaction is
    still in a "good" state. If it is 0, no transaction is active.
 */
-FSL_EXPORT int fsl_db_transaction_level(fsl_db * db);
+FSL_EXPORT int fsl_db_transaction_level(fsl_db * const db);
 
 /**
    Runs the given SQL query on the given db and returns true if the
    query returns any rows, else false. Returns 0 for any error as
    well.
 */
-FSL_EXPORT bool fsl_db_exists(fsl_db * db, char const * sql, ... );
+FSL_EXPORT bool fsl_db_exists(fsl_db * const db, char const * sql, ... );
 
 /**
    va_list counterpart of fsl_db_exists().
 */
-FSL_EXPORT bool fsl_db_existsv(fsl_db * db, char const * sql, va_list args );
+FSL_EXPORT bool fsl_db_existsv(fsl_db * const db, char const * sql, va_list args );
 
 /**
    Runs a fetch-style SQL query against DB and returns the first
@@ -9267,43 +9270,19 @@ FSL_EXPORT double fsl_db_string_to_julian(fsl_db * db, char const * str);
    does not need to be set for that check to work.
 
 
-   The following SQL functions get registered with the db if db->f
-   is not NULL when this function is called:
-
-   - NOW() returns the current time as an integer, as per time(2).
-
-   - FSL_USER() returns the current value of fsl_cx_user_get(),
-   or NULL if that is not set.
-
-   - FSL_CONTENT(INTEGER|STRING) returns the undeltified,
-   uncompressed content for the blob record with the given ID (if
-   the argument is an integer) or symbolic name (as per
-   fsl_sym_to_rid()), as per fsl_content_get(). If the argument
-   does not resolve to an in-repo blob, a db-level error is
-   triggered. If passed an integer, no validation is done on its
-   validity, but such checking can be enforced by instead passing
-   the the ID as a string in the form "rid:ID". Both cases will
-   result in an error if the RID is not found, but the error
-   reporting is arguably slightly better for the "rid:ID" case.
-
-   - FSL_SYM2RID(STRING) returns a blob RID for the given symbol,
-   as per fsl_sym_to_rid(). Triggers an SQL error if fsl_sym_to_rid()
-   fails.
-
-   - FSL_DIRPART(STRING[, BOOL=0]) behaves like fsl_file_dirpart(),
-   returning the result as a string unless it is empty, in which case
-   the result is an SQL NULL.
-
-   Note that functions described as "triggering a db error" will
-   propagate that error, such that fsl_db_err_get() can report it
-   to the client.
-
+   If db->f is not NULL when this function is called then a number of
+   fossil-specific SQL-accessible functions are installed. See the
+   file doc/db-udf.md in the libfossil source tree for complete
+   docs. Note that functions in those docs described as "triggering a
+   db error" will propagate that error, such that fsl_db_err_get() can
+   report it to the client.
 
    @see fsl_db_close()
    @see fsl_db_prepare()
    @see fsl_db_malloc()
 */
-FSL_EXPORT int fsl_db_open( fsl_db * db, char const * dbFile, int openFlags );
+FSL_EXPORT int fsl_db_open( fsl_db * const db, char const * dbFile,
+                            int openFlags );
 
 /**
    Closes the given db handle and frees any resources owned by
@@ -9317,7 +9296,7 @@ FSL_EXPORT int fsl_db_open( fsl_db * db, char const * dbFile, int openFlags );
    If db has any pending transactions, they are rolled
    back by this function.
 */
-FSL_EXPORT void fsl_db_close( fsl_db * db );
+FSL_EXPORT void fsl_db_close( fsl_db * const db );
 
 /**
    If db is an opened db handle, this registers a debugging
@@ -9335,22 +9314,23 @@ FSL_EXPORT void fsl_db_close( fsl_db * db );
 
    This is a no-op if !db or db is not opened.
 */
-FSL_EXPORT void fsl_db_sqltrace_enable( fsl_db * db, FILE * outStream );
+FSL_EXPORT void fsl_db_sqltrace_enable( fsl_db * const db, FILE * outStream );
 
 /**
    Returns the row ID of the most recent insertion,
    or -1 if !db, db is not connected, or 0 if no inserts
    have been performed.
 */
-FSL_EXPORT fsl_id_t fsl_db_last_insert_id(fsl_db *db);
+FSL_EXPORT fsl_id_t fsl_db_last_insert_id(fsl_db * const db);
 
 /**
    Returns non-0 (true) if the database (which must be open) table
    identified by zTableName has a column named zColName
    (case-sensitive), else returns 0.
 */
-FSL_EXPORT char fsl_db_table_has_column( fsl_db * db, char const *zTableName,
-                              char const *zColName );
+FSL_EXPORT bool fsl_db_table_has_column( fsl_db * const db,
+                                         char const *zTableName,
+                                         char const *zColName );
 
 /**
    If a db name has been associated with db then it is returned,
@@ -9452,13 +9432,13 @@ FSL_EXPORT int fsl_db_detach(fsl_db * const db, const char *zLabel);
    well, as long as the visitor expects (char [const]*) list
    elements.
 */
-FSL_EXPORT int fsl_db_select_slist( fsl_db * db, fsl_list * tgt,
+FSL_EXPORT int fsl_db_select_slist( fsl_db * const db, fsl_list * tgt,
                                     char const * fmt, ... );
 
 /**
    The va_list counterpart of fsl_db_select_slist().
 */
-FSL_EXPORT int fsl_db_select_slistv( fsl_db * db, fsl_list * tgt,
+FSL_EXPORT int fsl_db_select_slistv( fsl_db * const db, fsl_list * tgt,
                                      char const * fmt, va_list args );
 
 /**
@@ -9478,7 +9458,7 @@ FSL_EXPORT char * fsl_db_random_hex(fsl_db * db, fsl_size_t n);
 
    See: https://sqlite.org/c3ref/changes.html
 */
-FSL_EXPORT int fsl_db_changes_recent(fsl_db * db);
+FSL_EXPORT int fsl_db_changes_recent(fsl_db * const db);
   
 /**
    Returns "the number of row changes caused by INSERT, UPDATE or
@@ -9488,7 +9468,7 @@ FSL_EXPORT int fsl_db_changes_recent(fsl_db * db);
 
    See; https://sqlite.org/c3ref/total_changes.html
 */
-FSL_EXPORT int fsl_db_changes_total(fsl_db * db);
+FSL_EXPORT int fsl_db_changes_total(fsl_db * const db);
 
 /**
    Initializes the given database file. zFilename is the name of
@@ -9529,13 +9509,13 @@ FSL_EXPORT int fsl_stmt_each_f_dump( fsl_stmt * const stmt, void * state );
    needed if we have duplicate table names across attached dbs or if
    we internally mess up and write a table to the wrong db.
 */
-FSL_EXPORT bool fsl_db_table_exists(fsl_db * db, fsl_dbrole_e whichDb,
+FSL_EXPORT bool fsl_db_table_exists(fsl_db * const db, fsl_dbrole_e whichDb,
                                     const char *zTable);
 
 /**
    The elipsis counterpart of fsl_stmt_bind_fmtv().
 */
-FSL_EXPORT int fsl_stmt_bind_fmt( fsl_stmt * st, char const * fmt, ... );
+FSL_EXPORT int fsl_stmt_bind_fmt( fsl_stmt * const st, char const * fmt, ... );
 
 /**
     Binds a series of values using a formatting string.
@@ -11977,13 +11957,18 @@ FSL_EXPORT fsl_int_t fsl_content_size( fsl_cx * f, fsl_id_t blobRid );
    Returns 0 on success. On error tgt might be partially updated,
    e.g. it might be populated with compressed data instead of
    uncompressed. On error tgt's contents should be recycled
-   (e.g. fsl_buffer_reuse()) or discarded (e.g. fsl_buffer_clear())
-   by the client.
+   (e.g. fsl_buffer_reuse()) or discarded (e.g. fsl_buffer_clear()) by
+   the client. Returns FSL_RC_RANGE if blobRid<=0, FSL_RC_NOT_A_REPO
+   if f has no repo opened, FSL_RC_OOM on allocation error, or
+   potentially any number of other codes via the db layer.
+
+   Results are undefined if any pointer argument is NULL.
 
    @see fsl_content_get()
    @see fsl_content_size()
 */
-FSL_EXPORT int fsl_content_blob( fsl_cx * f, fsl_id_t blobRid, fsl_buffer * tgt );
+FSL_EXPORT int fsl_content_blob( fsl_cx * const f, fsl_id_t blobRid,
+                                 fsl_buffer * const tgt );
 
 /**
    Functionally similar to fsl_content_blob() but does a lot of
@@ -20619,7 +20604,10 @@ typedef int (*fcli_command_f)(fcli_command const *);
 struct fcli_command {
   /** The name of the command. */
   char const * name;
-  /** NUL-delimited string containing optional aliases of the command name. */
+  /**
+     NUL-delimited string containing optional aliases of the above command
+     name. This string _must_ be double-NUL terminated (e.g., "alias\0\al\0").
+  */
   char const * aliases;
   /** Brief description, for use in generating help text. */
   char const * briefDescription;
@@ -20657,8 +20645,9 @@ FSL_EXPORT int fcli_dispatch_commands( fcli_command const * cmdList,
                                        bool reportErrors);
 
 /**
-   Parse fcli_command->aliases for a matching argv string. Return true if
-   found. Note that fcli_command->aliases _must_ be double-NUL terminated.
+   Parse cmd->aliases for an alias (i.e., NUL-terminated string semantically
+   equivalent to cmd->name) matching arg. Return true if found. Note that
+   cmd->aliases _must_ be double-NUL terminated.
 */
 FSL_EXPORT bool fcli_cmd_aliascmp( fcli_command const * cmd, char const * arg );
 
@@ -20765,7 +20754,7 @@ FSL_EXPORT void fcli_cliflag_help(fcli_cliflag const *defs);
 FSL_EXPORT void fcli_command_help(fcli_command const * cmd, bool onlyOne);
 
 /**
-   Pretty print fcli_command->aliases (if any exist).
+   Pretty print fcli_command->aliases like: "  (aliases: cmd, com)".
 */
 FSL_EXPORT void fcli_help_show_aliases(char const * aliases);
 
