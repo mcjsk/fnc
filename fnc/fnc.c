@@ -166,7 +166,7 @@ static struct fnc_setup {
 	} *filter_types;		/* Only load commits of <type>. */
 	union {
 		const char	 *zlimit;
-		int limit;
+		int		  limit;
 	} nrecords;			/* Number of commits to load. */
 	const char	*filter_tag;	/* Only load commits with <tag>. */
 	const char	*filter_branch;	/* Only load commits from <branch>. */
@@ -354,8 +354,10 @@ static struct fnc_setup {
 	    FCLI_FLAG_BOOL("h", "help", NULL,
             "Display blame command help and usage."),
             FCLI_FLAG("n", "limit", "<n>", &fnc_init.nrecords.zlimit,
-	    "Limit depth of blame history to <n> commits. Useful for large "
-	    "files\n    with extensive history."),
+	    "Limit depth of blame history to <n> commits or seconds. Denote the"
+	    "\n    latter by postfixing 's' (e.g., 30s). Useful for large files"
+	    " with\n    extensive history. Persists for the duration of the "
+	    "session."),
             FCLI_FLAG_BOOL("r", "reverse", &fnc_init.reverse,
 	    "Reverse annotate the file starting from a historical commit. "
 	    "Rather\n    than show the most recent change of each line, show "
@@ -639,7 +641,7 @@ struct fnc_blame {
 	off_t				 filesz;
 	fsl_id_t			 origin; /* Tip rid for reverse blame */
 	int				 nlines;
-	int				 ndepth;    /* Limit depth traversal. */
+	int				 nlimit;    /* Limit depth traversal. */
 	pthread_t			 thread_id;
 };
 
@@ -6920,7 +6922,7 @@ cmd_blame(fcli_command const *argv)
 	char		*path = NULL;
 	fsl_uuid_str	 commit_id = NULL;
 	fsl_id_t	 tip = 0, rid = 0;
-	int		 ndepth = 0, rc = 0;
+	int		 nlimit = 0, rc = 0;
 
 	rc = fcli_process_flags(argv->flags);
 	if (rc || (rc = fcli_has_unused_flags(false)))
@@ -6931,10 +6933,18 @@ cmd_blame(fcli_command const *argv)
 		goto end;
 	}
 
-	if (fnc_init.nrecords.zlimit)
-		if ((rc = strtonumcheck(&ndepth, fnc_init.nrecords.zlimit,
-		    INT_MIN, INT_MAX)))
+	if (fnc_init.nrecords.zlimit) {
+		char *n = (char *)fnc_init.nrecords.zlimit;
+		bool timed;
+		if (n[fsl_strlen(n) - 1] == 's') {
+			n[fsl_strlen(n) - 1] = '\0';
+			timed = true;
+		}
+		if ((rc = strtonumcheck(&nlimit, n, INT_MIN, INT_MAX)))
 			goto end;
+		if (timed)
+			nlimit *= -1;
+	}
 
 	if (fnc_init.sym || fnc_init.reverse) {
 		if (fnc_init.reverse) {
@@ -6978,7 +6988,7 @@ cmd_blame(fcli_command const *argv)
 		goto end;
 	}
 
-	rc = open_blame_view(view, path, commit_id, tip, ndepth);
+	rc = open_blame_view(view, path, commit_id, tip, nlimit);
 	if (rc)
 		goto end;
 	rc = view_loop(view);
@@ -6990,7 +7000,7 @@ end:
 
 static int
 open_blame_view(struct fnc_view *view, char *path, fsl_uuid_str commit_id,
-    fsl_id_t tip, int ndepth)
+    fsl_id_t tip, int nlimit)
 {
 	struct fnc_blame_view_state	*s = &view->state.blame;
 	int				 rc = 0;
@@ -7016,7 +7026,7 @@ open_blame_view(struct fnc_view *view, char *path, fsl_uuid_str commit_id,
 	s->blame_complete = false;
 	s->commit_id = commit_id;
 	s->blame.origin = tip;
-	s->blame.ndepth = ndepth;
+	s->blame.nlimit = nlimit;
 	s->spin_idx = 0;
 	s->colour = !fnc_init.nocolour && has_colors();
 
@@ -7090,8 +7100,10 @@ run_blame(struct fnc_view *view)
 	if (rc)
 		goto end;
 	opt->originRid = blame->origin;    /* tip when -r is passed */
-	opt->limitVersions = blame->ndepth;
-	//opt->limitMs = 2000;
+	if (blame->nlimit < 0)
+		opt->limitMs = abs(blame->nlimit) * 1000;
+	else
+		opt->limitVersions = blame->nlimit;
 	opt->out = blame_cb;
 	opt->outState = &blame->cb_cx;
 
