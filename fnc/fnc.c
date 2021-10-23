@@ -4069,6 +4069,7 @@ diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
 	fsl_uuid_str	 xminus = NULL;
 	fsl_id_t	 cid;
 	int		 rc = 0;
+	bool		 allow_symlinks;
 
 	abspath = bminus = sql = fsl_buffer_empty;
 	fsl_ckout_version_info(f, &cid, NULL);
@@ -4191,8 +4192,10 @@ diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
 		}
 		if (!xminus)
 			xminus = fsl_strdup(NULL_DEVICE);
-
-		if (!symlink != !fsl_is_symlink(fsl_buffer_cstr(&abspath))) {
+		allow_symlinks = fsl_config_get_bool(f, FSL_CONFDB_REPO, false,
+		    "allow-symlinks");
+		if (!symlink != !(fsl_is_symlink(fsl_buffer_cstr(&abspath)) &&
+		    allow_symlinks)) {
 			rc = write_diff_meta(buf, path, xminus, path,
 			    NULL_DEVICE, diff_flags, change);
 			fsl_buffer_append(buf, "\nSymbolic links and regular "
