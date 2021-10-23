@@ -4345,9 +4345,7 @@ diff_file(fsl_buffer *buf, fsl_buffer *bminus, const char *zminus,
 	 * behaviour of fossil(1), which produces the abovementioned unexpected
 	 * output described in (1) and (2).
 	 */
-	if (fsl_file_size(abspath) < 0)
-		zplus = NULL_DEVICE;
-	else if (change != FSL_CKOUT_CHANGE_REMOVED) {
+	if (change != FSL_CKOUT_CHANGE_REMOVED) {
 		rc = fsl_ckout_file_content(f, false, abspath, &bplus);
 		if (rc)
 			goto end;
