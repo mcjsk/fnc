@@ -5243,7 +5243,9 @@ usage(void)
 	if (fnc_init.cmdarg)
 		for (idx = 0; idx < nitems(fnc_init.cmd_args); ++idx) {
 			if (!fsl_strcmp(fnc_init.cmdarg,
-			    fnc_init.cmd_args[idx].name)) {
+			    fnc_init.cmd_args[idx].name) ||
+			    fcli_cmd_aliascmp(&fnc_init.cmd_args[idx],
+			    fnc_init.cmdarg)) {
 				fsl_fprintf(f, "[%s] command:\n\n usage:",
 				    fnc_init.cmd_args[idx].name);
 				    fnc_init.fnc_usage_cb[idx]();
