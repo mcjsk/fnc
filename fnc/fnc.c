@@ -553,9 +553,18 @@ struct fnc_tl_view_state {
 	bool			 colour;
 };
 
+struct fnc_pathlist_entry {
+	TAILQ_ENTRY(fnc_pathlist_entry) entry;
+	const char	*path;
+	size_t		 pathlen;
+	void		*data;  /* XXX May want to save id, mode, etc. */
+};
+TAILQ_HEAD(fnc_pathlist_head, fnc_pathlist_entry);
+
 struct fnc_diff_view_state {
 	struct fnc_view			*timeline_view;
 	struct fnc_commit_artifact	*selected_commit;
+	struct fnc_pathlist_head	*paths;
 	fsl_buffer			 buf;
 	fsl_list			 colours;
 	FILE				*f;
@@ -743,7 +752,8 @@ static int		 init_diff_commit(struct fnc_view **, int,
 			    struct fnc_commit_artifact *, struct fnc_view *);
 static int		 open_diff_view(struct fnc_view *,
 			    struct fnc_commit_artifact *, int, bool, bool, bool,
-			    struct fnc_view *, bool);
+			    struct fnc_view *, bool,
+			    struct fnc_pathlist_head *);
 static void		 show_diff_status(struct fnc_view *);
 static int		 create_diff(struct fnc_diff_view_state *);
 static int		 create_changeset(struct fnc_commit_artifact *);
@@ -752,8 +762,9 @@ static int		 wrapline(char *, fsl_size_t ncols_avail,
 			    struct fnc_diff_view_state *, off_t *);
 static int		 add_line_offset(off_t **, size_t *, off_t);
 static int		 diff_commit(fsl_buffer *, struct fnc_commit_artifact *,
-			    int, int, int);
-static int		 diff_checkout(fsl_buffer *, fsl_id_t, int, int, int);
+			    int, int, int, struct fnc_pathlist_head *);
+static int		 diff_checkout(fsl_buffer *, fsl_id_t, int, int, int,
+			    struct fnc_pathlist_head *);
 static int		 write_diff_meta(fsl_buffer *, const char *,
 			    fsl_uuid_str, const char *, fsl_uuid_str, int,
 			    enum fsl_ckout_change_e);
@@ -784,6 +795,11 @@ static int		 path_skip_common_ancestor(char **, const char *,
 			    size_t, const char *, size_t);
 static bool		 fnc_path_is_root_dir(const char *);
 /* static bool		 fnc_path_is_cwd(const char *); */
+static int		 fnc_pathlist_insert(struct fnc_pathlist_entry **,
+			    struct fnc_pathlist_head *, const char *, void *);
+static int		 fnc_path_cmp(const char *, const char *, size_t,
+			    size_t);
+static void		 fnc_pathlist_free(struct fnc_pathlist_head *);
 static int		 browse_commit_tree(struct fnc_view **, int,
 			    struct commit_entry *, const char *);
 static int		 open_tree_view(struct fnc_view *, const char *,
@@ -1982,6 +1998,7 @@ commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
 	commit->puuid = fsl_db_g_text(db, NULL,
 	    "SELECT uuid FROM plink, blob WHERE plink.cid=%d "
 	    "AND blob.rid=plink.pid AND plink.isprim", rid);
+	commit->prid = fsl_uuid_to_rid(f, commit->puuid);
 	commit->uuid = fsl_strdup(fsl_stmt_g_text(q, 0, NULL));
 	commit->rid = rid;
 	commit->type = fsl_strdup(type);
@@ -3501,7 +3518,7 @@ init_diff_commit(struct fnc_view **new_view, int start_col,
 		return RC(FSL_RC_ERROR, "%s", "view_open");
 
 	rc = open_diff_view(diff_view, commit, DIFF_DEF_CTXT, fnc_init.ws,
-	    fnc_init.invert, !fnc_init.quiet, timeline_view, true);
+	    fnc_init.invert, !fnc_init.quiet, timeline_view, true, NULL);
 	if (!rc)
 		*new_view = diff_view;
 
@@ -3511,11 +3528,13 @@ init_diff_commit(struct fnc_view **new_view, int start_col,
 static int
 open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
     int context, bool ignore_ws, bool invert, bool verbosity,
-    struct fnc_view *timeline_view, bool showmeta)
+    struct fnc_view *timeline_view, bool showmeta,
+    struct fnc_pathlist_head *paths)
 {
 	struct fnc_diff_view_state	*s = &view->state.diff;
 	int				 rc = 0;
 
+	s->paths = paths;
 	s->selected_commit = commit;
 	s->first_line_onscreen = 1;
 	s->last_line_onscreen = view->nlines;
@@ -3642,12 +3661,12 @@ create_diff(struct fnc_diff_view_state *s)
 	 * checked-in versions: the former compares on disk file content with
 	 * file artifacts; the latter compares file artifact blobs only.
 	 */
-	if (s->selected_commit->rid == 0)
+	if (s->selected_commit->rid == fcli_cx()->ckout.rid)
 		diff_checkout(&s->buf, s->selected_commit->prid, s->diff_flags,
-		    s->context, s->sbs);
+		    s->context, s->sbs, s->paths);
 	else if (!fsl_strcmp(s->selected_commit->type, "checkin"))
 		diff_commit(&s->buf, s->selected_commit, s->diff_flags,
-		    s->context, s->sbs);
+		    s->context, s->sbs, s->paths);
 
 	/*
 	 * Parse the diff buffer line-by-line to record byte offsets of each
@@ -3924,7 +3943,7 @@ add_line_offset(off_t **line_offsets, size_t *nlines, off_t off)
  */
 static int
 diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
-    int context, int sbs)
+    int context, int sbs, struct fnc_pathlist_head *paths)
 {
 	fsl_cx			*f = fcli_cx();
 	const fsl_card_F	*fc1 = NULL;
@@ -3963,6 +3982,21 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 	while (fc1 || fc2) {
 		const fsl_card_F	*a = NULL, *b = NULL;
 		fsl_ckout_change_e	 change = FSL_CKOUT_CHANGE_NONE;
+		bool			 diff = true;
+
+		if (paths != NULL && !TAILQ_EMPTY(paths)) {
+			struct fnc_pathlist_entry *pe;
+			diff = false;
+			TAILQ_FOREACH(pe, paths, entry)
+				if (!fsl_strcmp(pe->path, fc1->name) ||
+				    !fsl_strcmp(pe->path, fc2->name) ||
+				    !fsl_strncmp(pe->path, fc1->name,
+				    pe->pathlen) || !fsl_strncmp(pe->path,
+				    fc2->name, pe->pathlen)) {
+					diff = true;
+					break;
+				}
+		}
 
 		if (!fc1)	/* File added. */
 			different = 1;
@@ -3981,15 +4015,19 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 				change = FSL_CKOUT_CHANGE_REMOVED;
 				fsl_deck_F_next(&d1, &fc1);
 			}
-			rc = diff_file_artifact(buf, id1, a, commit->rid, b,
-			    change, diff_flags, context, sbs);
+			if (diff)
+				rc = diff_file_artifact(buf, id1, a,
+				    commit->rid, b, change, diff_flags,
+				    context, sbs);
 		} else if (!fsl_uuidcmp(fc1->uuid, fc2->uuid)) { /* No change */
 			fsl_deck_F_next(&d1, &fc1);
 			fsl_deck_F_next(&d2, &fc2);
 		} else {
 			change = FSL_CKOUT_CHANGE_MOD;
-			rc = diff_file_artifact(buf, id1, fc1, commit->rid, fc2,
-			    change, diff_flags, context, sbs);
+			if (diff)
+				rc = diff_file_artifact(buf, id1, fc1,
+				    commit->rid, fc2, change, diff_flags,
+				    context, sbs);
 			fsl_deck_F_next(&d1, &fc1);
 			fsl_deck_F_next(&d2, &fc2);
 		}
@@ -4023,7 +4061,7 @@ end:
  */
 static int
 diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
-    int sbs)
+    int sbs, struct fnc_pathlist_head *paths)
 {
 	fsl_cx		*f = fcli_cx();
 	fsl_stmt	*st = NULL;
@@ -4087,6 +4125,7 @@ diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
 		const char	*path;
 		int		 deleted, changed, added, fid, symlink;
 		enum		 fsl_ckout_change_e change;
+		bool		 diff = true;
 
 		path = fsl_stmt_g_text(st, 0, NULL);
 		deleted = fsl_stmt_g_int32(st, 1);
@@ -4162,11 +4201,23 @@ diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
 				goto yield;
 			continue;
 		}
-		if (fid > 0 && change != FSL_CKOUT_CHANGE_ADDED)
+		if (fid > 0 && change != FSL_CKOUT_CHANGE_ADDED) {
 			rc = fsl_content_get(f, fid, &bminus);
-		else
+			if (rc)
+				goto yield;
+		} else
 			fsl_buffer_clear(&bminus);
-		if (!rc)
+		if (paths != NULL && !TAILQ_EMPTY(paths)) {
+			struct fnc_pathlist_entry *pe;
+			diff = false;
+			TAILQ_FOREACH(pe, paths, entry)
+				if (!fsl_strncmp(pe->path, path, pe->pathlen)
+				    || !fsl_strcmp(pe->path, path)) {
+					diff = true;
+					break;
+				}
+		}
+		if (diff)
 			rc = diff_file(buf, &bminus, path, xminus,
 			    fsl_buffer_cstr(&abspath), change, diff_flags,
 			    context, sbs);
@@ -4278,7 +4329,7 @@ diff_file(fsl_buffer *buf, fsl_buffer *bminus, const char *zminus,
 	fsl_cx		*f = fcli_cx();
 	fsl_buffer	 bplus = fsl_buffer_empty;
 	fsl_buffer	 xplus = fsl_buffer_empty;
-	const char	*zplus = 0;
+	const char	*zplus = NULL;
 	int		 rc = 0;
 	bool		 verbose;
 
@@ -5228,7 +5279,8 @@ usage_diff(void)
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
 	    " %s diff [-C|--no-colour] [-h|--help] [-i|--invert]"
 	    " [-q|--quiet] [-w|--whitespace] [-x|--context n] "
-	    "[commit ...]\n  e.g.: %s diff --context 3 d34db33f c0ff33\n\n",
+	    "[commit1 [commit2]] [path ...]\n  "
+	    "e.g.: %s diff --context 3 d34db33f c0ff33 src/*.c\n\n",
 	    fcli_progname(), fcli_progname());
 }
 
@@ -5256,27 +5308,67 @@ cmd_diff(fcli_command const *argv)
 	fsl_cx				*f = fcli_cx();
 	struct fnc_view			*view;
 	struct fnc_commit_artifact	*commit = NULL;
-	const char			*artifact1 = 0, *artifact2 = 0;
+	struct fnc_pathlist_head	 paths;
+	struct fnc_pathlist_entry	*pe;
+	fsl_deck			 d = fsl_deck_empty;
+	fsl_stmt			*q = NULL;
+	const char			*artifact1 = NULL, *artifact2 = NULL;
+	char				*path0 = NULL;
 	fsl_id_t			 prid = -1, rid = -1;
 	int				 context = DIFF_DEF_CTXT, rc = 0;
+	bool				 showmeta = false;
 
 	rc = fcli_process_flags(argv->flags);
 	if (rc || (rc = fcli_has_unused_flags(false)))
 		return rc;
 
+	TAILQ_INIT(&paths);
+
 	/*
-	 * If only one artifact is supplied, use the local changes in the
-	 * current checkout to diff against it. If no artifacts are supplied,
-	 * diff any local changes on disk against the current checkout.
+	 * To provide an intuitive UI, use some magic. First, if there's an arg
+	 * and it's a symbolic checkin name, take as a checkin artifact. Repeat
+	 * for the next arg. If just one is a checkin, diff changes on disk
+	 * against it. If neither are checkins, diff changes on disk against the
+	 * current checkout. If both are checkins, diff against eachother. Treat
+	 * any non-symbol args as paths and try map to a valid repo path or F
+	 * card in the checkin(s) deck(s). It's tricky, but provides a smart UI:
+	 * fnc diff f1 f2 ... -> diff f{1,2,...} on disk against current ckout
+	 * fnc diff sym3 f1 -> diff f1 on disk against f1 found in checkin sym3
+	 * fnc diff sym1 sym2 f1 f2 -> diff f{1,2} between checkins sym1 & sym2
 	 */
-	if (fcli.argc == 2) {
+	if (!fsl_sym_to_rid(f, fcli_next_arg(false), FSL_SATYPE_ANY, &prid)) {
 		artifact1 = fcli_next_arg(true);
-		artifact2 = fcli_next_arg(true);
-	} else if (fcli.argc < 2) {
+		if (!fsl_rid_is_a_checkin(f, prid)) {
+			rc = RC(FSL_RC_TYPE,
+			    "artifact [%s] not resolvable to a checkin",
+			    artifact1);
+			goto end;
+		}
+		if (!fsl_sym_to_rid(f, fcli_next_arg(false), FSL_SATYPE_ANY,
+		    &rid)) {
+			artifact2 = fcli_next_arg(true);
+			if (!fsl_rid_is_a_checkin(f, rid)) {
+				rc = RC(FSL_RC_TYPE,
+				    "artifact [%s] not resolvable to a checkin",
+				    artifact2);
+				goto end;
+			}
+		}
+	}
+	if (fcli_error()->code == FSL_RC_NOT_FOUND) {
+		fcli_err_reset();  /* If args aren't symbols, treat as paths. */
+		rc = 0;
+	}
+	if (!artifact1) {
 		artifact1 = "current";
-		rid = 0;
-		if (fcli_next_arg(false))
-			artifact1 = fcli_next_arg(true);
+		rc = fsl_sym_to_rid(f, artifact1, FSL_SATYPE_CHECKIN, &prid);
+		if (rc || prid < 0) {
+			rc = RC(rc, "%s", "fsl_sym_to_rid");
+			goto end;
+		}
+	}
+	if (!artifact2) {
+		fsl_ckout_version_info(f, &rid, NULL);
 		if ((rc = fsl_ckout_changes_scan(f)))
 			return RC(rc, "%s", "fsl_ckout_changes_scan");
 		if (!fsl_strcmp(artifact1, "current") &&
@@ -5284,46 +5376,71 @@ cmd_diff(fcli_command const *argv)
 			fsl_fprintf(stdout, "No local changes.\n");
 			return rc;
 		}
-	} else { /* fcli_* APIs should prevent getting here but just in case. */
-		usage_diff();
-		return RC(FSL_RC_MISUSE, "invalid args: %s", fcli.argv);
+	}
+	while (fcli_next_arg(false)) {
+		struct fnc_pathlist_entry *ins;
+		char *path, *path_to_diff;
+		rc = map_repo_path(&path0);
+		path = path0;
+		while (path[0] == '/')
+			++path;
+		if (rc) {
+			if (rc != FSL_RC_NOT_FOUND ||
+			    (!fsl_strcmp(artifact1, "current") && !artifact2))
+				goto end;
+			rc = 0;
+			fcli_err_reset();
+			/* Path may be valid in tree of specified commit(s). */
+			const fsl_card_F *cf = NULL;
+			rc = fsl_deck_load_sym(f, &d, artifact1,
+			    FSL_SATYPE_CHECKIN);
+			if (rc)
+				goto end;
+			cf = fsl_deck_F_search(&d, path);
+			if (cf == NULL) {
+				if (!artifact2) {
+					rc = RC(FSL_RC_NOT_FOUND,
+					    "'%s' not found in tree [%s]", path,
+					    artifact1);
+					goto end;
+				}
+				fsl_deck_finalize(&d);
+				rc = fsl_deck_load_sym(f, &d, artifact2,
+				    FSL_SATYPE_CHECKIN);
+				if (rc)
+					goto end;
+				cf = fsl_deck_F_search(&d, path);
+				if (cf == NULL) {
+					rc = RC(FSL_RC_NOT_FOUND,
+					    "'%s' not found in trees [%s] [%s]",
+					    path, artifact1, artifact2);
+					goto end;
+				}
+			}
+		}
+		path_to_diff = fsl_strdup(path);
+		if (path_to_diff == NULL) {
+			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+			goto end;
+		}
+		rc = fnc_pathlist_insert(&ins, &paths, path_to_diff, NULL);
+		if (rc || ins == NULL /* Duplicate path. */)
+			fsl_free(path_to_diff);
+		if (rc)
+			goto end;
 	}
 
-	/* Find the corresponding rids for the versions we have; checkout = 0 */
-	rc = fsl_sym_to_rid(f, artifact1, FSL_SATYPE_ANY, &prid);
-	if (rc || prid < 0)
-		return RC(rc, "invalid artifact [%s]", artifact1);
-	if (rid != 0)
-		rc = fsl_sym_to_rid(f, artifact2, FSL_SATYPE_ANY, &rid);
-	if (rc || rid < 0)
-		return RC(rc, "invalid artifact [%s]", artifact2);
-
-	commit = calloc(1, sizeof(*commit));
-	if (commit == NULL)
-		return RC(FSL_RC_ERROR, "%s", "calloc fail");
-	if (rid == 0)
-		fsl_ckout_version_info(f, NULL, (fsl_uuid_cstr *)commit->uuid);
-	else
-		commit->uuid = fsl_rid_to_uuid(f, rid);
-	commit->puuid = fsl_rid_to_uuid(f, prid);
-	commit->prid = prid;
-	commit->rid = rid;
-
-	/*
-	 * If either of the supplied versions are not checkin artifacts,
-	 * let the user know which operands aren't valid.
-	 */
-	if ((!fsl_rid_is_a_checkin(f, rid) && rid != 0) ||
-	    !fsl_rid_is_a_checkin(f, prid))
-		return RC(FSL_RC_TYPE,
-		    "artifact(s) [%s] not resolvable to checkin(s)",
-		    (!fsl_rid_is_a_checkin(f, rid) && rid != 0) &&
-		    !fsl_rid_is_a_checkin(f, prid) ?
-		    fsl_mprintf("%s / %s", artifact1, artifact2) :
-		    (!fsl_rid_is_a_checkin(f, rid) && rid != 0) ?
-		    artifact2 : artifact1);
-
-	commit->type = fsl_strdup("checkin");
+	q = fsl_stmt_malloc();
+	rc = commit_builder(&commit, rid, q);
+	if (rc)
+		goto end;
+	if (commit->prid == prid)
+		showmeta = true;
+	else {
+		fsl_free(commit->puuid);
+		commit->prid = prid;
+		commit->puuid = fsl_rid_to_uuid(f, prid);
+	}
 
 	rc = init_curses();
 	if (rc)
@@ -5343,11 +5460,18 @@ cmd_diff(fcli_command const *argv)
 	}
 
 	rc = open_diff_view(view, commit, context, fnc_init.ws,
-	    fnc_init.invert, !fnc_init.quiet, NULL, false);
+	    fnc_init.invert, !fnc_init.quiet, NULL, showmeta, &paths);
 	if (!rc)
 		rc = view_loop(view);
 end:
-	fnc_commit_artifact_close(commit);
+	fsl_free(path0);
+	fsl_deck_finalize(&d);
+	fsl_stmt_finalize(q);
+	if (commit)
+		fnc_commit_artifact_close(commit);
+	TAILQ_FOREACH(pe, &paths, entry)
+		free((char *)pe->path);
+	fnc_pathlist_free(&paths);
 	return rc;
 }
 
@@ -7600,7 +7724,8 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			break;
 		}
 		rc = open_diff_view(diff_view, commit, DIFF_DEF_CTXT,
-		    fnc_init.ws, fnc_init.invert, !fnc_init.quiet, NULL, true);
+		    fnc_init.ws, fnc_init.invert, !fnc_init.quiet, NULL, true,
+		    NULL);
 		s->selected_commit = commit;
 		if (rc) {
 			fnc_commit_artifact_close(commit);
@@ -7858,6 +7983,116 @@ fnc_commit_qid_free(struct fnc_commit_qid *qid)
 {
 	fsl_free(qid->id);
 	fsl_free(qid);
+}
+
+/*
+ * Assign path to **inserted->path, with optional ->data assignment, and insert
+ * in lexicographically sorted order into the doubly-linked list rooted at
+ * *pathlist. If path is not unique, return without adding a duplicate entry.
+ */
+static int
+fnc_pathlist_insert(struct fnc_pathlist_entry **inserted,
+    struct fnc_pathlist_head *pathlist, const char *path, void *data)
+{
+	struct fnc_pathlist_entry	*new, *pe;
+	int				 rc = 0;
+
+	if (inserted)
+		*inserted = NULL;
+
+	new = fsl_malloc(sizeof(*new));
+	if (new == NULL)
+		return RC(FSL_RC_ERROR, "%s", "fsl_malloc");
+	new->path = path;
+	new->pathlen = fsl_strlen(path);
+	new->data = data;
+
+	/*
+	 * Most likely, supplied paths will be sorted (e.g., fnc diff *.c), so
+	 * post-order traversal will be more efficient when inserting entries.
+	 */
+	pe = TAILQ_LAST(pathlist, fnc_pathlist_head);
+	while (pe) {
+		int cmp = fnc_path_cmp(pe->path, new->path, pe->pathlen,
+		    new->pathlen);
+		if (cmp == 0) {
+			fsl_free(new);  /* Duplicate path; don't insert. */
+			return rc;
+		} else if (cmp < 0) {
+			TAILQ_INSERT_AFTER(pathlist, pe, new, entry);
+			if (inserted)
+				*inserted = new;
+			return rc;
+		}
+		pe = TAILQ_PREV(pe, fnc_pathlist_head, entry);
+	}
+
+	TAILQ_INSERT_HEAD(pathlist, new, entry);
+	if (inserted)
+		*inserted = new;
+	return rc;
+}
+
+static int
+fnc_path_cmp(const char *path1, const char *path2, size_t len1, size_t len2)
+{
+	size_t	minlen;
+	size_t	idx = 0;
+
+	/* Trim any leading path separators. */
+	while (path1[0] == '/') {
+		++path1;
+		--len1;
+	}
+	while (path2[0] == '/') {
+		++path2;
+		--len2;
+	}
+	minlen = MIN(len1, len2);
+
+	/* Skip common prefix. */
+	while (idx < minlen && path1[idx] == path2[idx])
+		++idx;
+
+	/* Are path lengths exactly equal (exluding path separators)? */
+	if (len1 == len2 && idx >= minlen)
+		return 0;
+
+	/* Trim any redundant trailing path seperators. */
+	while (path1[idx] == '/' && path1[idx + 1] == '/')
+		++path1;
+	while (path2[idx] == '/' && path2[idx + 1] == '/')
+		++path2;
+
+	/* Ignore trailing path separators. */
+	if (path1[idx] == '/' && path1[idx + 1] == '\0' && path2[idx] == '\0')
+		return 0;
+	if (path2[idx] == '/' && path2[idx + 1] == '\0' && path1[idx] == '\0')
+		return 0;
+
+	/* Order children in subdirectories directly after their parents. */
+	if (path1[idx] == '/' && path2[idx] == '\0')
+		return 1;
+	if (path2[idx] == '/' && path1[idx] == '\0')
+		return -1;
+	if (path1[idx] == '/' && path2[idx] != '\0')
+		return -1;
+	if (path2[idx] == '/' && path1[idx] != '\0')
+		return 1;
+
+	/* Character immediately after the common prefix determines order. */
+	return (unsigned char)path1[idx] < (unsigned char)path2[idx] ? -1 : 1;
+}
+
+static void
+fnc_pathlist_free(struct fnc_pathlist_head *pathlist)
+{
+	struct fnc_pathlist_entry *pe;
+
+	while ((pe = TAILQ_FIRST(pathlist)) != NULL) {
+		TAILQ_REMOVE(pathlist, pe, entry);
+		free(pe);
+	}
 }
 
 static void
