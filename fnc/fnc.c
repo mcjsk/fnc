@@ -5242,14 +5242,16 @@ usage(void)
 	/* If a command was passed on the CLI, output its corresponding help. */
 	if (fnc_init.cmdarg)
 		for (idx = 0; idx < nitems(fnc_init.cmd_args); ++idx) {
-			if (!fsl_strcmp(fnc_init.cmdarg,
-			    fnc_init.cmd_args[idx].name) ||
-			    fcli_cmd_aliascmp(&fnc_init.cmd_args[idx],
-			    fnc_init.cmdarg)) {
+			fcli_command cmd = fnc_init.cmd_args[idx];
+			if (!fsl_strcmp(fnc_init.cmdarg, cmd.name) ||
+			    fcli_cmd_aliascmp(&cmd, fnc_init.cmdarg)) {
 				fsl_fprintf(f, "[%s] command:\n\n usage:",
-				    fnc_init.cmd_args[idx].name);
+				    cmd.name);
 				    fnc_init.fnc_usage_cb[idx]();
-				fcli_cliflag_help(fnc_init.cmd_args[idx].flags);
+				if (cmd.aliases)
+					fcli_help_show_aliases(cmd.aliases);
+				fputc('\n', f);
+				fcli_cliflag_help(cmd.flags);
 				exit(fcli_end_of_main(fnc_init.err));
 			}
 		}
