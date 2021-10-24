@@ -40,8 +40,8 @@
 .Cm diff
 .Op Fl Ciw
 .Op Fl x Ar number
-.Ar commit1
-.Ar commit2
+.Op Ar commit1 Op Ar commit2
+.Op Ar path ...
 .Nm
 .Cm tree
 .Op Fl C
@@ -52,6 +52,8 @@
 .Op Fl C
 .Op Fl c Ar commit Op Fl r
 .Op Fl n Ar number
+.Ar path
+.Nm
 .Ar path
 .Sh DESCRIPTION
 .Nm
@@ -68,7 +70,9 @@ If no
 .Ar command
 or
 .Ar arg
-are specified,
+are specified, or just a
+.Ar path
+is passed,
 .Nm
 will default to displaying this view.
 .It Diff view
@@ -104,7 +108,7 @@ Toggle the active view between fullscreen and splitscreen mode.  Note
 that
 .Nm
 will open nested views in splitscreen mode if the terminal window is
-equal to or greater than 120 columns wide.
+equal to or greater than 110 columns wide.
 .It Cm Q
 Immediatey quit
 .Nm .
@@ -116,11 +120,12 @@ Commands available to
 .Nm
 are as follows:
 .Bl -tag -width 4v
+.Tg log
 .It Cm timeline Oo Fl C | -no-colour Oc Oo Fl T | -tag Ar tag Oc \
 Oo Fl b | -branch Ar branch Oc Oo Fl c | -commit Ar commit Oc \
 Oo Fl h | -help Oc  Oo Fl n | -limit Ar n Oc  Oo Fl t | -type Ar type Oc \
 Oo Fl u | -username Ar user Oc Oo Fl z | -utc Oc  Op Ar path
-.Pp
+.Dl (aliases: Cm log , Cm tl , Cm time , Cm ti )
 Display commit history of a repository.  If
 .Ar path
 is specified, only commits that modified the file(s) at this path will populate
@@ -253,10 +258,31 @@ Find the previous commit that matches the current search term.  The
 search will continue until either a match is found or the latest commit
 on the timeline is consumed.
 .El
+.Tg di
 .It Cm diff Oo Fl C | -no-colour Oc Oo Fl h | -help Oc Oo Fl i | -invert \
 Oc Oo Fl w | -whitespace Oc Oo Fl x | -context Ar n Oc \
-Ar commit1 Ar commit2
-Display the differences between two commits.  Both
+Oo Ar commit1 Oo Ar commit2 Oc Oc Op Ar path ...
+.Dl (alias: Cm di )
+Display the differences between two commits, or between the local changes on
+disk and a given commit.  If neither
+.Ar commit1
+nor
+.Ar commit2
+are specified,
+.Nm
+will diff the local changes on disk against the current checkout.  If only
+.Ar commit1
+is specified,
+.Nm
+will diff the local changes on disk against this version.  When both commit
+arguments are specified, the changes between these two versions will be
+displayed.  If supplied,
+.Nm
+will filter diffs between commits by
+.Ar path
+so that only changes involving the file(s) identified are displayed.  Paths may
+be absolute, relative to the current working directory, or relative to the
+repository root.  Both
 .Ar commit1
 and
 .Ar commit2
@@ -336,8 +362,10 @@ Find the next line that matches the current search term.
 .It Cm N
 Find the previous line that matches the current search term.
 .El
+.Tg dir
 .It Cm tree Oo Fl C | -no-colour Oc Oo Fl c | -commit Ar commit Oc \
 Oo Fl h | -help Oc Op Ar path
+.Dl (aliases: Cm dir , Cm tr )
 Display hierarchical tree of a repository.  If a
 .Ar path
 is specified, display tree nodes of this path.  The
@@ -429,9 +457,11 @@ Find the next tree node that matches the current search pattern.
 .It Cm N
 Find the previous tree node that matches the current search pattern.
 .El
+.Tg praise
 .It Cm blame Oo Fl C | -no-colour Oc \
 Oo Fl c | -commit Ar commit Oo Fl r | -reverse Oc Oc Oo Fl h | -help Oc \
 Oo Fl n | -limit Ar n Oc Ar path
+.Dl (aliases: Cm praise , Cm annotate , Cm bl , Cm pr , Cm an )
 Show commit attribution history for each line of the file at the specified
 .Ar path ,
 which may be absolute, relative to the current working directory, or relative to
@@ -468,12 +498,15 @@ Display blame command help and usage information then exit.
 .It Fl n , -limit Ar n
 Limit depth of blame history to
 .Ar n
-commits.
-By default,
+commits or seconds.  The latter is denoted by a postfixed 's' (e.g., 30s).
+With this option,
+.Nm
+will traverse either as many commits as specified, or as possible in the
+specified time limit.  By default,
 .Nm
 will traverse the entire historical record of the file, which can be expensive
-for large files that span many commits. Use this option for more targeted
-annotation.
+for large files that span many commits. Use this option for a faster, more
+targeted annotation.
 .It Fl r , -reverse
 Reverse annotate the file starting from a historical commit and move forward in
 time. That is, rather than show the most recent change to each line, show the

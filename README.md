@@ -1,13 +1,13 @@
 # README
 
-# fnc 0.2a
+# fnc 0.4
 
 ## A read-only ncurses browser for [Fossil][0] repositories in the terminal.
 
 `fnc` uses [libfossil][1] to create a [`fossil ui`][2] experience in the
 terminal.
 
-Tested and confirmed to run on the following x86 systems (additional platforms
+Tested and confirmed to run on the following x64 systems (additional platforms
 noted inline):
 
 1. OpenBSD 6.8- and 6.9-release
@@ -15,11 +15,11 @@ noted inline):
 3. Linux Mint 20.2 (32- and 64-bit ARM)
 4. Ubuntu 18.04 running Linux kernel 5.11 (32-bit ARM)
 5. Debian GNU/Linux 8, 9, and 10
-6. CentOS 6.5
+6. CentOS 6.5 (32-bit)
 
-Alpha development notwithstanding, the `timeline` and `diff` commands are
-relatively stable; however, several known bugs exist—and there is no commitment
-to refrain from breaking changes.
+Alpha development notwithstanding, the `timeline`, `diff`, `tree`, and `blame`
+commands are relatively stable; however, there is no commitment to refrain from
+breaking changes.
 
 # Build
 
@@ -45,8 +45,12 @@ binaries for some of the abovementioned platforms are available to [download][3]
 
 # Doc
 
-See `fnc --help` and the [fnc(1)][4] manual page. The following
-video briefly demonstrates some of the key bindings in use. [![fnc demo][5]][6]
+See `fnc --help` for a quick reference, and the [fnc(1)][4] manual page for more
+comprehensive documentation. In-app help can also be accessed with the `?`,
+`F1`, or `H` key binding. The following video briefly demonstrates some of the
+key bindings in use.
+
+[![fnc demo][5]][6]
 
 # Why
 
@@ -64,11 +68,12 @@ behaviour; or, if possible, (2) a shell script that contains all necessary
 ingredients to reproduce the problem.
 
 Patches are thoughtfully considered and can be sent to the [mailing list][12].
-While `fossil patch create` patches are preferred, `diff -u` and `fossil diff` 
-patches are also welcomed. Please ensure code complies with OpenBSD's KNF
-[style(9)][13], and any patch containing user-visible code addition,
-modification, or deletion (i.e., code that impacts user interfaces) should
-concomitantly include updating documentation affected by the change.
+While `diff -up` patches are preferred, `fossil patch create` and `fossil diff` 
+patches are also welcomed. Please ensure code conforms to the C99 standard,
+and complies with OpenBSD's KNF [style(9)][13]. Any patch containing
+user-visible code addition, modification, or deletion (i.e., code that impacts
+user interfaces) should concomitantly include updating documentation affected
+by the change.
 
 # Screenshots
 
@@ -76,6 +81,7 @@ concomitantly include updating documentation affected by the change.
 ![diff renamed file](https://fnc.bsdbox.org/uv/resources/img/fnc-diff-full-file_renamed.png "fnc diff file renamed")
 ![diff added file](https://fnc.bsdbox.org/uv/resources/img/fnc-diff-split-file_added.png "fnc diff file added")
 ![diff removed file](https://fnc.bsdbox.org/uv/resources/img/fnc-diff-split-file-removed.png "fnc diff file removed")
+![in-app help](https://fnc.bsdbox.org/uv/resources/img/fnc-inapp_help.png "fnc in-app help")
 ![timeline help](https://fnc.bsdbox.org/uv/resources/img/fnc-timeline-help.png "fnc timeline help")
 
 [0]: https://fossil-scm.org
