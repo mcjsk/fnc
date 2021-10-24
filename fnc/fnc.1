@@ -270,13 +270,14 @@ nor
 .Ar commit2
 are specified,
 .Nm
-will diff the local changes on disk against the current checkout.  If only
+will diff the local changes on disk against the version on which the current
+checkout is based.  If only
 .Ar commit1
 is specified,
 .Nm
-will diff the local changes on disk against this version.  When both commit
-arguments are specified, the changes between these two versions will be
-displayed.  If supplied,
+will diff the current checkout, including any local changes on disk, against
+this version.  When both commit arguments are specified, the changes between
+these two versions will be displayed.  If supplied,
 .Nm
 will filter diffs between commits by
 .Ar path
