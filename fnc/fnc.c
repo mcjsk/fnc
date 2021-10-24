@@ -4303,6 +4303,15 @@ write_diff_meta(fsl_buffer *buf, const char *zminus, fsl_uuid_str xminus,
 		break;
 	}
 
+	if (diff_flags & FSL_DIFF_INVERT) {
+		const char *tmp = minus;
+		minus = plus;
+		plus = tmp;
+		tmp = zminus;
+		zminus = zplus;
+		zplus = tmp;
+	}
+
 	if ((diff_flags & (FSL_DIFF_SIDEBYSIDE | FSL_DIFF_BRIEF)) == 0) {
 		rc = fsl_buffer_appendf(buf, "\nIndex: %s\n%.71c\n", index, '=');
 		if (!rc)
