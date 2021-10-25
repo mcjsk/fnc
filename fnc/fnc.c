@@ -412,6 +412,12 @@ enum fnc_colours {
 	FNC_TAGS_STR
 };
 
+enum fnc_diff_type {
+	FNC_DIFF_CKOUT,
+	FNC_DIFF_COMMIT,
+	FNC_DIFF_BLOB
+};
+
 struct fnc_colour {
 	regex_t	regex;
 	uint8_t	scheme;
@@ -585,6 +591,7 @@ struct fnc_diff_view_state {
 	bool				 eof;
 	bool				 colour;
 	bool				 showmeta;
+	enum fnc_diff_type		 diff_type;
 };
 
 TAILQ_HEAD(fnc_parent_trees, fnc_parent_tree);
@@ -754,7 +761,7 @@ static int		 init_diff_commit(struct fnc_view **, int,
 			    struct fnc_commit_artifact *, struct fnc_view *);
 static int		 open_diff_view(struct fnc_view *,
 			    struct fnc_commit_artifact *, int, bool, bool, bool,
-			    struct fnc_view *, bool,
+			    struct fnc_view *, bool, enum fnc_diff_type,
 			    struct fnc_pathlist_head *);
 static void		 show_diff_status(struct fnc_view *);
 static int		 create_diff(struct fnc_diff_view_state *);
@@ -3520,7 +3527,8 @@ init_diff_commit(struct fnc_view **new_view, int start_col,
 		return RC(FSL_RC_ERROR, "%s", "view_open");
 
 	rc = open_diff_view(diff_view, commit, DIFF_DEF_CTXT, fnc_init.ws,
-	    fnc_init.invert, !fnc_init.quiet, timeline_view, true, NULL);
+	    fnc_init.invert, !fnc_init.quiet, timeline_view, true,
+	    FNC_DIFF_COMMIT, NULL);
 	if (!rc)
 		*new_view = diff_view;
 
@@ -3530,12 +3538,13 @@ init_diff_commit(struct fnc_view **new_view, int start_col,
 static int
 open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
     int context, bool ignore_ws, bool invert, bool verbosity,
-    struct fnc_view *timeline_view, bool showmeta,
+    struct fnc_view *timeline_view, bool showmeta, enum fnc_diff_type diff_type,
     struct fnc_pathlist_head *paths)
 {
 	struct fnc_diff_view_state	*s = &view->state.diff;
 	int				 rc = 0;
 
+	s->diff_type = diff_type;
 	s->paths = paths;
 	s->selected_commit = commit;
 	s->first_line_onscreen = 1;
@@ -3663,7 +3672,7 @@ create_diff(struct fnc_diff_view_state *s)
 	 * checked-in versions: the former compares on disk file content with
 	 * file artifacts; the latter compares file artifact blobs only.
 	 */
-	if (s->selected_commit->rid == fcli_cx()->ckout.rid)
+	if (s->diff_type == FNC_DIFF_CKOUT)
 		diff_checkout(&s->buf, s->selected_commit->prid, s->diff_flags,
 		    s->context, s->sbs, s->paths);
 	else if (!fsl_strcmp(s->selected_commit->type, "checkin"))
@@ -5476,7 +5485,8 @@ cmd_diff(fcli_command const *argv)
 	}
 
 	rc = open_diff_view(view, commit, context, fnc_init.ws,
-	    fnc_init.invert, !fnc_init.quiet, NULL, showmeta, &paths);
+	    fnc_init.invert, !fnc_init.quiet, NULL, showmeta,
+	    artifact2 ? FNC_DIFF_COMMIT : FNC_DIFF_CKOUT, &paths);
 	if (!rc)
 		rc = view_loop(view);
 end:
@@ -7751,7 +7761,7 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		}
 		rc = open_diff_view(diff_view, commit, DIFF_DEF_CTXT,
 		    fnc_init.ws, fnc_init.invert, !fnc_init.quiet, NULL, true,
-		    NULL);
+		    FNC_DIFF_COMMIT, NULL);
 		s->selected_commit = commit;
 		if (rc) {
 			fnc_commit_artifact_close(commit);
