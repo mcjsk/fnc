@@ -40,7 +40,7 @@
 .Cm diff
 .Op Fl Ciw
 .Op Fl x Ar number
-.Op Ar commit1 Op Ar commit2
+.Op Ar artifact1 Op Ar artifact2
 .Op Ar path ...
 .Nm
 .Cm tree
@@ -76,7 +76,8 @@ is passed,
 .Nm
 will default to displaying this view.
 .It Diff view
-Display changes introduced in the specified commit.
+Display changes introduced in the specified commit, or between two repository
+artifacts.
 .It Tree view
 Display tree reflecting the repository state as at the specified commit.
 .It Blame view
@@ -261,35 +262,36 @@ on the timeline is consumed.
 .Tg di
 .It Cm diff Oo Fl C | -no-colour Oc Oo Fl h | -help Oc Oo Fl i | -invert \
 Oc Oo Fl w | -whitespace Oc Oo Fl x | -context Ar n Oc \
-Oo Ar commit1 Oo Ar commit2 Oc Oc Op Ar path ...
+Oo Ar artifact1 Oo Ar artifact2 Oc Oc Op Ar path ...
 .Dl (alias: Cm di )
-Display the differences between two commits, or between the local changes on
-disk and a given commit.  If neither
-.Ar commit1
+Display the differences between two repository artifacts, or between the local
+changes on disk and a given commit.  If neither
+.Ar artifact1
 nor
-.Ar commit2
+.Ar artifact2
 are specified,
 .Nm
 will diff the local changes on disk against the version on which the current
 checkout is based.  If only
-.Ar commit1
+.Ar artifact1
 is specified,
 .Nm
 will diff the current checkout, including any local changes on disk, against
-this version.  When both commit arguments are specified, the changes between
-these two versions will be displayed.  If supplied,
+this version.  When both arguments are specified, the changes between these two
+versions will be displayed.  If supplied,
 .Nm
 will filter diffs between commits by
 .Ar path
 so that only changes involving the file(s) identified are displayed.  Paths may
 be absolute, relative to the current working directory, or relative to the
 repository root.  Both
-.Ar commit1
+.Ar artifact1
 and
-.Ar commit2
-must be of the same type, which is expected to be either (a unique
-abbreviated prefix of) a commit artifact UUID SHA1 or SHA3 hash,
-a symbolic branch name, or an ISO 8601 formatted date.
+.Ar artifact2
+must be of the same type, which is expected to be either a symbolic check-in
+name, tag, (unique abbreviated prefix of) a commit or blob artifact UUID SHA1
+or SHA3 hash, or an ISO 8601 formatted date. Both arguments must be supplied
+when diffing blobs.
 .Pp
 Options for
 .Cm fnc diff

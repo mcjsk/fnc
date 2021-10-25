@@ -5442,7 +5442,7 @@ cmd_diff(fcli_command const *argv)
 				    prid, FSL_SATYPE_ANY) != NULL) {
 					rc = RC(FSL_RC_TYPE, "artifact [%s] "
 					    "not resolvable to a checkin",
-					    artifact1);
+					    artifact2);
 					goto end;
 				}
 				++blob;
