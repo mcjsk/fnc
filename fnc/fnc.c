@@ -415,7 +415,8 @@ enum fnc_colours {
 enum fnc_diff_type {
 	FNC_DIFF_CKOUT,
 	FNC_DIFF_COMMIT,
-	FNC_DIFF_BLOB
+	FNC_DIFF_BLOB,
+	FNC_DIFF_WIKI
 };
 
 struct fnc_colour {
@@ -428,18 +429,19 @@ struct fsl_list_state {
 };
 
 struct fnc_commit_artifact {
-	fsl_buffer	 wiki;
-	fsl_buffer	 pwiki;
-	fsl_list	 changeset;
-	fsl_uuid_str	 uuid;
-	fsl_uuid_str	 puuid;
-	fsl_id_t	 rid;
-	fsl_id_t	 prid;
-	char		*user;
-	char		*timestamp;
-	char		*comment;
-	char		*branch;
-	char		*type;
+	fsl_buffer		 wiki;
+	fsl_buffer		 pwiki;
+	fsl_list		 changeset;
+	fsl_uuid_str		 uuid;
+	fsl_uuid_str		 puuid;
+	fsl_id_t		 rid;
+	fsl_id_t		 prid;
+	char			*user;
+	char			*timestamp;
+	char			*comment;
+	char			*branch;
+	char			*type;
+	enum fnc_diff_type	 diff_type;
 };
 
 struct fsl_file_artifact {
@@ -591,7 +593,6 @@ struct fnc_diff_view_state {
 	bool				 eof;
 	bool				 colour;
 	bool				 showmeta;
-	enum fnc_diff_type		 diff_type;
 };
 
 TAILQ_HEAD(fnc_parent_trees, fnc_parent_tree);
@@ -761,7 +762,7 @@ static int		 init_diff_commit(struct fnc_view **, int,
 			    struct fnc_commit_artifact *, struct fnc_view *);
 static int		 open_diff_view(struct fnc_view *,
 			    struct fnc_commit_artifact *, int, bool, bool, bool,
-			    struct fnc_view *, bool, enum fnc_diff_type,
+			    struct fnc_view *, bool,
 			    struct fnc_pathlist_head *);
 static void		 show_diff_status(struct fnc_view *);
 static int		 create_diff(struct fnc_diff_view_state *);
@@ -784,7 +785,8 @@ static int		 diff_non_checkin(fsl_buffer *,
 			    struct fnc_commit_artifact *, int, int, int);
 static int		 diff_file_artifact(fsl_buffer *, fsl_id_t,
 			    const fsl_card_F *, fsl_id_t, const fsl_card_F *,
-			    fsl_ckout_change_e, int, int, int);
+			    fsl_ckout_change_e, int, int, int,
+			    enum fnc_diff_type);
 static int		 show_diff(struct fnc_view *);
 static int		 write_diff(struct fnc_view *, char *);
 static int		 match_line(const void *, const void *);
@@ -1921,6 +1923,7 @@ commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
 	fsl_buffer			 buf = fsl_buffer_empty;
 	const char			*comment, *prefix, *type;
 	int				 rc = 0;
+	enum fnc_diff_type		 diff_type = FNC_DIFF_WIKI;
 
 	if (rid) {
 		rc = fsl_db_prepare(db, q, "SELECT "
@@ -1948,6 +1951,7 @@ commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
 	switch (*type) {
 	case 'c':
 		type = "checkin";
+		diff_type = FNC_DIFF_COMMIT;
 		break;
 	case 'w':
 		type = "wiki";
@@ -1998,7 +2002,6 @@ commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
 		goto end;
 	}
 
-
 	if (!rid && (rc = fsl_stmt_get_id(q, 3, &rid))) {
 		rc = RC(rc, "%s", "fsl_stmt_get_id");
 		goto end;
@@ -2011,6 +2014,7 @@ commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
 	commit->uuid = fsl_strdup(fsl_stmt_g_text(q, 0, NULL));
 	commit->rid = rid;
 	commit->type = fsl_strdup(type);
+	commit->diff_type = diff_type;
 	commit->timestamp = fsl_strdup(fsl_stmt_g_text(q, 1, NULL));
 	commit->user = fsl_strdup(fsl_stmt_g_text(q, 2, NULL));
 	commit->branch = fsl_strdup(fsl_stmt_g_text(q, 5, NULL));
@@ -3527,8 +3531,7 @@ init_diff_commit(struct fnc_view **new_view, int start_col,
 		return RC(FSL_RC_ERROR, "%s", "view_open");
 
 	rc = open_diff_view(diff_view, commit, DIFF_DEF_CTXT, fnc_init.ws,
-	    fnc_init.invert, !fnc_init.quiet, timeline_view, true,
-	    FNC_DIFF_COMMIT, NULL);
+	    fnc_init.invert, !fnc_init.quiet, timeline_view, true, NULL);
 	if (!rc)
 		*new_view = diff_view;
 
@@ -3538,13 +3541,12 @@ init_diff_commit(struct fnc_view **new_view, int start_col,
 static int
 open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
     int context, bool ignore_ws, bool invert, bool verbosity,
-    struct fnc_view *timeline_view, bool showmeta, enum fnc_diff_type diff_type,
+    struct fnc_view *timeline_view, bool showmeta,
     struct fnc_pathlist_head *paths)
 {
 	struct fnc_diff_view_state	*s = &view->state.diff;
 	int				 rc = 0;
 
-	s->diff_type = diff_type;
 	s->paths = paths;
 	s->selected_commit = commit;
 	s->first_line_onscreen = 1;
@@ -3629,15 +3631,18 @@ create_diff(struct fnc_diff_view_state *s)
 	 * We'll diff artifacts of type "ci" (i.e., "checkin") separately, as
 	 * it's a different process to diff the others (wiki, technote, etc.).
 	 */
-	if (!fsl_strcmp(s->selected_commit->type, "checkin")) {
+	if (s->selected_commit->diff_type == FNC_DIFF_COMMIT)
 		rc = create_changeset(s->selected_commit);
-		if (rc) {
-			rc = RC(FSL_RC_DB, "%s", "create_changeset");
-			goto end;
-		}
-	} else
-		diff_non_checkin(&s->buf, s->selected_commit, s->diff_flags,
-		    s->context, s->sbs);
+	else if (s->selected_commit->diff_type == FNC_DIFF_BLOB)
+		rc = diff_file_artifact(&s->buf, s->selected_commit->prid, NULL,
+		    s->selected_commit->rid, NULL, FSL_CKOUT_CHANGE_MOD,
+		    s->diff_flags, s->context, s->sbs,
+		    s->selected_commit->diff_type);
+	else if (s->selected_commit->diff_type == FNC_DIFF_WIKI)
+		rc = diff_non_checkin(&s->buf, s->selected_commit,
+		    s->diff_flags, s->context, s->sbs);
+	if (rc)
+		goto end;
 
 	/*
 	 * Delay assigning diff headline labels (i.e., diff id1 id2) till now
@@ -3672,11 +3677,11 @@ create_diff(struct fnc_diff_view_state *s)
 	 * checked-in versions: the former compares on disk file content with
 	 * file artifacts; the latter compares file artifact blobs only.
 	 */
-	if (s->diff_type == FNC_DIFF_CKOUT)
-		diff_checkout(&s->buf, s->selected_commit->prid, s->diff_flags,
-		    s->context, s->sbs, s->paths);
-	else if (!fsl_strcmp(s->selected_commit->type, "checkin"))
+	if (s->selected_commit->diff_type == FNC_DIFF_COMMIT)
 		diff_commit(&s->buf, s->selected_commit, s->diff_flags,
+		    s->context, s->sbs, s->paths);
+	else if (s->selected_commit->diff_type == FNC_DIFF_CKOUT)
+		diff_checkout(&s->buf, s->selected_commit->prid, s->diff_flags,
 		    s->context, s->sbs, s->paths);
 
 	/*
@@ -4029,7 +4034,7 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 			if (diff)
 				rc = diff_file_artifact(buf, id1, a,
 				    commit->rid, b, change, diff_flags,
-				    context, sbs);
+				    context, sbs, commit->diff_type);
 		} else if (!fsl_uuidcmp(fc1->uuid, fc2->uuid)) { /* No change */
 			fsl_deck_F_next(&d1, &fc1);
 			fsl_deck_F_next(&d2, &fc2);
@@ -4038,7 +4043,7 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 			if (diff)
 				rc = diff_file_artifact(buf, id1, fc1,
 				    commit->rid, fc2, change, diff_flags,
-				    context, sbs);
+				    context, sbs, commit->diff_type);
 			fsl_deck_F_next(&d1, &fc1);
 			fsl_deck_F_next(&d2, &fc2);
 		}
@@ -4557,12 +4562,15 @@ end:
 static int
 diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
     fsl_id_t vid2, const fsl_card_F *b, enum fsl_ckout_change_e change,
-    int diff_flags, int context, int sbs)
+    int diff_flags, int context, int sbs, enum fnc_diff_type diff_type)
 {
 	fsl_cx		*f = fcli_cx();
+	fsl_stmt	 stmt = fsl_stmt_empty;
 	fsl_buffer	 fbuf1 = fsl_buffer_empty;
 	fsl_buffer	 fbuf2 = fsl_buffer_empty;
+	char		*zminus0 = NULL, *zplus0 = NULL;
 	const char	*zplus = NULL, *zminus = NULL;
+	fsl_uuid_str	 xplus0 = NULL, xminus0 = NULL;
 	fsl_uuid_str	 xplus = NULL, xminus = NULL;
 	int		 rc = 0;
 	bool		 verbose;
@@ -4579,6 +4587,29 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
 			goto end;
 		zminus = a->name;
 		xminus = a->uuid;
+	} else if (diff_type == FNC_DIFF_BLOB) {
+		rc = fsl_cx_prepare(f, &stmt,
+		    "SELECT name FROM filename, mlink "
+		    "WHERE filename.fnid=mlink.fnid AND mlink.fid = %d", vid1);
+		if (rc) {
+			rc = RC(FSL_RC_DB, "%s %d", "fsl_cx_prepare", vid1);
+			goto end;
+		}
+		rc = fsl_stmt_step(&stmt);
+		if (rc == FSL_RC_STEP_ROW) {
+			rc = 0;
+			zminus0 = fsl_strdup(fsl_stmt_g_text(&stmt, 0, NULL));
+			zminus = zminus0;
+		} else if (rc == FSL_RC_STEP_DONE)
+			rc = 0;
+		else if (rc) {
+			rc = RC(rc, "%s", "fsl_stmt_step");
+			goto end;
+		}
+		xminus0 = fsl_rid_to_uuid(f, vid1);
+		xminus = xminus0;
+		fsl_stmt_finalize(&stmt);
+		fsl_content_get(f, vid1, &fbuf1);
 	}
 	if (b) {
 		rc = fsl_card_F_content(f, b, &fbuf2);
@@ -4586,6 +4617,29 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
 			goto end;
 		zplus = b->name;
 		xplus = b->uuid;
+	} else if (diff_type == FNC_DIFF_BLOB) {
+		rc = fsl_cx_prepare(f, &stmt,
+		    "SELECT name FROM filename, mlink "
+		    "WHERE filename.fnid=mlink.fnid AND mlink.fid = %d", vid2);
+		if (rc) {
+			rc = RC(FSL_RC_DB, "%s %d", "fsl_cx_prepare", vid2);
+			goto end;
+		}
+		rc = fsl_stmt_step(&stmt);
+		if (rc == FSL_RC_STEP_ROW) {
+			rc = 0;
+			zplus0 = fsl_strdup(fsl_stmt_g_text(&stmt, 0, NULL));
+			zplus = zplus0;
+		} else if (rc == FSL_RC_STEP_DONE)
+			rc = 0;
+		else if (rc) {
+			rc = RC(rc, "%s", "fsl_stmt_step");
+			goto end;
+		}
+		xplus0 = fsl_rid_to_uuid(f, vid2);
+		xplus = xplus0;
+		fsl_stmt_finalize(&stmt);
+		fsl_content_get(f, vid2, &fbuf2);
 	}
 
 	rc = write_diff_meta(buf, zminus, xminus, zplus, xplus, diff_flags,
@@ -4600,6 +4654,10 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
 		    a ? a->name : NULL_DEVICE, a ? a->uuid : NULL_DEVICE,
 		    b ? b->name : NULL_DEVICE, b ? b->uuid : NULL_DEVICE);
 end:
+	fsl_free(zminus0);
+	fsl_free(zplus0);
+	fsl_free(xminus0);
+	fsl_free(xplus0);
 	fsl_buffer_clear(&fbuf1);
 	fsl_buffer_clear(&fbuf2);
 	return rc;
@@ -5304,7 +5362,7 @@ usage_diff(void)
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
 	    " %s diff [-C|--no-colour] [-h|--help] [-i|--invert]"
 	    " [-q|--quiet] [-w|--whitespace] [-x|--context n] "
-	    "[commit1 [commit2]] [path ...]\n  "
+	    "[artifact1 [artifact2]] [path ...]\n  "
 	    "e.g.: %s diff --context 3 d34db33f c0ff33 src/*.c\n\n",
 	    fcli_progname(), fcli_progname());
 }
@@ -5341,6 +5399,8 @@ cmd_diff(fcli_command const *argv)
 	char				*path0 = NULL;
 	fsl_id_t			 prid = -1, rid = -1;
 	int				 context = DIFF_DEF_CTXT, rc = 0;
+	unsigned short			 blob = 0;
+	enum fnc_diff_type		 diff_type;
 	bool				 showmeta = false;
 
 	rc = fcli_process_flags(argv->flags);
@@ -5364,19 +5424,28 @@ cmd_diff(fcli_command const *argv)
 	if (!fsl_sym_to_rid(f, fcli_next_arg(false), FSL_SATYPE_ANY, &prid)) {
 		artifact1 = fcli_next_arg(true);
 		if (!fsl_rid_is_a_checkin(f, prid)) {
-			rc = RC(FSL_RC_TYPE,
-			    "artifact [%s] not resolvable to a checkin",
-			    artifact1);
-			goto end;
+			if (fsl_rid_to_artifact_uuid(f, prid, FSL_SATYPE_ANY)
+			    != NULL) {
+				rc = RC(FSL_RC_TYPE,
+				    "artifact [%s] not resolvable to a checkin",
+				    artifact1);
+				goto end;
+			}
+			++blob;
 		}
 		if (!fsl_sym_to_rid(f, fcli_next_arg(false), FSL_SATYPE_ANY,
 		    &rid)) {
 			artifact2 = fcli_next_arg(true);
+			diff_type = FNC_DIFF_COMMIT;
 			if (!fsl_rid_is_a_checkin(f, rid)) {
-				rc = RC(FSL_RC_TYPE,
-				    "artifact [%s] not resolvable to a checkin",
-				    artifact2);
-				goto end;
+				if (fsl_rid_to_artifact_uuid(f,
+				    prid, FSL_SATYPE_ANY) != NULL) {
+					rc = RC(FSL_RC_TYPE, "artifact [%s] "
+					    "not resolvable to a checkin",
+					    artifact1);
+					goto end;
+				}
+				++blob;
 			}
 		}
 	}
@@ -5384,7 +5453,9 @@ cmd_diff(fcli_command const *argv)
 		fcli_err_reset();  /* If args aren't symbols, treat as paths. */
 		rc = 0;
 	}
-	if (!artifact1) {
+	if (blob == 2)
+		diff_type = FNC_DIFF_BLOB;
+	if (!artifact1 && diff_type != FNC_DIFF_BLOB) {
 		artifact1 = "current";
 		rc = fsl_sym_to_rid(f, artifact1, FSL_SATYPE_CHECKIN, &prid);
 		if (rc || prid < 0) {
@@ -5392,7 +5463,8 @@ cmd_diff(fcli_command const *argv)
 			goto end;
 		}
 	}
-	if (!artifact2) {
+	if (!artifact2 && diff_type != FNC_DIFF_BLOB) {
+		diff_type = FNC_DIFF_CKOUT;
 		fsl_ckout_version_info(f, &rid, NULL);
 		if ((rc = fsl_ckout_changes_scan(f)))
 			return RC(rc, "%s", "fsl_ckout_changes_scan");
@@ -5402,7 +5474,7 @@ cmd_diff(fcli_command const *argv)
 			return rc;
 		}
 	}
-	while (fcli_next_arg(false)) {
+	while (fcli_next_arg(false) && diff_type != FNC_DIFF_BLOB) {
 		struct fnc_pathlist_entry *ins;
 		char *path, *path_to_diff;
 		rc = map_repo_path(&path0);
@@ -5455,16 +5527,31 @@ cmd_diff(fcli_command const *argv)
 			goto end;
 	}
 
-	q = fsl_stmt_malloc();
-	rc = commit_builder(&commit, rid, q);
-	if (rc)
-		goto end;
-	if (commit->prid == prid)
-		showmeta = true;
-	else {
-		fsl_free(commit->puuid);
+	if (diff_type != FNC_DIFF_BLOB && diff_type != FNC_DIFF_CKOUT) {
+		q = fsl_stmt_malloc();
+		rc = commit_builder(&commit, rid, q);
+		if (rc)
+			goto end;
+		if (commit->prid == prid)
+			showmeta = true;
+		else {
+			fsl_free(commit->puuid);
+			commit->prid = prid;
+			commit->puuid = fsl_rid_to_uuid(f, prid);
+		}
+	} else {
+		commit = calloc(1, sizeof(*commit));
+		if (commit == NULL) {
+			rc = RC(fsl_errno_to_rc(errno, FSL_RC_ERROR),
+			    "%s", "calloc");
+			goto end;
+		}
 		commit->prid = prid;
+		commit->rid = rid;
 		commit->puuid = fsl_rid_to_uuid(f, prid);
+		commit->uuid = fsl_rid_to_uuid(f, rid);
+		commit->type = fsl_strdup("blob");
+		commit->diff_type = diff_type;
 	}
 
 	rc = init_curses();
@@ -5485,8 +5572,7 @@ cmd_diff(fcli_command const *argv)
 	}
 
 	rc = open_diff_view(view, commit, context, fnc_init.ws,
-	    fnc_init.invert, !fnc_init.quiet, NULL, showmeta,
-	    artifact2 ? FNC_DIFF_COMMIT : FNC_DIFF_CKOUT, &paths);
+	    fnc_init.invert, !fnc_init.quiet, NULL, showmeta, &paths);
 	if (!rc)
 		rc = view_loop(view);
 end:
@@ -7761,7 +7847,7 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		}
 		rc = open_diff_view(diff_view, commit, DIFF_DEF_CTXT,
 		    fnc_init.ws, fnc_init.invert, !fnc_init.quiet, NULL, true,
-		    FNC_DIFF_COMMIT, NULL);
+		    NULL);
 		s->selected_commit = commit;
 		if (rc) {
 			fnc_commit_artifact_close(commit);
