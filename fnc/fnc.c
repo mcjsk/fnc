@@ -141,11 +141,13 @@ static void		usage_timeline(void);
 static void		usage_diff(void);
 static void		usage_tree(void);
 static void		usage_blame(void);
+static void		usage_branch(void);
 static int		fcli_flag_type_arg_cb(fcli_cliflag const *);
 static int		cmd_timeline(fcli_command const *);
 static int		cmd_diff(fcli_command const *);
 static int		cmd_tree(fcli_command const *);
 static int		cmd_blame(fcli_command const *);
+static int		cmd_branch(fcli_command const *);
 
 /*
  * Singleton initialising global configuration and state for app startup.
@@ -158,6 +160,7 @@ static struct fnc_setup {
 	int		 err;		/* Indicate fnc error state. */
 	bool		 hflag;		/* Flag if --help is requested. */
 	bool		 vflag;		/* Flag if --version is requested. */
+	bool		 reverse;	/* Reverse branch sort or blame. */
 
 	/* Timeline options. */
 	struct artifact_types {
@@ -181,18 +184,24 @@ static struct fnc_setup {
 	bool		 quiet;		/* Disable verbose diff output. */
 	bool		 invert;	/* Toggle inverted diff output. */
 
-	/* Blame options. */
-	bool		 reverse;	/* Reverse annotation; requires sym. */
+	/* Branch options. */
+	const char	 *before;
+	const char	 *after;
+	bool		 mru;		/* Order by most recently used. */
+	bool		 closed;	/* Show only closed branches. */
+	bool		 open;		/* Show only open branches */
+	bool		 noprivate;	/* Don't show private branches. */
 
 	/* Command line flags and help. */
 	fcli_help_info	  fnc_help;			/* Global help. */
 	fcli_cliflag	  cliflags_global[3];		/* Global options. */
-	fcli_command	  cmd_args[5];			/* App commands. */
-	void		(*fnc_usage_cb[4])(void);	/* Command usage. */
+	fcli_command	  cmd_args[6];			/* App commands. */
+	void		(*fnc_usage_cb[5])(void);	/* Command usage. */
 	fcli_cliflag	  cliflags_timeline[11];	/* Timeline options. */
 	fcli_cliflag	  cliflags_diff[7];		/* Diff options. */
 	fcli_cliflag	  cliflags_tree[4];		/* Tree options. */
 	fcli_cliflag	  cliflags_blame[6];		/* Blame options. */
+	fcli_cliflag	  cliflags_branch[10];		/* Branch options. */
 } fnc_init = {
 	NULL,		/* cmdarg copy of argv[1] to aid usage/error report. */
 	NULL,		/* sym(bolic name) of commit to open defaults to tip. */
@@ -200,6 +209,7 @@ static struct fnc_setup {
 	0,		/* err fnc error state. */
 	false,		/* hflag if --help is requested. */
 	false,		/* vflag if --version is requested. */
+	false,		/* reverse branch sort/annotation defaults to off. */
 	NULL,		/* filter_types defaults to indiscriminate. */
 	{0},		/* nrecords defaults to all commits. */
 	NULL,		/* filter_tag defaults to indiscriminate. */
@@ -212,7 +222,12 @@ static struct fnc_setup {
 	false,		/* nocolour defaults to off (i.e., use diff colours). */
 	false,		/* quiet defaults to off (i.e., verbose diff is on). */
 	false,		/* invert diff defaults to off. */
-	false,		/* reverse annotation defaults to off. */
+	NULL,		/* before defaults to any time. */
+	NULL,		/* after defaults to any time. */
+	false,		/* mru sort is off (defaults to lexical). */
+	false,		/* closed only branches is off (defaults to all). */
+	false,		/* open only branches is off by (defaults to all). */
+	false,		/* noprivate is off (default to show private branch). */
 
 	{ /* fnc_help global app help details. */
 	    "A read-only ncurses browser for Fossil repositories in the "
@@ -240,11 +255,15 @@ static struct fnc_setup {
 	    {"blame", "bl\0praise\0pr\0annotate\0an\0",
 	    "Show commit attribution history for each line of a file.",
 	    cmd_blame, fnc_init.cliflags_blame},
+	    {"branch", "br\0tag\0",
+	    "Show navigable list of repository branches.",
+	    cmd_branch, fnc_init.cliflags_branch},
 	    {NULL,NULL,NULL, NULL}	/* Sentinel. */
 	},
 
 	/* fnc_usage_cb individual command usage details. */
-	{&usage_timeline, &usage_diff, &usage_tree, &usage_blame},
+	{&usage_timeline, &usage_diff, &usage_tree, &usage_blame,
+	    &usage_branch},
 
 	{ /* cliflags_timeline timeline command related options. */
 	    FCLI_FLAG_BOOL("C", "no-colour", &fnc_init.nocolour,
@@ -365,6 +384,38 @@ static struct fnc_setup {
 	    "commit. Requires -c|--commit."),
 	    fcli_cliflag_empty_m
 	}, /* End cliflags_blame. */
+
+	{ /* cliflags_branch branch command related options. */
+	    FCLI_FLAG_BOOL("C", "no-colour", &fnc_init.nocolour,
+            "Disable coloured output, which is enabled by default on supported"
+            "\n    terminals. Colour can also be toggled with the 'c' key "
+            "binding when\n    this option is not used."),
+	    FCLI_FLAG("a", "after", "<date>", &fnc_init.after,
+            "Show branches with last activity occuring after <date>, which is\n"
+            "    expected to be either an ISO8601 (e.g., 2020-10-10) or "
+            "unambiguous\n    DD/MM/YYYY or MM/DD/YYYY formatted date."),
+	    FCLI_FLAG("b", "before", "<date>", &fnc_init.before,
+            "Show branches with last activity occuring before <date>, which is"
+            "\n    expected to be either an ISO8601 (e.g., 2020-10-10) or "
+            "unambiguous\n    DD/MM/YYYY or MM/DD/YYYY formatted date."),
+            FCLI_FLAG_BOOL("c", "closed", &fnc_init.closed,
+	    "Show closed branches only. Open and closed branches are listed by "
+	    "\n    default."),
+	    FCLI_FLAG_BOOL("h", "help", NULL,
+            "Display branch command help and usage."),
+	    FCLI_FLAG_BOOL("m", "mru", &fnc_init.mru,
+            "Display most recently used branches first. Branches are sorted in"
+            "\n    lexicographical order by default."),
+            FCLI_FLAG_BOOL("o", "open", &fnc_init.open,
+	    "Show open branches only. Open and closed branches are listed by "
+	    "\n    default."),
+            FCLI_FLAG_BOOL("p", "no-private", &fnc_init.noprivate,
+	    "Do not show private branches, which are otherwise included in the"
+	    "\n    list of displayed branches by default."),
+            FCLI_FLAG_BOOL("r", "reverse", &fnc_init.reverse,
+	    "Reverse the order in which branches are displayed."),
+	    fcli_cliflag_empty_m
+	}, /* End cliflags_blame. */
 };
 
 enum fsl_list_object {
@@ -381,7 +432,8 @@ enum fnc_view_id {
 	FNC_VIEW_TIMELINE,
 	FNC_VIEW_DIFF,
 	FNC_VIEW_TREE,
-	FNC_VIEW_BLAME
+	FNC_VIEW_BLAME,
+	FNC_VIEW_BRANCH
 };
 
 enum fnc_search_mvmnt {
@@ -678,6 +730,47 @@ struct fnc_blame_view_state {
 	bool				 colour;
 };
 
+struct fnc_branch {
+	char		*name;
+	char		*date;
+	fsl_uuid_str	 id;
+	bool		 private;
+	bool		 current;
+	bool		 open;
+};
+
+struct fnc_branchlist_entry {
+	TAILQ_ENTRY(fnc_branchlist_entry) entries;
+	struct fnc_branch	*branch;
+	int			 idx;
+};
+TAILQ_HEAD(fnc_branchlist_head, fnc_branchlist_entry);
+
+struct fnc_branch_view_state {
+	struct fnc_branchlist_head	 branches;
+	struct fnc_branchlist_entry	*first_branch_onscreen;
+	struct fnc_branchlist_entry	*last_branch_onscreen;
+	struct fnc_branchlist_entry	*matched_branch;
+	struct fnc_branchlist_entry	*selected_branch;
+	const char			*branch_glob;
+	double				 dateline;
+	int				 branch_flags;
+	int				 nbranches;
+	int				 ndisplayed;
+	int				 selected;
+	int				 when;
+#define BRANCH_LS_CLOSED_ONLY	0x001  /* Show closed branches only. */
+#define BRANCH_LS_OPEN_ONLY	0x002  /* Show open branches only. */
+#define BRANCH_LS_OPEN_CLOSED	0x003  /* Show open & closed branches (dflt). */
+#define BRANCH_LS_BITMASK	0x003
+#define BRANCH_LS_NO_PRIVATE	0x004  /* Show public branches only. */
+#define BRANCH_SORT_MTIME	0x008  /* Sort by activity. (default: name) */
+#define BRANCH_SORT_REVERSE	0x010  /* Reverse sort order. */
+	bool				 colour;
+	bool				 show_date;
+	bool				 show_id;
+};
+
 TAILQ_HEAD(view_tailhead, fnc_view);
 struct fnc_view {
 	TAILQ_ENTRY(fnc_view)	 entries;
@@ -690,6 +783,7 @@ struct fnc_view {
 		struct fnc_tl_view_state	timeline;
 		struct fnc_tree_view_state	tree;
 		struct fnc_blame_view_state	blame;
+		struct fnc_branch_view_state	branch;
 	} state;
 	enum fnc_view_id	 vid;
 	enum fnc_search_state	 search_status;
@@ -870,6 +964,31 @@ static int		 close_blame_view(struct fnc_view *);
 static int		 stop_blame(struct fnc_blame *);
 static int		 cancel_blame(void *);
 static void		 fnc_commit_qid_free(struct fnc_commit_qid *);
+static int		 fnc_load_branches(struct fnc_branch_view_state *);
+static int		 create_tmp_branchlist_table(void);
+static int		 alloc_branch(struct fnc_branch **, const char *,
+			    double, bool, bool, bool);
+static int		 fnc_branchlist_insert(struct fnc_branchlist_entry **,
+			    struct fnc_branchlist_head *, struct fnc_branch *);
+static int		 open_branch_view(struct fnc_view *, int, const char *,
+			    double, int);
+static int		 show_branch_view(struct fnc_view *);
+static int		 branch_input_handler(struct fnc_view **,
+			    struct fnc_view *, int);
+static int		 tl_branch_entry(struct fnc_view **, int,
+			    struct fnc_branchlist_entry *);
+static int		 browse_branch_tree(struct fnc_view **, int,
+			    struct fnc_branchlist_entry *);
+static void		 branch_scroll_up(struct fnc_branch_view_state *, int);
+static void		 branch_scroll_down(struct fnc_branch_view_state *,
+			    int);
+static int		 branch_search_next(struct fnc_view *);
+static int		 branch_search_init(struct fnc_view *);
+static int		 match_branchlist_entry(struct fnc_branchlist_entry *,
+			    regex_t *);
+static int		 close_branch_view(struct fnc_view *);
+static void		 fnc_free_branches(struct fnc_branch_view_state *);
+static void		 fnc_branch_close(struct fnc_branch *);
 static void		 view_set_child(struct fnc_view *, struct fnc_view *);
 static int		 view_close_child(struct fnc_view *);
 static int		 close_tree_view(struct fnc_view *);
@@ -888,6 +1007,7 @@ static void		 sigpipe_handler(int);
 static void		 sigcont_handler(int);
 static int		 strtonumcheck(int *, const char *, const int,
 			    const int);
+static int		 fnc_date_to_mtime(double *, const char *, int);
 static char		*fnc_strsep (char **, const char *);
 #ifdef __linux__
 static size_t		 fnc_strlcat(char *, const char *, size_t);
@@ -5339,6 +5459,7 @@ usage(void)
 	usage_diff();
 	usage_tree();
 	usage_blame();
+	usage_branch();
 	fsl_fprintf(f, "  note: %s "
 	    "with no args defaults to the timeline command.\n\n",
 	    fcli_progname());
@@ -5380,8 +5501,20 @@ static void
 usage_blame(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " %s blame [-c commit [-r]] [-h|--help] [-n n] path\n"
+	    " %s blame [-C|--no-colour] [-c commit [-r]] [-h|--help] "
+	    "[-n n] path\n"
 	    "  e.g.: %s blame -c d34db33f src/foo.c\n\n" ,
+	    fcli_progname(), fcli_progname());
+}
+
+static void
+usage_branch(void)
+{
+	fsl_fprintf(fnc_init.err ? stderr : stdout,
+	    " %s branch [-C|--no-colour] [-a|--after date] [-b|--before date] "
+	    "[-c|--closed] [-h|--help] [-m|--mru] [-o|--open] "
+	    "[-p|--no-private] [-r|--reverse] glob\n"
+	    "  e.g.: %s branch -b 2020-10-10\n\n" ,
 	    fcli_progname(), fcli_progname());
 }
 
@@ -8107,6 +8240,733 @@ fnc_commit_qid_free(struct fnc_commit_qid *qid)
 	fsl_free(qid);
 }
 
+static int
+cmd_branch(fcli_command const *argv)
+{
+	struct fnc_view	*view;
+	char		*glob = NULL;
+	double		 dateline;
+	int		 branch_flags, rc = 0, when = 0;
+
+	rc = fcli_process_flags(argv->flags);
+	if (rc || (rc = fcli_has_unused_flags(false)))
+		return rc;
+
+	branch_flags = BRANCH_LS_OPEN_CLOSED;
+	if (fnc_init.open && fnc_init.closed)
+		return RC(FSL_RC_MISUSE, "%s",
+		    "--open and --close are mutually exclusive options");
+	else if (fnc_init.open)
+		branch_flags = BRANCH_LS_OPEN_ONLY;
+	else if (fnc_init.closed)
+		branch_flags = BRANCH_LS_CLOSED_ONLY;
+
+	if (fnc_init.mru)
+		branch_flags |= BRANCH_SORT_MTIME;
+	if (fnc_init.noprivate)
+		branch_flags |= BRANCH_LS_NO_PRIVATE;
+	if (fnc_init.reverse)
+		branch_flags |= BRANCH_SORT_REVERSE;
+
+	if (fnc_init.after && fnc_init.before) {
+		return RC(FSL_RC_MISUSE, "%s",
+		    "--before and --after are mutually exclusive options");
+	} else if (fnc_init.after || fnc_init.before) {
+		const char *d = NULL;
+		d = fnc_init.after ? fnc_init.after : fnc_init.before;
+		when = fnc_init.after ? 1 : -1;
+		rc = fnc_date_to_mtime(&dateline, d, when);
+		if (rc)
+			return rc;
+	}
+	glob = fsl_strdup(fcli_next_arg(true));
+
+	init_curses();
+
+	view = view_open(0, 0, 0, 0, FNC_VIEW_BRANCH);
+	if (view == NULL) {
+		rc = RC(FSL_RC_ERROR, "%s", "view_open");
+		goto end;
+	}
+
+	rc = open_branch_view(view, branch_flags, glob, dateline, when);
+	if (rc)
+		goto end;
+
+	rc = view_loop(view);
+end:
+	fnc_free_branches(&view->state.branch);
+	fsl_free(glob);
+	return rc;
+}
+
+static int
+open_branch_view(struct fnc_view *view, int branch_flags, const char *glob,
+    double dateline, int when)
+{
+	struct fnc_branch_view_state	*s = &view->state.branch;
+	int				 rc = 0;
+
+	s->selected_branch = 0;
+	s->colour = !fnc_init.nocolour && has_colors();
+	s->branch_flags = branch_flags;
+	s->branch_glob = glob;
+	s->dateline = dateline;
+	s->when = when;
+
+	rc = fnc_load_branches(s);
+	if (rc)
+		return rc;
+
+	if (s->colour)
+		init_pair(FNC_COMMIT_ID, COLOR_GREEN, -1);
+
+	view->show = show_branch_view;
+	view->input = branch_input_handler;
+	view->close = close_branch_view;
+	view->search_init = branch_search_init;
+	view->search_next = branch_search_next;
+
+	return 0;
+}
+
+static int
+fnc_load_branches(struct fnc_branch_view_state *s)
+{
+	fsl_cx		*const f = fcli_cx();
+	fsl_buffer	 sql = fsl_buffer_empty;
+	fsl_stmt	*stmt = NULL;
+	char		*curr_branch = NULL;
+	fsl_id_t	 ckoutrid;
+	int		 rc = 0;
+
+	rc = create_tmp_branchlist_table();
+	if (rc)
+		goto end;
+
+	TAILQ_INIT(&s->branches);
+	s->nbranches = 0;
+
+	switch (s->branch_flags & BRANCH_LS_BITMASK) {
+	case BRANCH_LS_CLOSED_ONLY:
+		rc = fsl_buffer_append(&sql,
+		    "SELECT name, isprivate, isclosed, mtime"
+		    " FROM tmp_brlist WHERE isclosed", -1);
+		break;
+	case BRANCH_LS_OPEN_CLOSED:
+		rc = fsl_buffer_append(&sql,
+		    "SELECT name, isprivate, isclosed, mtime"
+		    " FROM tmp_brlist WHERE 1", -1);
+		break;
+	case BRANCH_LS_OPEN_ONLY:
+		rc = fsl_buffer_append(&sql,
+		    "SELECT name, isprivate, isclosed, mtime"
+		    " FROM tmp_brlist WHERE NOT isclosed", -1);
+		break;
+	}
+	if (rc)
+		goto end;
+
+	if (s->branch_glob) {
+		char *like = fsl_mprintf("%%%%%s%%%%", s->branch_glob);
+		rc = fsl_buffer_appendf(&sql, " AND name LIKE %Q", like);
+		fsl_free(like);
+	}
+	if (s->branch_flags & BRANCH_LS_NO_PRIVATE)
+		rc = fsl_buffer_append(&sql, " AND NOT isprivate", -1);
+	if (s->branch_flags & BRANCH_SORT_MTIME)
+		rc = fsl_buffer_append(&sql, " ORDER BY -mtime", -1);
+	else
+		rc = fsl_buffer_append(&sql, " ORDER BY name COLLATE nocase",
+		    -1);
+
+	if (!rc && (s->branch_flags & BRANCH_SORT_REVERSE))
+		rc = fsl_buffer_append(&sql," DESC", -1);
+
+	stmt = fsl_stmt_malloc();
+	if (stmt == NULL)
+		goto end;
+	if (!rc)
+		rc = fsl_cx_prepare(f, stmt, fsl_buffer_cstr(&sql));
+
+	fsl_ckout_version_info(f, &ckoutrid, NULL);
+	curr_branch = fsl_db_g_text(fsl_needs_repo(f), NULL,
+	    "SELECT value FROM tagxref WHERE rid=%d AND tagid=%d", ckoutrid, 8);
+
+	while (fsl_stmt_step(stmt) == FSL_RC_STEP_ROW) {
+		struct fnc_branch *new_branch;
+		struct fnc_branchlist_entry *be;
+		const char *brname = fsl_stmt_g_text(stmt, 0, NULL);
+		bool private = (curr_branch && fsl_stmt_g_int32(stmt, 1) == 1);
+		bool open = fsl_stmt_g_int32(stmt, 2) == 0;
+		double mtime = fsl_stmt_g_int64(stmt, 3);
+		bool curr = curr_branch && !fsl_strcmp(curr_branch, brname);
+		if ((s->when > 0 && mtime < s->dateline) ||
+		    (s->when < 0 && mtime > s->dateline))
+			continue;
+		alloc_branch(&new_branch, brname, mtime, open, private, curr);
+		fnc_branchlist_insert(&be, &s->branches, new_branch);
+		if (be)
+			be->idx = s->nbranches++;
+	}
+	s->first_branch_onscreen = TAILQ_FIRST(&s->branches);
+
+	if (!stmt->rowCount)
+		rc = RC(FSL_RC_BREAK, "no matching records: %s",
+		    s->branch_glob);
+end:
+	fsl_stmt_finalize(stmt);
+	fsl_free(curr_branch);
+	fsl_buffer_clear(&sql);
+	return rc;
+}
+
+static int
+create_tmp_branchlist_table(void)
+{
+	fsl_cx			*const f = fcli_cx();
+	fsl_db			*db = fsl_needs_ckout(f);
+	static const char	 tmp_branchlist_table[] =
+	    "CREATE TEMP TABLE IF NOT EXISTS tmp_brlist AS "
+	    "SELECT tagxref.value AS name,"
+	    " max(event.mtime) AS mtime,"
+	    " EXISTS(SELECT 1 FROM tagxref AS tx WHERE tx.rid=tagxref.rid"
+	    "  AND tx.tagid=(SELECT tagid FROM tag WHERE tagname='closed')"
+	    "  AND tx.tagtype > 0) AS isclosed,"
+	    " (SELECT tagxref.value FROM plink CROSS JOIN tagxref"
+	    "  WHERE plink.pid=event.objid"
+	    "  AND tagxref.rid=plink.cid"
+	    "  AND tagxref.tagid=(SELECT tagid FROM tag WHERE tagname='branch')"
+	    "  AND tagtype>0) AS mergeto,"
+	    " count(*) AS nckin,"
+	    " (SELECT uuid FROM blob WHERE rid=tagxref.rid) AS ckin,"
+	    " event.bgcolor AS bgclr,"
+	    " EXISTS(SELECT 1 FROM private WHERE rid=tagxref.rid) AS isprivate "
+	    "FROM tagxref, tag, event "
+	    "WHERE tagxref.tagid=tag.tagid"
+	    " AND tagxref.tagtype>0"
+	    " AND tag.tagname='branch'"
+	    " AND event.objid=tagxref.rid "
+	    "GROUP BY 1;";
+	int rc = 0;
+
+	if (!db)
+		return RC(FSL_RC_NOT_A_CKOUT, "%s", "fsl_needs_ckout");
+	rc = fsl_db_exec(db, tmp_branchlist_table);
+
+	return rc ? RC(fsl_cx_uplift_db_error2(f, db, rc), "%s", "fsl_db_exec")
+	    : rc;
+}
+
+static int
+alloc_branch(struct fnc_branch **branch, const char *name, double mtime,
+    bool open, bool priv, bool curr)
+{
+	fsl_uuid_str	id = NULL;
+	char		iso8601[ISO8601_TIMESTAMP], *date = NULL;
+	int		rc = 0;
+
+	*branch = calloc(1, sizeof(**branch));
+	if (*branch == NULL)
+		return RC(FSL_RC_ERROR, "%s", "calloc");
+
+	rc = fsl_sym_to_uuid(fcli_cx(), name, FSL_SATYPE_ANY, &id, NULL);
+	if (rc || id == NULL) {
+		rc = RC(FSL_RC_ERROR, "%s", "fsl_sym_to_uuid");
+		fnc_branch_close(*branch);
+		*branch = NULL;
+		return rc;
+	}
+
+	fsl_julian_to_iso8601(mtime, iso8601, false);
+	date = fsl_mprintf("%.*s", ISO8601_DATE_ONLY, iso8601);
+
+	(*branch)->id = id;
+	(*branch)->name = fsl_strdup(name);
+	(*branch)->date = date;
+	(*branch)->open = open;
+	(*branch)->private = priv;
+	(*branch)->current = curr;
+	if ((*branch)->name == NULL) {
+		rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+		fnc_branch_close(*branch);
+		*branch = NULL;
+	}
+
+	return rc;
+}
+
+static int
+fnc_branchlist_insert(struct fnc_branchlist_entry **newp,
+    struct fnc_branchlist_head *branches, struct fnc_branch *branch)
+{
+	struct fnc_branchlist_entry *new, *be;
+
+	*newp = NULL;
+
+	new = fsl_malloc(sizeof(*new));
+	if (new == NULL)
+		return RC(FSL_RC_ERROR, "%s", "fsl_malloc");
+	new->branch = branch;
+	*newp = new;
+
+	be = TAILQ_LAST(branches, fnc_branchlist_head);
+	if (!be) {
+		/* Empty list; add first branch. */
+		TAILQ_INSERT_HEAD(branches, new, entries);
+		return 0;
+	}
+
+	/*
+	 * Deduplicate (extremely unlikely or impossible?) entries on insert.
+	 * Don't force lexicographical order; we already retrieved the branch
+	 * names from the database using a query to obtain (a) lexicographical
+	 * or (b) user-specified sorted results (i.e., MRU or LRU).
+	 */
+	while (be) {
+		if (!fsl_strcmp(be->branch->name, new->branch->name)) {
+			/* Duplicate entry. */
+			fsl_free(new);
+			*newp = NULL;
+			return 0;
+		}
+		be = TAILQ_PREV(be, fnc_branchlist_head, entries);
+	}
+
+	/* No duplicates; add to end of list. */
+	TAILQ_INSERT_TAIL(branches, new, entries);
+	return 0;
+}
+
+static int
+show_branch_view(struct fnc_view *view)
+{
+	struct fnc_branch_view_state	*s = &view->state.branch;
+	struct fnc_branchlist_entry	*be;
+	char				*line = NULL;
+	wchar_t				*wline;
+	int				 limit, n, width, rc = 0;
+
+	werase(view->window);
+	s->ndisplayed = 0;
+
+	limit = view->nlines;
+	if (limit == 0)
+		return rc;
+
+	be = s->first_branch_onscreen;
+
+	if ((line = fsl_mprintf("branches [%d/%d]", be->idx + s->selected + 1,
+	    s->nbranches)) == NULL)
+		return RC(FSL_RC_ERROR, "%s", "fsl_mprintf");
+
+	rc = formatln(&wline, &width, line, view->ncols, 0);
+	if (rc) {
+		fsl_free(line);
+		return rc;
+	}
+	if (screen_is_shared(view))
+		wstandout(view->window);
+	waddwstr(view->window, wline);
+	if (screen_is_shared(view))
+		wstandend(view->window);
+	fsl_free(wline);
+	wline = NULL;
+	fsl_free(line);
+	line = NULL;
+	if (width < view->ncols - 1)
+		waddch(view->window, '\n');
+	if (--limit <= 0)
+		return rc;
+
+	n = 0;
+	while (be && limit > 0) {
+		char *line = NULL;
+
+		line = fsl_mprintf(" %c%s%s%s%s%s%s%c %s",
+		    be->branch->open ? '+' : '-', be->branch->name,
+		    be->branch->private ? "*" : "",
+		    be->branch->current ? "@" : "", s->show_id ?  " [" : "",
+		    s->show_id ? be->branch->id : "", s->show_id ? "]" : "",
+		    s->show_date ? ':' : 0,
+		    s->show_date ? be->branch->date : 0);
+		if (line == NULL)
+			return RC(FSL_RC_ERROR, "%s", "fsl_mprintf");
+
+		rc = formatln(&wline, &width, line, view->ncols, 0);
+		if (rc) {
+			fsl_free(line);
+			return rc;
+		}
+
+		if (n == s->selected) {
+			if (view->active)
+				wattr_on(view->window, A_REVERSE, NULL);
+			s->selected_branch = be;
+		}
+		if (s->colour)
+			wattr_on(view->window, COLOR_PAIR(FNC_COMMIT_ID), NULL);
+		waddwstr(view->window, wline);
+		if (s->colour)
+			wattr_off(view->window, COLOR_PAIR(FNC_COMMIT_ID), NULL);
+		if (width < view->ncols - 1)
+			waddch(view->window, '\n');
+		if (n == s->selected && view->active)
+			wattr_off(view->window, A_REVERSE, NULL);
+
+		fsl_free(line);
+		fsl_free(wline);
+		wline = NULL;
+		++n;
+		++s->ndisplayed;
+		--limit;
+		s->last_branch_onscreen = be;
+		be = TAILQ_NEXT(be, entries);
+	}
+
+	draw_vborder(view);
+	return rc;
+}
+
+static int
+branch_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
+{
+	struct fnc_branch_view_state	*s = &view->state.branch;
+	struct fnc_view			*timeline_view, *tree_view;
+	struct fnc_branchlist_entry	*be;
+	int				 start_col = 0, n, rc = 0;
+
+	switch (ch) {
+	case 'c':
+		s->colour = !s->colour;
+		break;
+	case 'd':
+		s->show_date = !s->show_date;
+		break;
+	case 'i':
+		s->show_id = !s->show_id;
+		break;
+	case KEY_ENTER:
+	case '\r':
+		if (!s->selected_branch)
+			break;
+		if (view_is_parent(view))
+			start_col = view_split_start_col(view->start_col);
+		rc = tl_branch_entry(&timeline_view, start_col,
+		    s->selected_branch);
+		view->active = false;
+		timeline_view->active = true;
+		if (view_is_parent(view)) {
+			rc = view_close_child(view);
+			if (rc)
+				return rc;
+			view_set_child(view, timeline_view);
+			view->focus_child = true;
+		} else
+			*new_view = timeline_view;
+		break;
+	case 't':
+		if (!s->selected_branch)
+			break;
+		if (view_is_parent(view))
+			start_col = view_split_start_col(view->start_col);
+		rc = browse_branch_tree(&tree_view, start_col,
+		    s->selected_branch);
+		if (rc || tree_view == NULL)
+			break;
+		view->active = false;
+		tree_view->active = true;
+		if (view_is_parent(view)) {
+			rc = view_close_child(view);
+			if (rc)
+				return rc;
+			view_set_child(view, tree_view);
+			view->focus_child = true;
+		} else
+			*new_view = tree_view;
+		break;
+	case 'g':
+		if (!fnc_home(view))
+			break;
+		/* FALL THROUGH */
+	case KEY_HOME:
+		s->selected = 0;
+		s->first_branch_onscreen = TAILQ_FIRST(&s->branches);
+		break;
+	case KEY_END:
+	case 'G':
+		s->selected = 0;
+		be = TAILQ_LAST(&s->branches, fnc_branchlist_head);
+		for (n = 0; n < view->nlines - 1; ++n) {
+			if (be == NULL)
+				break;
+			s->first_branch_onscreen = be;
+			be = TAILQ_PREV(be, fnc_branchlist_head, entries);
+		}
+		if (n > 0)
+			s->selected = n - 1;
+		break;
+	case KEY_UP:
+	case 'k':
+		if (s->selected > 0) {
+			--s->selected;
+			break;
+		}
+		branch_scroll_up(s, 1);
+		break;
+	case KEY_DOWN:
+	case 'j':
+		if (s->selected < s->ndisplayed - 1) {
+			++s->selected;
+			break;
+		}
+		if (TAILQ_NEXT(s->last_branch_onscreen, entries) == NULL)
+			/* Reached last entry. */
+			break;
+		branch_scroll_down(s, 1);
+		break;
+	case KEY_PPAGE:
+	case CTRL('b'):
+		if (s->first_branch_onscreen == TAILQ_FIRST(&s->branches))
+			s->selected = 0;
+		branch_scroll_up(s, MAX(0, view->nlines - 1));
+		break;
+	case KEY_NPAGE:
+	case CTRL('f'):
+		if (TAILQ_NEXT(s->last_branch_onscreen, entries) == NULL) {
+			/* No more entries off-page; move cursor down. */
+			if (s->selected < s->ndisplayed - 1)
+				s->selected = s->ndisplayed - 1;
+			break;
+		}
+		branch_scroll_down(s, view->nlines - 1);
+		break;
+	case CTRL('l'):
+	case 'R':
+		fnc_free_branches(s);
+		s->branch_glob = NULL; /* Shared pointer. */
+		s->when = 0;
+		s->branch_flags = BRANCH_LS_OPEN_CLOSED;
+		rc = fnc_load_branches(s);
+		break;
+	case KEY_RESIZE:
+		if (view->nlines >= 2 && s->selected >= view->nlines - 1)
+			s->selected = view->nlines - 2;
+		break;
+	default:
+		break;
+	}
+
+	return rc;
+}
+
+static int
+tl_branch_entry(struct fnc_view **new_view, int start_col,
+    struct fnc_branchlist_entry *be)
+{
+	struct fnc_view	*timeline_view;
+	fsl_id_t	 rid;
+	int		 rc = 0;
+
+	*new_view = NULL;
+
+	rid = fsl_uuid_to_rid(fcli_cx(), be->branch->id);
+	if (rid < 0)
+		return RC(rc, "%s", "fsl_uuid_to_rid");
+
+	timeline_view = view_open(0, 0, 0, start_col, FNC_VIEW_TIMELINE);
+	if (timeline_view == NULL) {
+		rc = RC(FSL_RC_ERROR, "%s", "view_open");
+		goto end;
+	}
+
+	rc = open_timeline_view(timeline_view, rid, "/");
+end:
+	if (rc)
+		view_close(timeline_view);
+	else
+		*new_view = timeline_view;
+	return rc;
+}
+
+static int
+browse_branch_tree(struct fnc_view **new_view, int start_col,
+    struct fnc_branchlist_entry *be)
+{
+	struct fnc_view	*tree_view;
+	fsl_id_t	 rid;
+	int		 rc = 0;
+
+	*new_view = NULL;
+
+	rid = fsl_uuid_to_rid(fcli_cx(), be->branch->id);
+	if (rid < 0)
+		return RC(rc, "%s", "fsl_uuid_to_rid");
+
+	tree_view = view_open(0, 0, 0, start_col, FNC_VIEW_TREE);
+	if (tree_view == NULL)
+		return RC(FSL_RC_ERROR, "%s", "view_open");
+
+	rc = open_tree_view(tree_view, "/", rid);
+	if (!rc)
+		*new_view = tree_view;
+	return rc;
+}
+
+static void
+branch_scroll_up(struct fnc_branch_view_state *s, int maxscroll)
+{
+	struct fnc_branchlist_entry	*be;
+	int				 idx = 0;
+
+	if (s->first_branch_onscreen == TAILQ_FIRST(&s->branches))
+		return;
+
+	be = TAILQ_PREV(s->first_branch_onscreen, fnc_branchlist_head, entries);
+	while (idx++ < maxscroll) {
+		if (be == NULL)
+			break;
+		s->first_branch_onscreen = be;
+		be = TAILQ_PREV(be, fnc_branchlist_head, entries);
+	}
+}
+
+static void
+branch_scroll_down(struct fnc_branch_view_state *s, int maxscroll)
+{
+	struct fnc_branchlist_entry	*next, *last;
+	int				 idx = 0;
+
+	if (s->first_branch_onscreen)
+		next = TAILQ_NEXT(s->first_branch_onscreen, entries);
+	else
+		next = TAILQ_FIRST(&s->branches);
+
+	last = s->last_branch_onscreen;
+	while (next && last && idx++ < maxscroll) {
+		last = TAILQ_NEXT(last, entries);
+		if (last) {
+			s->first_branch_onscreen = next;
+			next = TAILQ_NEXT(next, entries);
+		}
+	}
+}
+
+static int
+branch_search_init(struct fnc_view *view)
+{
+	struct fnc_branch_view_state *s = &view->state.branch;
+
+	s->matched_branch = NULL;
+	return 0;
+}
+
+static int
+branch_search_next(struct fnc_view *view)
+{
+	struct fnc_branch_view_state	*s = &view->state.branch;
+	struct fnc_branchlist_entry	*be = NULL;
+
+	if (view->searching == SEARCH_DONE) {
+		view->search_status = SEARCH_CONTINUE;
+		return 0;
+	}
+
+	if (s->matched_branch) {
+		if (view->searching == SEARCH_FORWARD) {
+			if (s->selected_branch)
+				be = TAILQ_NEXT(s->selected_branch, entries);
+			else
+				be = TAILQ_PREV(s->selected_branch,
+				    fnc_branchlist_head, entries);
+		} else {
+			if (s->selected_branch == NULL)
+				be = TAILQ_LAST(&s->branches,
+				    fnc_branchlist_head);
+			else
+				be = TAILQ_PREV(s->selected_branch,
+				    fnc_branchlist_head, entries);
+		}
+	} else {
+		if (view->searching == SEARCH_FORWARD)
+			be = TAILQ_FIRST(&s->branches);
+		else
+			be = TAILQ_LAST(&s->branches, fnc_branchlist_head);
+	}
+
+	while (1) {
+		if (be == NULL) {
+			if (s->matched_branch == NULL) {
+				view->search_status = SEARCH_CONTINUE;
+				return 0;
+			}
+			if (view->searching == SEARCH_FORWARD)
+				be = TAILQ_FIRST(&s->branches);
+			else
+				be = TAILQ_LAST(&s->branches,
+				    fnc_branchlist_head);
+		}
+
+		if (match_branchlist_entry(be, &view->regex)) {
+			view->search_status = SEARCH_CONTINUE;
+			s->matched_branch = be;
+			break;
+		}
+
+		if (view->searching == SEARCH_FORWARD)
+			be = TAILQ_NEXT(be, entries);
+		else
+			be = TAILQ_PREV(be, fnc_branchlist_head, entries);
+	}
+
+	if (s->matched_branch) {
+		s->first_branch_onscreen = s->matched_branch;
+		s->selected = 0;
+	}
+
+	return 0;
+}
+
+static int
+match_branchlist_entry(struct fnc_branchlist_entry *be, regex_t *regex)
+{
+	regmatch_t regmatch;
+
+	return regexec(regex, be->branch->name, 1, &regmatch, 0) == 0;
+}
+
+static int
+close_branch_view(struct fnc_view *view)
+{
+	struct fnc_branch_view_state *s = &view->state.branch;
+
+	fnc_free_branches(s);
+
+	return 0;
+}
+
+static void
+fnc_free_branches(struct fnc_branch_view_state *s)
+{
+	struct fnc_branchlist_entry *be;
+
+	while (!TAILQ_EMPTY(&s->branches)) {
+		be = TAILQ_FIRST(&s->branches);
+		TAILQ_REMOVE(&s->branches, be, entries);
+		fnc_branch_close(be->branch);
+		fsl_free(be);
+	}
+}
+
+static void
+fnc_branch_close(struct fnc_branch *branch)
+{
+	fsl_free(branch->name);
+	fsl_free(branch->date);
+	fsl_free(branch->id);
+	fsl_free(branch);
+}
+
 /*
  * Assign path to **inserted->path, with optional ->data assignment, and insert
  * in lexicographically sorted order into the doubly-linked list rooted at
@@ -8244,6 +9104,50 @@ strtonumcheck(int *ret, const char *nstr, const int min, const int max)
 		    "invalid char in <n>: -n|--limit=%s [%s]", nstr, ptr);
 
 	*ret = n;
+	return 0;
+}
+
+/*
+ * Attempt to parse string d, which must resemble either an ISO8601 formatted
+ * date (e.g., 2021-10-10, 2020-01-01T10:10:10), disgregarding any trailing
+ * garbage or space characters such that "2021-10-10x" or "2020-01-01 10:10:10"
+ * will pass, or an _unambiguous_ DD/MM/YYYY or MM/DD/YYYY formatted date. Upon
+ * success, use when to determine which time component to add to the date (i.e.,
+ * 1 sec before or after midnight), and convert to an mtime suitable for
+ * comparisons with repository mtime fields and assign to *ret. Upon failure,
+ * the error state will be updated with an appropriate error message and code.
+ */
+static int
+fnc_date_to_mtime(double *ret, const char *d, int when)
+{
+	struct tm	t = {0, 0, 0, 0, 0, 0};
+	char		iso8601[ISO8601_TIMESTAMP];
+
+	/* Fill the tm structure. */
+	if (strptime(d, "%Y-%m-%d", &t) == NULL) {
+		/* If not YYYY-MM-DD, try MM/DD/YYYY and DD/MM/YYYY. */
+		if (strptime(d, "%D", &t) != NULL) {
+			/* If MM/DD/YYYY, check if it could be DD/MM/YYYY too */
+			if (strptime(d, "%d/%m/%Y", &t) != NULL)
+				return RC(FSL_RC_AMBIGUOUS,
+				    "ambiguous date [%s]", d);
+		} else if (strptime(d, "%d/%m/%Y", &t) != NULL) {
+			/* If DD/MM/YYYY, check if it could be MM/DD/YYYY too */
+			if (strptime(d, "%D", &t) != NULL)
+				return RC(FSL_RC_AMBIGUOUS,
+				    "ambiguous date [%s]", d);
+		} else
+			return RC(FSL_RC_TYPE, "unable to parse date: %s", d);
+	}
+
+	/* Format tm into ISO8601 string then convert to mtime. */
+	if (when > 0)	/* After date d. */
+		strftime(iso8601, ISO8601_TIMESTAMP, "%FT23:59:59", &t);
+	else		/* Before date d. */
+		strftime(iso8601, ISO8601_TIMESTAMP, "%FT00:00:01", &t);
+	if (!fsl_iso8601_to_julian(iso8601, ret))
+		return RC(FSL_RC_ERROR, "fsl_iso8601_to_julian(%s)", iso8601);
+
 	return 0;
 }
 
