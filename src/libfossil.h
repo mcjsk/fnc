@@ -17806,7 +17806,7 @@ FSL_EXPORT int fsl_content_put( fsl_cx * const f,
 
     @see fsl_content_deltify()
 */
-FSL_EXPORT int fsl_content_undeltify(fsl_cx * f, fsl_id_t rid);
+FSL_EXPORT int fsl_content_undeltify(fsl_cx * const f, fsl_id_t rid);
 
 
 /** @internal
@@ -18186,12 +18186,12 @@ FSL_EXPORT char *fsl_db_setting_inop_rhs();
     DROPPING them if they already exist. The schema comes from
     fsl_schema_ticket().
 
-    FIXME: add a flag specifying whether to drop or keep existing
+    TODO? Add a flag specifying whether to drop or keep existing
     copies.
 
     Returns 0 on success.
 */
-FSL_EXPORT int fsl_cx_ticket_create_table(fsl_cx * f);
+FSL_EXPORT int fsl_cx_ticket_create_table(fsl_cx * const f);
 
 /** @internal
 
@@ -18904,7 +18904,16 @@ void fsl__dump_triples(fsl_diff_cx const * const p,
 
 /** @internal
 
-    Maximum length of a line in a text file, in bytes.  (2**13 = 8192 bytes)
+    Removes from the BLOB table all artifacts that are in the SHUN
+    table. Returns 0 on success. Requires (asserts) that a repo is
+    opened.
+*/
+int fsl__shunned_remove(fsl_cx * const f);
+
+
+/** @internal
+
+    Maximum length of a line in a text file, in bytes. (2**15 = 32k)
 */
 #define FSL_LINE_LENGTH_MASK_SZ  15
 /** @internal
@@ -20405,6 +20414,21 @@ FSL_EXPORT fcli_t fcli;
 FSL_EXPORT int fcli_setup(int argc, char const * const * argv );
 
 /**
+   A convenience form of fcli_setup() which is equivalent to:
+
+   ```
+   fcli.cliFlags = ...3rd argument...;
+   fcli.appHelp = ...4th argument...;
+   int rc = fcli_setup(argc, argv);
+   ```
+
+   Either of the 3rd or 4th arguments may be NULL.
+*/
+FSL_EXPORT int fcli_setup_v2(int argc, char const * const * argv,
+                             fcli_cliflag const * const cliFlags,
+                             fcli_help_info const * const helpInfo );
+
+/**
    The first time this is called, it swaps out libfossil's default
    allocator with a fail-fast one which abort()s on allocation
    error. This is normally called by fcli_setup(), but that also means
@@ -20613,6 +20637,8 @@ struct fcli_command {
   char const * briefDescription;
   /** The callback for this command. */
   fcli_command_f f;
+  /** Optional usage callback for this command. */
+  void (*usage)(void);
   /**
      Must be NULL or an array compatible with fcli_process_flags().
      Can be used from within this->f for command-specific flag
@@ -20748,10 +20774,14 @@ FSL_EXPORT void fcli_cliflag_help(fcli_cliflag const *defs);
    them and outputs help text based on each one's (name,
    briefDescription, flags) members.
 
-   If the 2nd argument is true, only the help for the single given
+   If the 2nd argument is true AND the fcli_command->usage() callback
+   has been set, it will be called for each object in the cmd array
+   after outputting the fcli_command->flags help text.
+
+   If the 3rd argument is true, only the help for the single given
    object is output, not any adjacent array members (if any).
 */
-FSL_EXPORT void fcli_command_help(fcli_command const * cmd, bool onlyOne);
+FSL_EXPORT void fcli_command_help(fcli_command const * cmd, bool showUsage, bool onlyOne);
 
 /**
    Pretty print fcli_command->aliases like: "  (aliases: cmd, com)".
@@ -20863,9 +20893,9 @@ FSL_EXPORT int fcli_fingerprint_check(bool reportImmediately);
 
 /**
    Returns the "tail" part of the argv[0] string which was passed to
-   fcli_setup() or fcli_setup2(), or NULL if neither of those have yet
-   been called. The "tail" part is the part immediately after the
-   final '/' or '\\' character.
+   fcli_setup(), or NULL if neither of those have yet been called. The
+   "tail" part is the part immediately after the final '/' or '\\'
+   character.
 */
 FSL_EXPORT char const * fcli_progname();
 

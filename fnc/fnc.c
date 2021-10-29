@@ -200,7 +200,6 @@ static struct fnc_setup {
 	fcli_help_info	  fnc_help;			/* Global help. */
 	fcli_cliflag	  cliflags_global[3];		/* Global options. */
 	fcli_command	  cmd_args[6];			/* App commands. */
-	void		(*fnc_usage_cb[5])(void);	/* Command usage. */
 	fcli_cliflag	  cliflags_timeline[11];	/* Timeline options. */
 	fcli_cliflag	  cliflags_diff[7];		/* Diff options. */
 	fcli_cliflag	  cliflags_tree[4];		/* Tree options. */
@@ -249,25 +248,21 @@ static struct fnc_setup {
 	{ /* cmd_args available app commands. */
 	    {"timeline", "tl\0time\0ti\0log\0",
 	    "Show chronologically descending commit history of the repository.",
-	    cmd_timeline, fnc_init.cliflags_timeline},
+	    cmd_timeline, usage_timeline, fnc_init.cliflags_timeline},
 	    {"diff", "di\0",
 	    "Show changes to versioned files introduced with a given commit.",
-	    cmd_diff, fnc_init.cliflags_diff},
+	    cmd_diff, usage_diff, fnc_init.cliflags_diff},
 	    {"tree", "tr\0dir\0",
 	    "Show repository tree corresponding to a given commit",
-	    cmd_tree, fnc_init.cliflags_tree},
+	    cmd_tree, usage_tree, fnc_init.cliflags_tree},
 	    {"blame", "bl\0praise\0pr\0annotate\0an\0",
 	    "Show commit attribution history for each line of a file.",
-	    cmd_blame, fnc_init.cliflags_blame},
+	    cmd_blame, usage_blame, fnc_init.cliflags_blame},
 	    {"branch", "br\0tag\0",
 	    "Show navigable list of repository branches.",
-	    cmd_branch, fnc_init.cliflags_branch},
+	    cmd_branch, usage_branch, fnc_init.cliflags_branch},
 	    {NULL, NULL, NULL, NULL, NULL}	/* Sentinel. */
 	},
-
-	/* fnc_usage_cb individual command usage details. */
-	{&usage_timeline, &usage_diff, &usage_tree, &usage_blame,
-	    &usage_branch},
 
 	{ /* cliflags_timeline timeline command related options. */
 	    FCLI_FLAG_BOOL("C", "no-colour", &fnc_init.nocolour,
@@ -5448,25 +5443,13 @@ usage(void)
 			fcli_command cmd = fnc_init.cmd_args[idx];
 			if (!fsl_strcmp(fnc_init.cmdarg, cmd.name) ||
 			    fcli_cmd_aliascmp(&cmd, fnc_init.cmdarg)) {
-				fsl_fprintf(f, "[%s] command:\n\n usage:",
-				    cmd.name);
-				    fnc_init.fnc_usage_cb[idx]();
-				if (cmd.aliases)
-					fcli_help_show_aliases(cmd.aliases);
-				fputc('\n', f);
-				fcli_cliflag_help(cmd.flags);
+				fcli_command_help(&cmd, true, true);
 				exit(fcli_end_of_main(fnc_init.err));
 			}
 		}
 
 	/* Otherwise, output help/usage for all commands. */
-	fcli_command_help(fnc_init.cmd_args, false);
-	fsl_fprintf(f, "[usage]\n\n");
-	usage_timeline();
-	usage_diff();
-	usage_tree();
-	usage_blame();
-	usage_branch();
+	fcli_command_help(fnc_init.cmd_args, true, false);
 	fsl_fprintf(f, "  note: %s "
 	    "with no args defaults to the timeline command.\n\n",
 	    fcli_progname());
@@ -5478,8 +5461,9 @@ static void
 usage_timeline(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " %s timeline [-T tag] [-b branch] [-c commit]"
-	    " [-h|--help] [-n n] [-t type] [-u user] [-z|--utc] [path]\n"
+	    " usage: %s timeline [-C|--no-colour] [-T tag] [-b branch] "
+	    "[-c commit] [-h|--help] [-n n] [-t type] [-u user] [-z|--utc] "
+	    "[path]\n"
 	    "  e.g.: %s timeline --type ci -u jimmy src/frobnitz.c\n\n",
 	    fcli_progname(), fcli_progname());
 }
@@ -5488,7 +5472,7 @@ static void
 usage_diff(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " %s diff [-C|--no-colour] [-h|--help] [-i|--invert]"
+	    " usage: %s diff [-C|--no-colour] [-h|--help] [-i|--invert]"
 	    " [-q|--quiet] [-w|--whitespace] [-x|--context n] "
 	    "[artifact1 [artifact2]] [path ...]\n  "
 	    "e.g.: %s diff --context 3 d34db33f c0ff33 src/*.c\n\n",
@@ -5499,7 +5483,7 @@ static void
 usage_tree(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " %s tree [-C|--no-colour] [-h|--help] [-c commit] [path]\n"
+	    " usage: %s tree [-C|--no-colour] [-c commit] [-h|--help] [path]\n"
 	    "  e.g.: %s tree -c d34dc0d3\n\n" ,
 	    fcli_progname(), fcli_progname());
 }
@@ -5508,7 +5492,7 @@ static void
 usage_blame(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " %s blame [-C|--no-colour] [-c commit [-r]] [-h|--help] "
+	    " usage: %s blame [-C|--no-colour] [-c commit [-r]] [-h|--help] "
 	    "[-n n] path\n"
 	    "  e.g.: %s blame -c d34db33f src/foo.c\n\n" ,
 	    fcli_progname(), fcli_progname());
@@ -5518,9 +5502,9 @@ static void
 usage_branch(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " %s branch [-C|--no-colour] [-a|--after date] [-b|--before date] "
-	    "[-c|--closed] [-h|--help] [-o|--open] [-p|--no-private] "
-	    "[-r|--reverse] [-s|--sort order] [glob]\n"
+	    " usage: %s branch [-C|--no-colour] [-a|--after date] "
+	    "[-b|--before date] [-c|--closed] [-h|--help] [-o|--open] "
+	    "[-p|--no-private] [-r|--reverse] [-s|--sort order] [glob]\n"
 	    "  e.g.: %s branch -b 2020-10-10\n\n" ,
 	    fcli_progname(), fcli_progname());
 }

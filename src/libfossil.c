@@ -9299,6 +9299,14 @@ static int fcli_setup2(int argc, char const * const * argv,
   return rc;
 }
 
+int fcli_setup_v2(int argc, char const * const * argv,
+                  fcli_cliflag const * const cliFlags,
+                  fcli_help_info const * const helpInfo ){
+  fcli.cliFlags = cliFlags;
+  fcli.appHelp = helpInfo;
+  return fcli_setup(argc, argv);
+}
+
 int fcli_setup(int argc, char const * const * argv ){
   int rc = 0;
   if(fcli.cliFlags){
@@ -9462,7 +9470,7 @@ int fcli_dispatch_commands( fcli_command const * cmd,
   }
   if(helpState){
     f_out("\n");
-    fcli_command_help(helpPos, helpState>1);
+    fcli_command_help(helpPos, true, helpState>1);
   }else if(!cmd->name){
     fsl_buffer msg = fsl_buffer_empty;
     int rc2;
@@ -9500,7 +9508,7 @@ bool fcli_cmd_aliascmp(fcli_command const * cmd, char const * arg){
   return false;
 }
 
-void fcli_command_help(fcli_command const * cmd, bool onlyOne){
+void fcli_command_help(fcli_command const * cmd, bool showUsage, bool onlyOne){
   fcli_command const * c = cmd;
   for( ; c->name; ++c ){
     f_out("[%s] command:\n\n", c->name);
@@ -9515,6 +9523,9 @@ void fcli_command_help(fcli_command const * cmd, bool onlyOne){
     if(c->flags){
       f_out("\n");
       fcli_cliflag_help(c->flags);
+    }
+    if(showUsage && c->usage){
+      c->usage();
     }
     if(onlyOne) break;
   }
@@ -10667,7 +10678,7 @@ int fsl_content_new( fsl_cx * f, fsl_uuid_cstr uuid, bool isPrivate,
   return rc;
 }
 
-int fsl_content_undeltify(fsl_cx * f, fsl_id_t rid){
+int fsl_content_undeltify(fsl_cx * const f, fsl_id_t rid){
   int rc;
   fsl_db * db = f ? fsl_cx_db_repo(f) : NULL;
   fsl_id_t srcid = 0;
@@ -11211,6 +11222,37 @@ fsl_hash_types_e fsl_verify_blob_hash(fsl_buffer const * pIn,
   }
   return id;
 }
+
+
+int fsl__shunned_remove(fsl_cx * const f){
+  fsl_stmt q = fsl_stmt_empty;
+  int rc;
+  assert(fsl_cx_db_repo(f));
+  rc = fsl_cx_exec_multi(f,
+     "CREATE TEMP TABLE toshun(rid INTEGER PRIMARY KEY);"
+     "INSERT INTO toshun SELECT rid FROM blob, shun WHERE blob.uuid=shun.uuid;"
+  );
+  if(rc) goto end;
+  rc = fsl_cx_prepare(f, &q,
+     "SELECT rid FROM delta WHERE srcid IN toshun"
+  );
+  while( 0==rc && FSL_RC_STEP_ROW==fsl_stmt_step(&q) ){
+    rc = fsl_content_undeltify(f, fsl_stmt_g_id(&q, 0));
+  }
+  fsl_stmt_finalize(&q);
+  if(rc) goto end;
+  rc = fsl_cx_exec_multi(f,
+     "DELETE FROM delta WHERE rid IN toshun;"
+     "DELETE FROM blob WHERE rid IN toshun;"
+     "DROP TABLE toshun;"
+     "DELETE FROM private "
+     " WHERE NOT EXISTS (SELECT 1 FROM blob WHERE rid=private.rid);"
+  );
+  end:
+  fsl_stmt_finalize(&q);
+  return rc;
+}
+
 #undef MARKER
 /* end of file content.c */
 /* start of file config.c */
@@ -37211,25 +37253,19 @@ int fsl_branch_create(fsl_cx * f, fsl_branch_opt const * opt, fsl_id_t * newRid 
 #include <assert.h>
 #include <string.h> /* memcmp() */
 
-int fsl_cx_ticket_create_table(fsl_cx * f){
-  fsl_db * db = f ? fsl_needs_repo(f) : NULL;
+int fsl_cx_ticket_create_table(fsl_cx * const f){
+  fsl_db * const db = fsl_needs_repo(f);
   int rc;
-  if(!f) return FSL_RC_MISUSE;
-  else if(!db) return FSL_RC_NOT_A_REPO;
-  rc = fsl_db_exec_multi(db,
+  if(!db) return FSL_RC_NOT_A_REPO;
+  rc = fsl_cx_exec_multi(f,
                          "DROP TABLE IF EXISTS ticket;"
                          "DROP TABLE IF EXISTS ticketchng;"
                          );
   if(!rc){
-    fsl_buffer * buf = fsl_cx_scratchpad(f);
+    fsl_buffer * const buf = &f->fileContent;
+    fsl_buffer_reuse(buf);
     rc = fsl_cx_schema_ticket(f, buf);
-    if(!rc){
-      rc = fsl_db_exec_multi(db, "%b", buf);
-    }
-    fsl_cx_scratchpad_yield(f, buf);
-  }
-  if(rc && db->error.code && !f->error.code){
-    fsl_cx_uplift_db_error(f, db);
+    if(!rc) rc = fsl_cx_exec_multi(f, "%b", buf);
   }
   return rc;
 }
