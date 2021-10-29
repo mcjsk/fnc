@@ -81,6 +81,10 @@
 #define CONCATOUT(a, b)	a ## b
 #define CONCAT(a, b)	CONCATOUT(a, b)
 #define FILE_POSITION	__FILE__ ":" STRINGIFY(__LINE__)
+#define FLAG_SET(f, b)	((f) |= (b))
+#define FLAG_CHK(f, b)	((f) & (b))
+#define FLAG_TOG(f, b)	((f) ^= (b))
+#define FLAG_CLR(f, b)	((f) &= ~(b))
 
 /* Application macros. */
 #define PRINT_VERSION	STRINGIFY(FNC_VERSION)
@@ -185,9 +189,9 @@ static struct fnc_setup {
 	bool		 invert;	/* Toggle inverted diff output. */
 
 	/* Branch options. */
-	const char	 *before;
-	const char	 *after;
-	bool		 mru;		/* Order by most recently used. */
+	const char	*before;	/* Last branch change before date. */
+	const char	*after;		/* Last branch change after date. */
+	const char	*sort;		/* Lexicographical, MRU, open/closed. */
 	bool		 closed;	/* Show only closed branches. */
 	bool		 open;		/* Show only open branches */
 	bool		 noprivate;	/* Don't show private branches. */
@@ -224,7 +228,7 @@ static struct fnc_setup {
 	false,		/* invert diff defaults to off. */
 	NULL,		/* before defaults to any time. */
 	NULL,		/* after defaults to any time. */
-	false,		/* mru sort is off (defaults to lexical). */
+	NULL,		/* sort by MRU or open/closed (dflt: lexicographical) */
 	false,		/* closed only branches is off (defaults to all). */
 	false,		/* open only branches is off by (defaults to all). */
 	false,		/* noprivate is off (default to show private branch). */
@@ -258,7 +262,7 @@ static struct fnc_setup {
 	    {"branch", "br\0tag\0",
 	    "Show navigable list of repository branches.",
 	    cmd_branch, fnc_init.cliflags_branch},
-	    {NULL,NULL,NULL, NULL}	/* Sentinel. */
+	    {NULL, NULL, NULL, NULL, NULL}	/* Sentinel. */
 	},
 
 	/* fnc_usage_cb individual command usage details. */
@@ -403,9 +407,6 @@ static struct fnc_setup {
 	    "\n    default."),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
             "Display branch command help and usage."),
-	    FCLI_FLAG_BOOL("m", "mru", &fnc_init.mru,
-            "Display most recently used branches first. Branches are sorted in"
-            "\n    lexicographical order by default."),
             FCLI_FLAG_BOOL("o", "open", &fnc_init.open,
 	    "Show open branches only. Open and closed branches are listed by "
 	    "\n    default."),
@@ -414,6 +415,11 @@ static struct fnc_setup {
 	    "\n    list of displayed branches by default."),
             FCLI_FLAG_BOOL("r", "reverse", &fnc_init.reverse,
 	    "Reverse the order in which branches are displayed."),
+	    FCLI_FLAG("s", "sort", "<order>", &fnc_init.sort,
+            "Sort branches by <order>. Available options are:\n"
+            "\tmru   - most recently used\n"
+            "\tstate - open/closed state\n    "
+            "Branches are sorted in lexicographical order by default."),
 	    fcli_cliflag_empty_m
 	}, /* End cliflags_blame. */
 };
@@ -765,7 +771,8 @@ struct fnc_branch_view_state {
 #define BRANCH_LS_BITMASK	0x003
 #define BRANCH_LS_NO_PRIVATE	0x004  /* Show public branches only. */
 #define BRANCH_SORT_MTIME	0x008  /* Sort by activity. (default: name) */
-#define BRANCH_SORT_REVERSE	0x010  /* Reverse sort order. */
+#define BRANCH_SORT_STATUS	0x010  /* Sort by open/closed. */
+#define BRANCH_SORT_REVERSE	0x020  /* Reverse sort order. */
 	bool				 colour;
 	bool				 show_date;
 	bool				 show_id;
@@ -5512,8 +5519,8 @@ usage_branch(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
 	    " %s branch [-C|--no-colour] [-a|--after date] [-b|--before date] "
-	    "[-c|--closed] [-h|--help] [-m|--mru] [-o|--open] "
-	    "[-p|--no-private] [-r|--reverse] glob\n"
+	    "[-c|--closed] [-h|--help] [-o|--open] [-p|--no-private] "
+	    "[-r|--reverse] [-s|--sort order] [glob]\n"
 	    "  e.g.: %s branch -b 2020-10-10\n\n" ,
 	    fcli_progname(), fcli_progname());
 }
@@ -8261,12 +8268,19 @@ cmd_branch(fcli_command const *argv)
 	else if (fnc_init.closed)
 		branch_flags = BRANCH_LS_CLOSED_ONLY;
 
-	if (fnc_init.mru)
-		branch_flags |= BRANCH_SORT_MTIME;
+	if (fnc_init.sort) {
+		if (!fsl_strcmp(fnc_init.sort, "mru"))
+			FLAG_SET(branch_flags, BRANCH_SORT_MTIME);
+		else if (!fsl_strcmp(fnc_init.sort, "state"))
+			FLAG_SET(branch_flags, BRANCH_SORT_STATUS);
+		else
+			return RC(FSL_RC_MISUSE, "invalid sort order: %s",
+			    fnc_init.sort);
+	}
 	if (fnc_init.noprivate)
-		branch_flags |= BRANCH_LS_NO_PRIVATE;
+		FLAG_SET(branch_flags, BRANCH_LS_NO_PRIVATE);
 	if (fnc_init.reverse)
-		branch_flags |= BRANCH_SORT_REVERSE;
+		FLAG_SET(branch_flags, BRANCH_SORT_REVERSE);
 
 	if (fnc_init.after && fnc_init.before) {
 		return RC(FSL_RC_MISUSE, "%s",
@@ -8347,12 +8361,7 @@ fnc_load_branches(struct fnc_branch_view_state *s)
 	TAILQ_INIT(&s->branches);
 	s->nbranches = 0;
 
-	switch (s->branch_flags & BRANCH_LS_BITMASK) {
-	case BRANCH_LS_CLOSED_ONLY:
-		rc = fsl_buffer_append(&sql,
-		    "SELECT name, isprivate, isclosed, mtime"
-		    " FROM tmp_brlist WHERE isclosed", -1);
-		break;
+	switch (FLAG_CHK(s->branch_flags, BRANCH_LS_BITMASK)) {
 	case BRANCH_LS_OPEN_CLOSED:
 		rc = fsl_buffer_append(&sql,
 		    "SELECT name, isprivate, isclosed, mtime"
@@ -8363,6 +8372,11 @@ fnc_load_branches(struct fnc_branch_view_state *s)
 		    "SELECT name, isprivate, isclosed, mtime"
 		    " FROM tmp_brlist WHERE NOT isclosed", -1);
 		break;
+	case BRANCH_LS_CLOSED_ONLY:
+		rc = fsl_buffer_append(&sql,
+		    "SELECT name, isprivate, isclosed, mtime"
+		    " FROM tmp_brlist WHERE isclosed", -1);
+		break;
 	}
 	if (rc)
 		goto end;
@@ -8372,15 +8386,17 @@ fnc_load_branches(struct fnc_branch_view_state *s)
 		rc = fsl_buffer_appendf(&sql, " AND name LIKE %Q", like);
 		fsl_free(like);
 	}
-	if (s->branch_flags & BRANCH_LS_NO_PRIVATE)
+	if (FLAG_CHK(s->branch_flags, BRANCH_LS_NO_PRIVATE))
 		rc = fsl_buffer_append(&sql, " AND NOT isprivate", -1);
-	if (s->branch_flags & BRANCH_SORT_MTIME)
+	if (FLAG_CHK(s->branch_flags, BRANCH_SORT_MTIME))
 		rc = fsl_buffer_append(&sql, " ORDER BY -mtime", -1);
+	else if (FLAG_CHK(s->branch_flags, BRANCH_SORT_STATUS))
+		rc = fsl_buffer_append(&sql, " ORDER BY isclosed", -1);
 	else
 		rc = fsl_buffer_append(&sql, " ORDER BY name COLLATE nocase",
 		    -1);
 
-	if (!rc && (s->branch_flags & BRANCH_SORT_REVERSE))
+	if (!rc && (FLAG_CHK(s->branch_flags, BRANCH_SORT_REVERSE)))
 		rc = fsl_buffer_append(&sql," DESC", -1);
 
 	stmt = fsl_stmt_malloc();
