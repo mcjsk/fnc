@@ -54,7 +54,17 @@
 .Op Fl n Ar number
 .Ar path
 .Nm
-.Ar path
+.Cm branch
+.Op Fl C
+.Op Fl a Ar date | Fl b Ar date
+.Op Fl c
+.Op Fl o
+.Op Fl p
+.Op Fl r
+.Op Fl s Ar order
+.Op Ar glob
+.Nm
+.Op Ar path
 .Sh DESCRIPTION
 .Nm
 is an interactive read-only browser for
@@ -79,9 +89,12 @@ will default to displaying this view.
 Display changes introduced in the specified commit, or between two repository
 artifacts.
 .It Tree view
-Display tree reflecting the repository state as at the specified commit.
+Display navigable tree reflecting the repository state as at the specified
+commit.
 .It Blame view
 Display historical attribution of each line in the specified file.
+.It Branch view
+Display navigable list of all repository branches.
 .El
 .Pp
 .Nm
@@ -369,7 +382,7 @@ Find the previous line that matches the current search term.
 .It Cm tree Oo Fl C | -no-colour Oc Oo Fl c | -commit Ar commit Oc \
 Oo Fl h | -help Oc Op Ar path
 .Dl (aliases: Cm dir , Cm tr )
-Display hierarchical tree of a repository.  If a
+Display navigable, hierarchical tree of a repository.  If a
 .Ar path
 is specified, display tree nodes of this path.  The
 .Ar path
@@ -560,11 +573,119 @@ Find the next token that matches the current search pattern.
 .It Cm N
 Find the previous token that matches the current search pattern.
 .El
+.Tg tag
+.It Cm branch Oo Fl C | -no-colour Oc Oo Fl a | -after Ar date Oc \
+Oo Fl b | -before Ar date Oc Oo Fl c | -closed Oc Oo Fl h | -help Oc \
+Oo Fl o | -open Oc Oo Fl p | -no-private Oc Oo Fl r | -reverse Oc \
+Oo Fl s | -sort Ar order Oc Op Ar glob
+.Dl (aliases: Cm tag , Cm br )
+Display navigable list of repository branches. If
+.Ar glob ,
+is specified, only display branches matching the pattern provided. Pattern
+matching comparisons depend on the
+.Xr sqlite3 1
+.B
+LIKE
+operator, which only folds case for the ASCII character set.  This
+command must be executed from within or below the top level directory of the
+repository; that is,
+.Nm
+assumes a local checkout is open in or above the current working directory.
+.Pp
+Options for
+.Cm fnc branch
+are as follows:
+.Bl -tag -width Ds
+.It Fl C , -no-colour
+Disable coloured output, which is enabled by default on supported terminals.
+If this option is not used, colour can be toggled with the
+.Sy c
+branch view key binding as documented below.
+.It Fl a , -after Ar date
+Display only those branches with activity after the specified
+.Ar date .
+.It Fl b , -before Ar date
+Display only those branches with activity before the specified
+.Ar date .
+.It Fl c , -close
+Display only closed branches.
+.It Fl h , -help
+Display branch command help and usage information then exit.
+.It Fl o , -open
+Display only opened branches.
+.It Fl p , -no-private
+Do not show private branches, which are included in the list of displayed
+branches by default.
+.It Fl r , -reverse
+Reverse the order in which branches are displayed.
+.It Fl s , -sort Ar order
+Sort branches by
+.Ar order .
+Valid
+.Ar order
+values are as follows:
+.Bl -column YXZ description
+.Sy mru Ta most recently used
+.Sy state Ta open/closed state
+.El
+.Pp
+Branches are sorted in lexicographical order by default.
+.El
+.Pp
+Key bindings for
+.Cm fnc branch
+are as follows:
+.Bl -tag -width Ds
+.It Cm Arrow-down, j
+Move selection cursor down one branch.
+.It Cm Arrow-up, k
+Move selection cursor up one branch.
+.It Cm Page-down, Ctrl+f
+Move selection cursor down one page.
+.It Cm Page-up, Ctrl+b
+Move selection cursor up one page.
+.It Cm Home, gg
+Move selection cursor to the first branch in the list.
+.It Cm End, G
+Move selection cursor to the last branch in the list.
+.It Cm Enter, Space
+Display the
+.Cm timeline
+of the currently selected branch.
+.It Cm c
+Toggle coloured output.
+.Nm
+will default to displaying the branch list in colour.
+.It Cm d
+Toggle display of the date on which the branch last received changes.
+.It Cm i
+Toggle display of the SHA{1,3} hash that identifies branch, which is the hash
+of the commit on the tip of said branch.
+.It Cm t
+Open the
+.Cm tree
+of the currently selected branch.
+.It Cm R, Ctrl+l
+Reload the view with all repository branches, irrespective of which options
+were used in this
+.Cm fnc branch
+invocation.
+.It Cm /
+Prompt to enter a search term to begin searching the list for branches matching
+the entered pattern.  The search term is an extended regular expression, as
+documented in
+.Xr re_format 7 .
+.It Cm n
+Find the next branch that matches the current search pattern.
+.It Cm N
+Find the previous branch that matches the current search pattern.
+.El
 .El
 .Sh EXIT STATUS
 .Ex -std fnc
 .Sh SEE ALSO
 .Xr fossil 1 ,
 .Xr re_format 7
+.Xr sqlite3 1
 .Sh AUTHOR
 .An Mark Jamsek Aq Mt mark@jamsek.com
