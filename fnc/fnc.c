@@ -756,10 +756,6 @@ struct fnc_branch_view_state {
 	const char			*branch_glob;
 	double				 dateline;
 	int				 branch_flags;
-	int				 nbranches;
-	int				 ndisplayed;
-	int				 selected;
-	int				 when;
 #define BRANCH_LS_CLOSED_ONLY	0x001  /* Show closed branches only. */
 #define BRANCH_LS_OPEN_ONLY	0x002  /* Show open branches only. */
 #define BRANCH_LS_OPEN_CLOSED	0x003  /* Show open & closed branches (dflt). */
@@ -768,6 +764,10 @@ struct fnc_branch_view_state {
 #define BRANCH_SORT_MTIME	0x008  /* Sort by activity. (default: name) */
 #define BRANCH_SORT_STATUS	0x010  /* Sort by open/closed. */
 #define BRANCH_SORT_REVERSE	0x020  /* Reverse sort order. */
+	int				 nbranches;
+	int				 ndisplayed;
+	int				 selected;
+	int				 when;
 	bool				 colour;
 	bool				 show_date;
 	bool				 show_id;
