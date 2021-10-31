@@ -55,12 +55,8 @@
 .Ar path
 .Nm
 .Cm branch
-.Op Fl C
+.Op Fl Ccopr
 .Op Fl a Ar date | Fl b Ar date
-.Op Fl c
-.Op Fl o
-.Op Fl p
-.Op Fl r
 .Op Fl s Ar order
 .Op Ar glob
 .Nm
@@ -92,7 +88,8 @@ artifacts.
 Display navigable tree reflecting the repository state as at the specified
 commit.
 .It Blame view
-Display historical attribution of each line in the specified file.
+Display and annotate each line in the given file with the hyperlinked historical
+version that last modified the line.
 .It Branch view
 Display navigable list of all repository branches.
 .El
@@ -185,10 +182,10 @@ to the latest commit on the given branch, or (a unique abbreviated
 prefix of) a valid commit UUID SHA1 or SHA3 hash. When this option is
 not supplied,
 .Nm
-will open the timeline to the latest leaf on the trunk of the repository
-tree.  Note that this option also accepts
+will open the timeline to the latest leaf on the repository tree.  For a
+complete list of valid arguments this option accepts, see
 .Lk https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki \
-"Fossil's Special Tags".
+"Fossil's Check-in Names".
 .It Fl h , -help
 Display timeline command help and usage information then exit.
 .It Fl n , -limit Ar n
@@ -218,7 +215,11 @@ By default, when this option is not supplied,
 .Nm
 will indiscriminately load all commits irrespective of
 .Ar type .
-Note that this is a repeatable flag.
+Note that this is a repeatable flag (e.g.,
+.Nm
+.Cm timeline
+.Cm -t e -t t Ns
+).
 .It Fl u , -username Ar user
 Only display commits authored by
 .Ar user .
@@ -250,7 +251,7 @@ Open a
 .Cm diff
 view displaying the changeset of the currently selected commit.
 .It Cm c
-Toggle colourised timeline.
+Toggle colourised timeline. On supported terminals,
 .Nm
 will default to displaying the timeline in colour.
 .It Cm t
@@ -303,8 +304,9 @@ and
 .Ar artifact2
 must be of the same type, which is expected to be either a symbolic check-in
 name, tag, (unique abbreviated prefix of) a commit or blob artifact UUID SHA1
-or SHA3 hash, or an ISO 8601 formatted date. Both arguments must be supplied
-when diffing blobs.
+or SHA3 hash, or an ISO 8601 formatted date. Both artifact arguments must be
+supplied when diffing blobs; any following non-option arguments are invalid
+and will be ignored.
 .Pp
 Options for
 .Cm fnc diff
@@ -325,7 +327,7 @@ Ignore whitespace-only changes when displaying the diff.
 Set
 .Ar n
 context lines to be shown in the diff.  By default, 5 context lines are
-shown.
+shown. Negative values are a no-op.
 .El
 .Pp
 Key bindings for
@@ -333,7 +335,7 @@ Key bindings for
 are as follows:
 .Bl -tag -width Ds
 .It Cm c
-Toggle coloured diff output.
+Toggle coloured diff output. On supported terminals,
 .Nm
 will default to displaying changes and diff metadata in colour.
 .It Cm i
@@ -343,7 +345,8 @@ Toggle verbosity of diff output. By default,
 .Nm
 will display the entire content of newly added or deleted files.
 .It Cm w
-Toggle display of whitespace-only changes in diff output.
+Toggle whether whitespace-only changes are ignored when comparing lines in the
+diff.
 .It Cm Arrow-down, j
 Scroll down one line of diff output.
 .It Cm Arrow-up, k
@@ -420,10 +423,10 @@ identified by
 .Ar commit .
 The expected argument is either the name of a branch, which will resolve
 to the latest commit on the given branch, or (a unique abbreviated
-prefix of) a valid commit UUID SHA1 or SHA3 hash.  Note that this option also
-accepts
+prefix of) a valid commit UUID SHA1 or SHA3 hash.  For a complete list of valid
+arguments this option accepts, see
 .Lk https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki \
-"Fossil's Special Tags".
+"Fossil's Check-in Names".
 .It Fl h , -help
 Display tree command help and usage information then exit.
 .El
@@ -451,7 +454,7 @@ Move selection cursor to the first node in the tree.
 .It Cm End, G
 Move selection cursor to the last node in the tree.
 .It Cm c
-Toggle coloured output.
+Toggle coloured output. On supported terminals,
 .Nm
 will default to displaying the tree in colour.
 .It Cm t
@@ -505,10 +508,10 @@ to the latest commit on the given branch, or (a unique abbreviated
 prefix of) a valid commit UUID SHA1 or SHA3 hash. When this option is
 not supplied,
 .Nm
-will blame the version of the file from the current checkout.  This option also
-accepts
+will blame the version of the file from the current checkout.  For a complete
+list of valid arguments this option accepts, see
 .Lk https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki \
-"Fossil's Special Tags".
+"Fossil's Check-in Names".
 .It Fl h , -help
 Display blame command help and usage information then exit.
 .It Fl n , -limit Ar n
@@ -560,7 +563,7 @@ the currently selected line.
 .It Cm B, Backspace
 Reload the previous blamed version of the file.
 .It Cm c
-Toggle coloured output.
+Toggle coloured output. On supported terminals,
 .Nm
 will default to displaying the blamed file in colour.
 .It Cm /
@@ -574,9 +577,9 @@ Find the next token that matches the current search pattern.
 Find the previous token that matches the current search pattern.
 .El
 .Tg tag
-.It Cm branch Oo Fl C | -no-colour Oc Oo Fl a | -after Ar date Oc \
-Oo Fl b | -before Ar date Oc Oo Fl c | -closed Oc Oo Fl h | -help Oc \
-Oo Fl o | -open Oc Oo Fl p | -no-private Oc Oo Fl r | -reverse Oc \
+.It Cm branch Oo Fl C | -no-colour Oc Oo Fl -after Ar date | \
+Fl -before Ar date Oc Oo Fl h | -help Oc Oo Fl -open | Fl -closed Oc \
+Oo Fl p | -no-private Oc Oo Fl r | -reverse Oc \
 Oo Fl s | -sort Ar order Oc Op Ar glob
 .Dl (aliases: Cm tag , Cm br )
 Display navigable list of repository branches. If
@@ -591,6 +594,20 @@ command must be executed from within or below the top level directory of the
 repository; that is,
 .Nm
 assumes a local checkout is open in or above the current working directory.
+.Pp
+Branches are lexicographically ordered by default, and are prefixed with an
+identifier corresponding to the branch state (i.e., open/closed). The
+current and private branches are additionally annotated with a postfixed
+identifier:
+.Bl -column ABCDEFGHIJ description
+.It +dev-foo Ta open
+.It -rm-bar Ta closed
+.It +trunk@ Ta current
+.It +wip-baz* Ta private
+.El
+.Pp
+All branches, irrespective of state or privacy, are displayed by default, but
+can be filtered based on several characteristics.
 .Pp
 Options for
 .Cm fnc branch
@@ -653,7 +670,7 @@ Display the
 .Cm timeline
 of the currently selected branch.
 .It Cm c
-Toggle coloured output.
+Toggle coloured output.  On supported terminals,
 .Nm
 will default to displaying the branch list in colour.
 .It Cm d
@@ -664,7 +681,7 @@ of the commit on the tip of said branch.
 .It Cm t
 Open the
 .Cm tree
-of the currently selected branch.
+view of the currently selected branch.
 .It Cm R, Ctrl+l
 Reload the view with all repository branches, irrespective of which options
 were used in this

@@ -17,9 +17,9 @@ noted inline):
 5. Debian GNU/Linux 8, 9, and 10
 6. CentOS 6.5 (32-bit)
 
-Alpha development notwithstanding, the `timeline`, `diff`, `tree`, and `blame`
-commands are relatively stable; however, there is no commitment to refrain from
-breaking changes.
+Alpha development notwithstanding, the `timeline`, `diff`, `tree`, `blame`, and
+`branch` commands are relatively stable; however, there is no commitment to
+refrain from breaking changes.
 
 # Build
 
@@ -31,7 +31,7 @@ breaking changes.
   - `./configure`
 4. build fnc
   - `make`
-5. install the `fnc` binary (requires privileges)
+5. install the `fnc` binary (*requires privileges*)
   - `doas make install`
 6. move into an open Fossil checkout, and run it:
   - `cd ~/museum/repo && fossil open ../repo.fossil && fnc`
@@ -40,7 +40,7 @@ This will install the `fnc` executable and man page into `/usr/local/bin` and
 `/usr/local/share/man/man1`, respectively. To change the install path, use the
 `--prefix` option to `configure`; for example, replacing step 3 with
 `./configure --prefix=$HOME` will install the executable and man page into
-`~/bin` and `~/man/man1`, respectively. Alternatively, cryptographically signed
+`~/bin` and `~/share/man`, respectively. Alternatively, cryptographically signed
 binaries for some of the abovementioned platforms are available to [download][3].
 
 # Doc
@@ -81,6 +81,9 @@ by the change.
 ![diff renamed file](https://fnc.bsdbox.org/uv/resources/img/fnc-diff-full-file_renamed.png "fnc diff file renamed")
 ![diff added file](https://fnc.bsdbox.org/uv/resources/img/fnc-diff-split-file_added.png "fnc diff file added")
 ![diff removed file](https://fnc.bsdbox.org/uv/resources/img/fnc-diff-split-file-removed.png "fnc diff file removed")
+![blame split screen](https://fnc.bsdbox.org/uv/resources/img/fnc-blame-splitscreen.png "fnc blame split screen")
+![tree split screen](https://fnc.bsdbox.org/uv/resources/img/fnc-tree-splitscreen.png "fnc tree split screen")
+![branch split screen](https://fnc.bsdbox.org/uv/resources/img/fnc-branch-splitscreen.png "fnc branch split screen")
 ![in-app help](https://fnc.bsdbox.org/uv/resources/img/fnc-inapp_help.png "fnc in-app help")
 ![timeline help](https://fnc.bsdbox.org/uv/resources/img/fnc-timeline-help.png "fnc timeline help")
 
