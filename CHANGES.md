@@ -1,3 +1,35 @@
+**fnc 0.4** 2021-10-31
+
+- resolve database bug in the commit builder logic
+- prune dead code leftover from the initial single-threaded blame implementation
+- improve error handling of commands that return no records
+- update in-app help with blame key bindings
+- expand tree command's ability to display trees of versions with missing files
+- improve tree command error handling of non-checkin artifacts
+- make tree command compatible with the `-R <repository>` option
+- add profiling (`--profile`) option to the build system
+- notify user of invalid blame _P_ key binding selections with ephemeral message
+- add coloured output and associated key binding/options to the timeline view
+- ensure the full diff is displayed for non-standard initial check-ins
+- initialise variables to squelch gcc-9.3 compiler warnings
+- add command line aliases to all currently available commands
+- add time-based annotation option to the blame command
+- fix colour conflicts between certain views
+- enhance diff interface with optional path arg to filter diffs between commits
+- improve diff view by displaying full context when diffing consecutive commits
+- make diff index parsing more robust when handling removed/missing files
+- ensure diff honours the repository's `allow-symlinks` setting
+- simplify help output when `-h|--help` is passed to command aliases
+- invert diff metadata when `-i|--invert` or the _i_ key binding is used
+- fix diff bug when the first commit is opened from the timeline view
+- enhance diff command to enable diff of arbitrary file blobs
+- optimise parsing of artifacts to determine which diff routine to call
+- implement `fnc branch` which displays a navigable list of repository branches
+- expand available sort options to the branch command
+- simplify usage output on error or `-h|--help` with usage callback
+- general man page and documentation improvements
+- fix incorrect configure `--prefix` install path in the docs (reported by sdk)
+
 **fnc 0.3** 2021-10-17
 
 - add in-app help with H|?|F1 key binding
