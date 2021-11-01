@@ -24,6 +24,17 @@
 #else
 #endif
 
+#if !defined(_ISOC99_SOURCE)
+/* glibc apparently guards snprintf() on this #define, even though
+   snprintf() is part of C99 and we're building in C99 mode. */
+#  define _ISOC99_SOURCE
+#endif
+#if !defined(_C99_SOURCE)
+/* Some Mac enviorments guard snprintf() on this #define but do not
+   #define it when building in C99 mode. */
+#  define _C99_SOURCE
+#endif
+
 #ifdef _WIN32
 # if defined(BUILD_libfossil_static) || defined(FSL_AMALGAMATION_BUILD)
 #  define FSL_EXPORT extern
@@ -1768,6 +1779,21 @@ FSL_EXPORT int fsl_strnicmp(const char *zA, const char *zB, fsl_int_t nByte);
    given strings, case-sensitively. Returns 0 if nByte is 0.
 */
 FSL_EXPORT int fsl_strncmp(const char *zA, const char *zB, fsl_size_t nByte);
+
+/**
+   BSD strlcpy() variant which is less error prone than strncpy. Copy up to
+   dstsz - 1 characters from src to dst and NUL-terminate the resulting string
+   if dstsz is not 0.
+*/
+FSL_EXPORT size_t fsl_strlcpy(char *restrict dst, const char *restrict src, size_t dstsz);
+
+/**
+   BSD strlcat() variant which is less error prone than strncat. Append src to
+   the end of dst. Append at most dstsz - strlen(dst - 1) characters, and
+   NUL-terminate unless dstsize is 0 or the passed in dst string was longer
+   than dstsz to begin with.
+*/
+FSL_EXPORT size_t fsl_strlcat(char *restrict dst, const char *restrict src, size_t dstsz);
 
 /**
    Equivalent to fsl_strncmp(lhs, rhs, X), where X is either
@@ -20352,13 +20378,31 @@ typedef struct fcli_t fcli_t;
 FSL_EXPORT fcli_t fcli;
 
 /**
-   Should be called early on in main(), passed the arguments passed
-   to main(). Returns 0 on success.  Sets up the ::fcli instance
-   and opens a checkout in the current dir by default.
+   Equivalent to `fcli_setup_v2(argc,argv,NULL,NULL)`.
+
+   @see fcli_pre_setup()
+   @see fcli_setup_v2()
+   @see fcli_end_of_main()
+   @deprecated Its signature will change to fcli_setup_v2()'s at some point.
+*/
+FSL_EXPORT int fcli_setup(int argc, char const * const * argv );
+
+/**
+   Initializes fcli's state and CLI flags processing.
 
    MUST BE CALLED BEFORE fsl_malloc() and friends are used, as this
    swaps out the allocator with one which aborts on OOM. (But see
    fcli_pre_setup() for a workaround for that.)
+
+   Should be called early on in main(), passed the arguments passed to
+   main(). Returns 0 on success. This sets up the ::fcli instance and
+   opens any checkout found in/above the current dir by default. To
+   disable the automatic search for a checkout, assign
+   `fcli.clientFlags.checkoutDir` to `NULL` before calling this.
+
+   If the 3rd argument is not NULL, this sets `fcli.cliFlags` to its
+   value. If the 4th argument is not NULL, this sets `fcli.appHelp` to
+   that value.
 
    If argument processing finds either of the (--help, -?) flags,
    or the first non-flag argument is "help", it sets
@@ -20390,16 +20434,14 @@ FSL_EXPORT fcli_t fcli;
        ...,
        fcli_cliflag_empty_m
      };
-     fcli.cliFlags = cliFlags;
      // Optional fcli_help_info setup:
      fcli_help_info const help = {
        "Fnoobs the borts and rustles the feathers.",
        "file1 [... fileN]",
        NULL // optional callback to display extra help
      };
-     fcli.appHelp = &help;
      // Initialize...
-     int rc = fcli_setup(argc, argv);
+     int rc = fcli_setup_v2(argc, argv, cliFlags, &help);
      if(rc) goto end;
 
      ... app logic ...
@@ -20410,19 +20452,8 @@ FSL_EXPORT fcli_t fcli;
    ```
 
    @see fcli_pre_setup()
-*/
-FSL_EXPORT int fcli_setup(int argc, char const * const * argv );
-
-/**
-   A convenience form of fcli_setup() which is equivalent to:
-
-   ```
-   fcli.cliFlags = ...3rd argument...;
-   fcli.appHelp = ...4th argument...;
-   int rc = fcli_setup(argc, argv);
-   ```
-
-   Either of the 3rd or 4th arguments may be NULL.
+   @see fcli_setup()
+   @see fcli_end_of_main()
 */
 FSL_EXPORT int fcli_setup_v2(int argc, char const * const * argv,
                              fcli_cliflag const * const cliFlags,

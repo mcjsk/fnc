@@ -405,6 +405,41 @@ char * fsl_strdup( char const * src ){
   return fsl_strndup(src, -1);
 }
 
+size_t fsl_strlcpy(char *restrict dst, const char *restrict src, size_t dstsz){
+  size_t offset = 0;
+
+  if(dstsz<1){
+    goto end;
+  }
+  while((*(dst+offset) = *(src+offset))!='\0'){
+    if(++offset == dstsz){
+      --offset;
+      break;
+    }
+  }
+end:
+  *(dst+offset) = '\0';
+  while(*(src+offset)!='\0'){
+    ++offset;	/* Return src length. */
+  }
+  return offset;
+}
+
+size_t fsl_strlcat(char *restrict dst, const char *restrict src, size_t dstsz){
+  size_t offset;
+  int dstlen, srclen, idx = 0;
+
+  offset = dstlen = fsl_strlen(dst);
+  srclen = fsl_strlen(src);
+
+  while((*(dst+offset++) = *(src+idx++))!='\0'){
+    if(offset==dstsz-1){
+      break;
+    }
+  }
+  *(dst+offset)='\0';
+  return dstlen+srclen;
+}
 
 /*
    Return TRUE if the string begins with something that looks roughly
@@ -9302,17 +9337,12 @@ static int fcli_setup2(int argc, char const * const * argv,
 int fcli_setup_v2(int argc, char const * const * argv,
                   fcli_cliflag const * const cliFlags,
                   fcli_help_info const * const helpInfo ){
-  fcli.cliFlags = cliFlags;
-  fcli.appHelp = helpInfo;
-  return fcli_setup(argc, argv);
-}
-
-int fcli_setup(int argc, char const * const * argv ){
-  int rc = 0;
+  if(NULL!=cliFlags) fcli.cliFlags = cliFlags;
+  if(NULL!=helpInfo) fcli.appHelp = helpInfo;
   if(fcli.cliFlags){
     return fcli_setup2(argc, argv, fcli.cliFlags);
   }
-  rc = fcli_setup_common1(true, argc, argv);
+  int rc = fcli_setup_common1(true, argc, argv);
   if(!rc){
     //f_out("fcli.transient.helpRequested=%d\n",fcli.transient.helpRequested);
     if(fcli.transient.helpRequested){
@@ -9333,6 +9363,9 @@ int fcli_setup(int argc, char const * const * argv ){
   return rc;
 }
 
+int fcli_setup(int argc, char const * const * argv ){
+  return fcli_setup_v2(argc, argv, NULL, NULL);
+}
 
 int fcli_err_report2(bool clear, char const * file, int line){
   int errRc = 0;
@@ -24537,7 +24570,7 @@ static int sbsWriteLineChange(
   const char *zRight;  /* Text of the right line */
   int nLeftDiff;       /* nLeft - nPrefix - nSuffix */
   int nRightDiff;      /* nRight - nPrefix - nSuffix */
-  int aLCS[4];         /* Bounds of common middle segment */
+  int aLCS[4] = {0,0,0,0}; /* Bounds of common middle segment */
   static const char zClassRm[]   = "<span class=\"fsl-diff-rm\">";
   static const char zClassAdd[]  = "<span class=\"fsl-diff-add\">";
   static const char zClassChng[] = "<span class=\"fsl-diff-change\">";
@@ -25643,7 +25676,7 @@ static unsigned short textLineChanges(
     int mxi = -1;
     int mxLen = -1;
     int x, i;
-    uint32_t aLCS[4];
+    uint32_t aLCS[4] = {0,0,0,0};
     struct fsl_dline_change_span *a, *b;
     for(i=0; i<p->n; i++){
       if( p->a[i].isMin ) continue;
@@ -36085,7 +36118,7 @@ int fsl_sha3sum_filename(const char *zFilename, fsl_buffer *pCksum){
 #include <time.h>
 /* #include <sys/time.h> */
 #include <string.h> /* strchr() and friends */
-#include <stdio.h> /* sprintf() */
+#include <stdio.h> /* snprintf() */
 #include <ctype.h> /* toupper(), islower() */
 
 
@@ -36158,9 +36191,10 @@ maximum(int a, int b)
 fsl_size_t
 fsl_strftime(char *s, fsl_size_t maxsize, const char *format, const struct tm *timeptr)
 {
+    enum {TBufLen = 100U};
     char *endp = s + maxsize;
     char *start = s;
-    char tbuf[100];
+    char tbuf[TBufLen];
     int i;
     static short first = 1;
 #ifdef POSIX_SEMANTICS
@@ -36278,7 +36312,7 @@ fsl_strftime(char *s, fsl_size_t maxsize, const char *format, const struct tm *t
             break;
 
         case 'c':    /* appropriate date and time representation */
-            sprintf(tbuf, "%s %s %2d %02d:%02d:%02d %d",
+            snprintf(tbuf, TBufLen, "%s %s %2d %02d:%02d:%02d %d",
                 days_a[range(0, timeptr->tm_wday, 6)],
                 months_a[range(0, timeptr->tm_mon, 11)],
                 range(1, timeptr->tm_mday, 31),
@@ -36290,12 +36324,12 @@ fsl_strftime(char *s, fsl_size_t maxsize, const char *format, const struct tm *t
 
         case 'd':    /* day of the month, 01 - 31 */
             i = range(1, timeptr->tm_mday, 31);
-            sprintf(tbuf, "%02d", i);
+            snprintf(tbuf, TBufLen, "%02d", i);
             break;
 
         case 'H':    /* hour, 24-hour clock, 00 - 23 */
             i = range(0, timeptr->tm_hour, 23);
-            sprintf(tbuf, "%02d", i);
+            snprintf(tbuf, TBufLen, "%02d", i);
             break;
 
         case 'I':    /* hour, 12-hour clock, 01 - 12 */
@@ -36304,21 +36338,21 @@ fsl_strftime(char *s, fsl_size_t maxsize, const char *format, const struct tm *t
                 i = 12;
             else if (i > 12)
                 i -= 12;
-            sprintf(tbuf, "%02d", i);
+            snprintf(tbuf, TBufLen, "%02d", i);
             break;
 
         case 'j':    /* day of the year, 001 - 366 */
-            sprintf(tbuf, "%03d", timeptr->tm_yday + 1);
+            snprintf(tbuf, TBufLen, "%03d", timeptr->tm_yday + 1);
             break;
 
         case 'm':    /* month, 01 - 12 */
             i = range(0, timeptr->tm_mon, 11);
-            sprintf(tbuf, "%02d", i + 1);
+            snprintf(tbuf, TBufLen, "%02d", i + 1);
             break;
 
         case 'M':    /* minute, 00 - 59 */
             i = range(0, timeptr->tm_min, 59);
-            sprintf(tbuf, "%02d", i);
+            snprintf(tbuf, TBufLen, "%02d", i);
             break;
 
         case 'p':    /* am or pm based on 12-hour clock */
@@ -36331,24 +36365,24 @@ fsl_strftime(char *s, fsl_size_t maxsize, const char *format, const struct tm *t
 
         case 'S':    /* second, 00 - 61 */
             i = range(0, timeptr->tm_sec, 61);
-            sprintf(tbuf, "%02d", i);
+            snprintf(tbuf, TBufLen, "%02d", i);
             break;
 
         case 'U':    /* week of year, Sunday is first day of week */
-            sprintf(tbuf, "%d", weeknumber(timeptr, 0));
+            snprintf(tbuf, TBufLen, "%d", weeknumber(timeptr, 0));
             break;
 
         case 'w':    /* weekday, Sunday == 0, 0 - 6 */
             i = range(0, timeptr->tm_wday, 6);
-            sprintf(tbuf, "%d", i);
+            snprintf(tbuf, TBufLen, "%d", i);
             break;
 
         case 'W':    /* week of year, Monday is first day of week */
-            sprintf(tbuf, "%d", weeknumber(timeptr, 1));
+            snprintf(tbuf, TBufLen, "%d", weeknumber(timeptr, 1));
             break;
 
         case 'x':    /* appropriate date representation */
-            sprintf(tbuf, "%s %s %2d %d",
+            snprintf(tbuf, TBufLen, "%s %s %2d %d",
                 days_a[range(0, timeptr->tm_wday, 6)],
                 months_a[range(0, timeptr->tm_mon, 11)],
                 range(1, timeptr->tm_mday, 31),
@@ -36356,7 +36390,7 @@ fsl_strftime(char *s, fsl_size_t maxsize, const char *format, const struct tm *t
             break;
 
         case 'X':    /* appropriate time representation */
-            sprintf(tbuf, "%02d:%02d:%02d",
+            snprintf(tbuf, TBufLen, "%02d:%02d:%02d",
                 range(0, timeptr->tm_hour, 23),
                 range(0, timeptr->tm_min, 59),
                 range(0, timeptr->tm_sec, 61));
@@ -36364,11 +36398,11 @@ fsl_strftime(char *s, fsl_size_t maxsize, const char *format, const struct tm *t
 
         case 'y':    /* year without a century, 00 - 99 */
             i = timeptr->tm_year % 100;
-            sprintf(tbuf, "%d", i);
+            snprintf(tbuf, TBufLen, "%d", i);
             break;
 
         case 'Y':    /* year with century */
-            sprintf(tbuf, "%d", 1900 + timeptr->tm_year);
+            snprintf(tbuf, TBufLen, "%d", 1900 + timeptr->tm_year);
             break;
 
 #if HAVE_GET_TZ_NAME
@@ -36393,7 +36427,7 @@ fsl_strftime(char *s, fsl_size_t maxsize, const char *format, const struct tm *t
             break;
 
         case 'e':    /* day of month, blank padded */
-            sprintf(tbuf, "%2d", range(1, timeptr->tm_mday, 31));
+            snprintf(tbuf, TBufLen, "%2d", range(1, timeptr->tm_mday, 31));
             break;
 
         case 'r':    /* time as %I:%M:%S %p */
@@ -36411,7 +36445,7 @@ fsl_strftime(char *s, fsl_size_t maxsize, const char *format, const struct tm *t
 
 #ifdef SUNOS_EXT
         case 'k':    /* hour, 24-hour clock, blank pad */
-            sprintf(tbuf, "%2d", range(0, timeptr->tm_hour, 23));
+            snprintf(tbuf, TBufLen, "%2d", range(0, timeptr->tm_hour, 23));
             break;
 
         case 'l':    /* hour, 12-hour clock, 1 - 12, blank pad */
@@ -36420,14 +36454,14 @@ fsl_strftime(char *s, fsl_size_t maxsize, const char *format, const struct tm *t
                 i = 12;
             else if (i > 12)
                 i -= 12;
-            sprintf(tbuf, "%2d", i);
+            snprintf(tbuf, TBufLen, "%2d", i);
             break;
 #endif
 
 
 #ifdef VMS_EXT
         case 'v':    /* date as dd-bbb-YYYY */
-            sprintf(tbuf, "%2d-%3.3s-%4d",
+            snprintf(tbuf, TBufLen, "%2d-%3.3s-%4d",
                 range(1, timeptr->tm_mday, 31),
                 months_a[range(0, timeptr->tm_mon, 11)],
                 timeptr->tm_year + 1900);
@@ -36440,7 +36474,7 @@ fsl_strftime(char *s, fsl_size_t maxsize, const char *format, const struct tm *t
 
 #ifdef POSIX2_DATE
         case 'C':
-            sprintf(tbuf, "%02d", (timeptr->tm_year + 1900) / 100);
+            snprintf(tbuf, TBufLen, "%02d", (timeptr->tm_year + 1900) / 100);
             break;
 
 
@@ -36463,12 +36497,12 @@ fsl_strftime(char *s, fsl_size_t maxsize, const char *format, const struct tm *t
             }
         }
 #endif
-            sprintf(tbuf, "%d", iso8601wknum(timeptr));
+            snprintf(tbuf, TBufLen, "%d", iso8601wknum(timeptr));
             break;
 
         case 'u':
         /* ISO 8601: Weekday as a decimal number [1 (Monday) - 7] */
-            sprintf(tbuf, "%d", timeptr->tm_wday == 0 ? 7 :
+            snprintf(tbuf, TBufLen, "%d", timeptr->tm_wday == 0 ? 7 :
                     timeptr->tm_wday);
             break;
 #endif    /* POSIX2_DATE */
