@@ -16,7 +16,6 @@ options {
 
 #cc-check-c11
 
-wh-require-bash
 cc-check-sizeof "void *"
 
 if {![cc-check-includes zlib.h] ||
