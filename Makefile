@@ -56,6 +56,13 @@ else
 FNC_LDFLAGS +=	-lncursesw -lpanelw
 endif
 
+ifneq (,$(wildcard /usr/include/ncursesw/ncurses.h))
+# On SOME Linux platforms, we have to include wide-char curses from
+# here, but linking to to -lncursesw (with no special -L path) works
+# fine. Ubuntu 18.04.6 is known to have this quirk.
+FNC_CFLAGS += -I/usr/include/ncursesw
+endif
+
 all: bin
 
 debug: FNC_CFLAGS += -DDEBUG -g
