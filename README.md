@@ -27,21 +27,17 @@ refrain from breaking changes.
   - `fossil clone https://fnc.bsdbox.org`
 2. move into the repository checkout
   - `cd fnc`
-3. run the configure script
-  - `./configure`
-4. build fnc
+3. build fnc
   - `make`
-5. install the `fnc` binary (*requires privileges*)
+4. install the `fnc` binary (*requires privileges*)
   - `doas make install`
-6. move into an open Fossil checkout, and run it:
+5. move into an open Fossil checkout, and run it:
   - `cd ~/museum/repo && fossil open ../repo.fossil && fnc`
 
 This will install the `fnc` executable and man page into `/usr/local/bin` and
-`/usr/local/share/man/man1`, respectively. To change the install path, use the
-`--prefix` option to `configure`; for example, replacing step 3 with
-`./configure --prefix=$HOME` will install the executable and man page into
-`~/bin` and `~/share/man`, respectively. Alternatively, cryptographically signed
-binaries for some of the abovementioned platforms are available to [download][3].
+`/usr/local/share/man/man1`, respectively. Alternatively, cryptographically
+signed binaries for some of the abovementioned platforms are available to
+[download][3].
 
 # Doc
 
