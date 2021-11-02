@@ -12,7 +12,7 @@ VERSION ?=	0.4
 UNAME :=	$(shell uname -s)
 
 # FLAGS NEEDED TO BUILD SQLITE3
-SQLITE_CFLAGS =	${CFLAGS} -Wall -Wno-sign-compare -pedantic -std=c99 \
+SQLITE_CFLAGS =	${CFLAGS} -Wall -Werror -Wno-sign-compare -pedantic -std=c99 \
 		-DNDEBUG=1 \
 		-DSQLITE_DQS=0 \
 		-DSQLITE_THREADSAFE=0 \
