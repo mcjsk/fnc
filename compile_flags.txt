@@ -2,7 +2,7 @@
 -I
 include
 -I
-src
+lib
 -isystem
 /usr/local/include
 -isystem

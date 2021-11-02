@@ -39,11 +39,11 @@ SQLITE_CFLAGS =	${CFLAGS} -Wall -Wno-sign-compare -pedantic -std=c99 \
 		-DSQLITE_TRUSTED_SCHEMA=0
 
 # FLAGS NEEDED TO BUILD LIBFOSSIL
-FOSSIL_CFLAGS =	${CFLAGS} -Wall -Wsign-compare -pedantic -std=c99
+FOSSIL_CFLAGS =	${CFLAGS} -Wall -Werror -Wsign-compare -pedantic -std=c99
 
 # FLAGS NEEDED TO BUILD FNC
-FNC_CFLAGS =	${CFLAGS} -Wall -Wsign-compare -pedantic -std=c99 -I./lib \
-		-D_XOPEN_SOURCE_EXTENDED -DVERSION=${VERSION}
+FNC_CFLAGS =	${CFLAGS} -Wall -Werror -Wsign-compare -pedantic -std=c99 \
+		-I./lib -D_XOPEN_SOURCE_EXTENDED -DVERSION=${VERSION}
 
 FNC_LDFLAGS =	${LDFLAGS} -lm -lutil -lz -lpthread -fPIC
 
