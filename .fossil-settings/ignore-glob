@@ -13,7 +13,6 @@
 *.vg
 *.massif
 *._out
-Makefile
 autosetup/jimsh0
 config.log
 config.make
