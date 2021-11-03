@@ -1111,9 +1111,6 @@ end:
 			fcli_err_reset();  /* For fcli_end_of_main() */
 			rc = 0;
 		}
-		else
-			fsl_fprintf(stderr, "%s: %s %d\n", fcli_progname(),
-			    fsl_rc_cstr(rc), rc);
 	}
 	putchar('\n');
 	return fcli_end_of_main(rc);
