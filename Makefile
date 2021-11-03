@@ -44,9 +44,12 @@ MAKEFILE := $(word $(words $(MAKEFILE_LIST)),$(MAKEFILE_LIST))
 # FLAGS NEEDED TO BUILD LIBFOSSIL
 FOSSIL_CFLAGS =	${CFLAGS} -Wall -Werror -Wsign-compare -pedantic -std=c99
 
+# On SOME Linux (e.g., Ubuntu 18.04.6), we have to include wchar curses from
+# I/.../ncursesw, but linking to -lncursesw (w/ no special -L path) works fine.
 # FLAGS NEEDED TO BUILD FNC
 FNC_CFLAGS =	${CFLAGS} -Wall -Werror -Wsign-compare -pedantic -std=c99 \
-		-I./lib -D_XOPEN_SOURCE_EXTENDED -DVERSION=${VERSION}
+		-I./lib -I/usr/include/ncursesw -D_XOPEN_SOURCE_EXTENDED \
+		-DVERSION=${VERSION}
 
 FNC_LDFLAGS =	${LDFLAGS} -lm -lutil -lz -lpthread -fPIC
 
@@ -59,19 +62,7 @@ else
 FNC_LDFLAGS +=	-lncursesw -lpanelw
 endif
 
-ifneq (,$(wildcard /usr/include/ncursesw/ncurses.h))
-# On SOME Linux platforms, we have to include wide-char curses from
-# here, but linking to to -lncursesw (with no special -L path) works
-# fine. Ubuntu 18.04.6 is known to have this quirk.
-FNC_CFLAGS += -I/usr/include/ncursesw
-endif
-
 all: bin
-
-debug: FNC_CFLAGS += -DDEBUG -g
-debug: FOSSIL_CFLAGS += -DDEBUG -g
-debug: SQLITE_CFLAGS += -DDEBUG -g
-debug: bin
 
 bin: lib/sqlite3.o lib/libfossil.o src/fnc.o src/fnc
 
