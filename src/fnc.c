@@ -451,18 +451,18 @@ enum fnc_search_state {
 	SEARCH_FOR_END
 };
 
-enum fnc_colours {
-	FNC_DIFF_META = 1,
-	FNC_DIFF_MINUS,
-	FNC_DIFF_PLUS,
-	FNC_DIFF_CHNK,
-	FNC_TREE_LINK,
-	FNC_TREE_DIR,
-	FNC_TREE_EXEC,
-	FNC_COMMIT_ID,
-	FNC_USER_STR,
-	FNC_DATE_STR,
-	FNC_TAGS_STR
+enum fnc_colour_obj {
+	FNC_COLOUR_DIFF_META = 1,
+	FNC_COLOUR_DIFF_MINUS,
+	FNC_COLOUR_DIFF_PLUS,
+	FNC_COLOUR_DIFF_CHUNK,
+	FNC_COLOUR_TREE_LINK,
+	FNC_COLOUR_TREE_DIR,
+	FNC_COLOUR_TREE_EXEC,
+	FNC_COLOUR_COMMIT,
+	FNC_COLOUR_USER,
+	FNC_COLOUR_DATE,
+	FNC_COLOUR_TAGS
 };
 
 enum fnc_diff_type {
@@ -1012,6 +1012,8 @@ static int		 strtonumcheck(int *, const char *, const int,
 static int		 fnc_date_to_mtime(double *, const char *, int);
 static char		*fnc_strsep (char **, const char *);
 static int		 set_colours(fsl_list *, enum fnc_view_id vid);
+static int		 init_colour(enum fnc_colour_obj);
+static int		 default_colour(enum fnc_colour_obj);
 static int		 match_colour(const void *, const void *);
 static bool		 fnc_home(struct fnc_view *);
 static struct fnc_colour	*get_colour(fsl_list *, int);
@@ -2273,7 +2275,7 @@ draw_commits(struct fnc_view *view)
 	if (screen_is_shared(view))
 		wstandout(view->window);
 	if (s->colour)
-		c = get_colour(&s->colours, FNC_COMMIT_ID);
+		c = get_colour(&s->colours, FNC_COLOUR_COMMIT);
 	if (c)
 		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 	waddwstr(view->window, wcstr);
@@ -2493,7 +2495,7 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	date[i] = '\0';
 	col_pos = MIN(view->ncols, ISO8601_DATE_ONLY + 1);
 	if (s->colour)
-		c = get_colour(&s->colours, FNC_DATE_STR);
+		c = get_colour(&s->colours, FNC_COLOUR_DATE);
 	if (c)
 		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 	waddnstr(view->window, date, col_pos);
@@ -2505,7 +2507,7 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	/* If enough columns, write abbreviated commit hash. */
 	if (view->ncols >= 110) {
 		if (s->colour)
-			c = get_colour(&s->colours, FNC_COMMIT_ID);
+			c = get_colour(&s->colours, FNC_COLOUR_COMMIT);
 		if (c)
 			wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 		wprintw(view->window, "%.9s ", commit->uuid);
@@ -2531,7 +2533,7 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	if (rc)
 		goto end;
 	if (s->colour)
-		c = get_colour(&s->colours, FNC_USER_STR);
+		c = get_colour(&s->colours, FNC_COLOUR_USER);
 	if (c)
 		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 	waddwstr(view->window, usr_wcstr);
@@ -6290,7 +6292,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 	if (screen_is_shared(view))
 		wstandout(view->window);
 	if (s->colour)
-		c = get_colour(&s->colours, FNC_COMMIT_ID);
+		c = get_colour(&s->colours, FNC_COLOUR_COMMIT);
 	if (c)
 		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 	waddwstr(view->window, wcstr);
@@ -7005,31 +7007,31 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 				    "[+-]{3} )", "^user:", "^date:", "^tags:",
 				    "^-", "^\\+", "^@@"
 				  };
-	int			  pairs_diff[][2] = {
-				    {FNC_DIFF_META, COLOR_GREEN},
-				    {FNC_USER_STR, COLOR_CYAN},
-				    {FNC_DATE_STR, COLOR_YELLOW},
-				    {FNC_TAGS_STR, COLOR_MAGENTA},
-				    {FNC_DIFF_MINUS, COLOR_MAGENTA},
-				    {FNC_DIFF_PLUS, COLOR_CYAN},
-				    {FNC_DIFF_CHNK, COLOR_YELLOW}
-				  };
-	int			  pairs_tree[][2] = {
-				    {FNC_TREE_LINK, COLOR_MAGENTA},
-				    {FNC_TREE_DIR, COLOR_CYAN},
-				    {FNC_TREE_EXEC, COLOR_GREEN},
-				    {FNC_COMMIT_ID, COLOR_GREEN}
-				  };
-	int			  pairs_timeline[][2] = {
-				    {FNC_COMMIT_ID, COLOR_GREEN},
-				    {FNC_USER_STR, COLOR_CYAN},
-				    {FNC_DATE_STR, COLOR_YELLOW}
-				  };
-	int			  pairs_blame[][2] = {
-				    {FNC_COMMIT_ID, COLOR_GREEN}
-				  };
-	int			(*pairs)[2], rc = 0;
-	fsl_size_t		  idx, n;
+	int	pairs_diff[][2] = {
+		    {FNC_COLOUR_DIFF_META, init_colour(FNC_COLOUR_DIFF_META)},
+		    {FNC_COLOUR_USER, init_colour(FNC_COLOUR_USER)},
+		    {FNC_COLOUR_DATE, init_colour(FNC_COLOUR_DATE)},
+		    {FNC_COLOUR_TAGS, init_colour(FNC_COLOUR_TAGS)},
+		    {FNC_COLOUR_DIFF_MINUS, init_colour(FNC_COLOUR_DIFF_MINUS)},
+		    {FNC_COLOUR_DIFF_PLUS, init_colour(FNC_COLOUR_DIFF_PLUS)},
+		    {FNC_COLOUR_DIFF_CHUNK, init_colour(FNC_COLOUR_DIFF_CHUNK)}
+		};
+	int	pairs_tree[][2] = {
+		    {FNC_COLOUR_TREE_LINK, init_colour(FNC_COLOUR_TREE_LINK)},
+		    {FNC_COLOUR_TREE_DIR, init_colour(FNC_COLOUR_TREE_DIR)},
+		    {FNC_COLOUR_TREE_EXEC, init_colour(FNC_COLOUR_TREE_EXEC)},
+		    {FNC_COLOUR_COMMIT, init_colour(FNC_COLOUR_COMMIT)}
+		};
+	int	pairs_timeline[][2] = {
+		    {FNC_COLOUR_COMMIT, init_colour(FNC_COLOUR_COMMIT)},
+		    {FNC_COLOUR_USER, init_colour(FNC_COLOUR_USER)},
+		    {FNC_COLOUR_DATE, init_colour(FNC_COLOUR_DATE)}
+		};
+	int	pairs_blame[][2] = {
+		    {FNC_COLOUR_COMMIT, init_colour(FNC_COLOUR_COMMIT)}
+		};
+	int	(*pairs)[2], rc = 0;
+	size_t	idx, n;
 
 	switch (vid) {
 	case FNC_VIEW_DIFF:
@@ -7078,6 +7080,100 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 	}
 
 	return rc;
+}
+
+static int
+init_colour(enum fnc_colour_obj envvar)
+{
+	const char *val = NULL;
+
+	switch (envvar) {
+	case FNC_COLOUR_DIFF_META:
+		val = getenv(STRINGIFY(FNC_COLOUR_DIFF_META));
+		break;
+	case FNC_COLOUR_DIFF_MINUS:
+		val = getenv(STRINGIFY(FNC_COLOUR_DIFF_MINUS));
+		break;
+	case FNC_COLOUR_DIFF_PLUS:
+		val = getenv(STRINGIFY(FNC_COLOUR_DIFF_PLUS));
+		break;
+	case FNC_COLOUR_DIFF_CHUNK:
+		val = getenv(STRINGIFY(FNC_COLOUR_DIFF_CHUNK));
+		break;
+	case FNC_COLOUR_TREE_LINK:
+		val = getenv(STRINGIFY(FNC_COLOUR_TREE_LINK));
+		break;
+	case FNC_COLOUR_TREE_DIR:
+		val = getenv(STRINGIFY(FNC_COLOUR_TREE_DIR));
+		break;
+	case FNC_COLOUR_TREE_EXEC:
+		val = getenv(STRINGIFY(FNC_COLOUR_TREE_EXEC));
+		break;
+	case FNC_COLOUR_COMMIT:
+		val = getenv(STRINGIFY(FNC_COLOUR_COMMIT));
+		break;
+	case FNC_COLOUR_USER:
+		val = getenv(STRINGIFY(FNC_COLOUR_USER));
+		break;
+	case FNC_COLOUR_DATE:
+		val = getenv(STRINGIFY(FNC_COLOUR_DATE));
+		break;
+	case FNC_COLOUR_TAGS:
+		val = getenv(STRINGIFY(FNC_COLOUR_TAGS));
+	}
+
+	if (val == NULL)
+		return default_colour(envvar);
+
+	if (!fsl_stricmp(val, "black"))
+		return COLOR_BLACK;
+	if (!fsl_stricmp(val, "red"))
+		return COLOR_RED;
+	if (!fsl_stricmp(val, "green"))
+		return COLOR_GREEN;
+	if (!fsl_stricmp(val, "yellow"))
+		return COLOR_YELLOW;
+	if (!fsl_stricmp(val, "blue"))
+		return COLOR_BLUE;
+	if (!fsl_stricmp(val, "magenta"))
+		return COLOR_MAGENTA;
+	if (!fsl_stricmp(val, "cyan"))
+		return COLOR_CYAN;
+	if (!fsl_stricmp(val, "white"))
+		return COLOR_WHITE;
+	if (!fsl_stricmp(val, "default"))
+		return -1;  /* Terminal default foreground colour. */
+
+	return default_colour(envvar);
+}
+
+static int
+default_colour(enum fnc_colour_obj obj)
+{
+	if (obj == FNC_COLOUR_DIFF_MINUS)
+		return COLOR_MAGENTA;
+	if (obj == FNC_COLOUR_DIFF_PLUS)
+		return COLOR_CYAN;
+	if (obj == FNC_COLOUR_DIFF_CHUNK)
+		return COLOR_YELLOW;
+	if (obj == FNC_COLOUR_DIFF_META)
+		return COLOR_GREEN;
+	if (obj == FNC_COLOUR_TREE_LINK)
+		return COLOR_MAGENTA;
+	if (obj == FNC_COLOUR_TREE_DIR)
+		return COLOR_CYAN;
+	if (obj == FNC_COLOUR_TREE_EXEC)
+		return COLOR_GREEN;
+	if (obj == FNC_COLOUR_COMMIT)
+		return COLOR_GREEN;
+	if (obj == FNC_COLOUR_USER)
+		return COLOR_CYAN;
+	if (obj == FNC_COLOUR_DATE)
+		return COLOR_YELLOW;
+	if (obj == FNC_COLOUR_TAGS)
+		return COLOR_MAGENTA;
+
+	return -1;  /* Terminal default foreground colour. */
 }
 
 struct fnc_colour *
@@ -7622,7 +7718,7 @@ draw_blame(struct fnc_view *view)
 	if (screen_is_shared(view))
 		wstandout(view->window);
 	if (s->colour)
-		c = get_colour(&s->colours, FNC_COMMIT_ID);
+		c = get_colour(&s->colours, FNC_COLOUR_COMMIT);
 	if (c)
 		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 	waddwstr(view->window, wcstr);
@@ -7690,7 +7786,7 @@ draw_blame(struct fnc_view *view)
 				}
 				if (s->colour)
 					c = get_colour(&s->colours,
-					    FNC_COMMIT_ID);
+					    FNC_COLOUR_COMMIT);
 				if (c)
 					wattr_on(view->window,
 					    COLOR_PAIR(c->scheme), NULL);
@@ -8286,7 +8382,7 @@ open_branch_view(struct fnc_view *view, int branch_flags, const char *glob,
 		return rc;
 
 	if (s->colour)
-		init_pair(FNC_COMMIT_ID, COLOR_GREEN, -1);
+		init_pair(FNC_COLOUR_COMMIT, COLOR_GREEN, -1);
 
 	view->show = show_branch_view;
 	view->input = branch_input_handler;
@@ -8574,10 +8670,10 @@ show_branch_view(struct fnc_view *view)
 			s->selected_branch = be;
 		}
 		if (s->colour)
-			wattr_on(view->window, COLOR_PAIR(FNC_COMMIT_ID), NULL);
+			wattr_on(view->window, COLOR_PAIR(FNC_COLOUR_COMMIT), NULL);
 		waddwstr(view->window, wline);
 		if (s->colour)
-			wattr_off(view->window, COLOR_PAIR(FNC_COMMIT_ID), NULL);
+			wattr_off(view->window, COLOR_PAIR(FNC_COLOUR_COMMIT), NULL);
 		if (width < view->ncols - 1)
 			waddch(view->window, '\n');
 		if (n == s->selected && view->active)

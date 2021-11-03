@@ -698,6 +698,68 @@ Find the next branch that matches the current search pattern.
 Find the previous branch that matches the current search pattern.
 .El
 .El
+.Sh ENVIRONMENT
+.Nm
+displays coloured output by default in supported terminals.  Each colour object
+identified below can be defined by exporting environment variables (e.g.,
+.Cm export FNC_COLOUR_COMMIT=red Ns ).
+If none are set, the default colour scheme will
+be displayed.  Colours supported in
+.Nm
+are
+.Dq black ,
+.Dq red ,
+.Dq green ,
+.Dq yellow ,
+.Dq blue ,
+.Dq magenta ,
+.Dq cyan ,
+and
+.Dq default ,
+which is the default foreground (i.e., text) colour in the terminal.
+User-definable colour objects displayed in various
+.Nm
+views are as follows:
+.Bl -tag -width FNC_COLOUR
+.It Ev FNC_COLOUR_COMMIT
+The commit hash ID field displayed in all views.  If not defined, the default
+value is
+.Dq green .
+.It Ev FNC_COLOUR_USER
+The username field displayed in the timeline and diff views.  If not defined,
+the default value is
+.Dq cyan .
+.It Ev FNC_COLOUR_DATE
+The date field displayed in the timeline and diff views.  If not defined, the
+default value is
+.Dq yellow .
+.It Ev FNC_COLOUR_TAGS
+The tag field in the timeline and diff views.  If not defined, the default value
+is
+.Dq magenta .
+.It Ev FNC_COLOUR_DIFF_MINUS
+Removed lines in the diff view.  If not defined, the default value is
+.Dq magenta .
+.It Ev FNC_COLOUR_DIFF_PLUS
+Added lines in the diff view.  If not defined, the default value is
+.Dq cyan .
+.It Ev FNC_COLOUR_DIFF_CHUNK
+Chunk header lines (i.e, @@ -www,xx +yyy,zz @@) in the diff view.  If not
+defined, the default value is
+.Dq yellow .
+.It Ev FNC_COLOUR_DIFF_META
+Metadata in the diff view.  If not defined, the default value is
+.Dq green .
+.It Ev FNC_COLOUR_TREE_DIR
+Directory entries in the tree view.  If not defined, the default value is
+.Dq cyan .
+.It Ev FNC_COLOUR_TREE_EXEC
+Executable file entries in the tree view.  If not set, the default value is
+.Dq green .
+.It Ev FNC_COLOUR_TREE_LINK
+Symbolic link entries in the tree view.  If not defined, the default value is
+.Dq magenta .
+.El
 .Sh EXIT STATUS
 .Ex -std fnc
 .Sh SEE ALSO
