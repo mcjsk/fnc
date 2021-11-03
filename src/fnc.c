@@ -133,10 +133,10 @@
 
 #if defined __linux__
 # ifndef strlcat
-#  define strlcat(_d, _s, _sz) fnc_strlcat(_d, _s, _sz)
+#  define strlcat(_d, _s, _sz) fsl_strlcat(_d, _s, _sz)
 # endif /* strlcat */
 # ifndef strlcpy
-#  define strlcpy(_d, _s, _sz) fnc_strlcpy(_d, _s, _sz)
+#  define strlcpy(_d, _s, _sz) fsl_strlcpy(_d, _s, _sz)
 # endif /* strlcpy */
 #endif /* __linux__ */
 
@@ -1011,10 +1011,6 @@ static int		 strtonumcheck(int *, const char *, const int,
 			    const int);
 static int		 fnc_date_to_mtime(double *, const char *, int);
 static char		*fnc_strsep (char **, const char *);
-#ifdef __linux__
-static size_t		 fnc_strlcat(char *, const char *, size_t);
-static size_t		 fnc_strlcpy(char *, const char *, size_t);
-#endif
 static int		 set_colours(fsl_list *, enum fnc_view_id vid);
 static int		 match_colour(const void *, const void *);
 static bool		 fnc_home(struct fnc_view *);
@@ -9141,46 +9137,4 @@ fnc_strsep(char **ptr, const char *sep)
 
 	return s;
 }
-
-#ifdef __linux__
-static size_t
-fnc_strlcat(char *restrict dst, const char *restrict src, size_t dstsz)
-{
-	size_t	offset;
-	int	dstlen, srclen, idx = 0;
-
-	offset = dstlen = fsl_strlen(dst);
-	srclen = fsl_strlen(src);
-
-	while ((*(dst + offset++) = *(src + idx++)) != '\0')
-		if (offset == dstsz - 1)
-			break;
-
-	*(dst + offset) = '\0';
-
-	return dstlen + srclen;
-}
-
-static size_t
-fnc_strlcpy(char *restrict dst, const char *restrict src, size_t dstsz)
-{
-	size_t offset = 0;
-
-	if (dstsz < 1)
-		goto end;
-
-	while ((*(dst + offset) = *(src + offset)) != '\0')
-		if (++offset == dstsz) {
-			--offset;
-			break;
-		}
-
-end:
-	*(dst + offset) = '\0';
-	while (*(src + offset) != '\0')
-		++offset;	/* Return src length. */
-
-	return offset;
-}
-#endif
 
