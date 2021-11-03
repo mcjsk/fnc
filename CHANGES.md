@@ -1,3 +1,10 @@
+**fnc 0.5** 2021-11-03
+
+- simplify the build system to make-only and remove autosetup (patch from sdk)
+- remove invalid fsl_errno_to_rc() call and redundant alloc error check
+- reduce noise on app exit by removing redundant error output
+- relocate fnc_strlcpy() and fnc_strlcat() routines to the library
+
 **fnc 0.4** 2021-10-31
 
 - resolve database bug in the commit builder logic
