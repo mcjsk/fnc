@@ -7642,15 +7642,11 @@ draw_blame(struct fnc_view *view)
 	if (width < view->ncols - 1)
 		waddch(view->window, '\n');
 
-	if ((line = fsl_mprintf("[%d/%d] %s%s%s %c",
+	line = fsl_mprintf("[%d/%d] %s%s%s %c",
 	    s->first_line_onscreen - 1 + s->selected_line, blame->nlines,
 	    s->blame_complete ? "" : "annotating... ",
 	    fnc_init.sym ? "/" : "", s->path,
-	    s->blame_complete ? ' ' : SPINNER[s->spin_idx])) == NULL) {
-		fsl_free(id_str);
-		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR),
-		    "%s", "fsl_mprintf");
-	}
+	    s->blame_complete ? ' ' : SPINNER[s->spin_idx]);
 	if (SPINNER[++s->spin_idx] == '\0')
 		s->spin_idx = 0;
 	fsl_free(id_str);
