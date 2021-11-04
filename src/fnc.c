@@ -1013,7 +1013,9 @@ static int		 fnc_date_to_mtime(double *, const char *, int);
 static char		*fnc_strsep (char **, const char *);
 static int		 set_colours(fsl_list *, enum fnc_view_id vid);
 static int		 init_colour(enum fnc_colour_obj);
+static const char	*fnc_get_repo_colour(enum fnc_colour_obj);
 static int		 default_colour(enum fnc_colour_obj);
+static int		 fnc_set_repo_colour(enum fnc_colour_obj, const char *);
 static int		 match_colour(const void *, const void *);
 static bool		 fnc_home(struct fnc_view *);
 static struct fnc_colour	*get_colour(fsl_list *, int);
@@ -7117,6 +7119,10 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 	int	(*pairs)[2], rc = 0;
 	size_t	idx, n;
 
+	rc = fcli_error()->code;  /* Check error state from init_colour() */
+	if (rc)
+		return rc;
+
 	switch (vid) {
 	case FNC_VIEW_DIFF:
 		n = nitems(regexp_diff);
@@ -7206,8 +7212,12 @@ init_colour(enum fnc_colour_obj envvar)
 		val = getenv(STRINGIFY(FNC_COLOUR_TAGS));
 	}
 
-	if (val == NULL)
-		return default_colour(envvar);
+	if (val == NULL) {
+		val = fnc_get_repo_colour(envvar);
+		if (val == NULL)
+			return default_colour(envvar);
+	} else
+		fnc_set_repo_colour(envvar, val);
 
 	if (!fsl_stricmp(val, "black"))
 		return COLOR_BLACK;
@@ -7229,6 +7239,28 @@ init_colour(enum fnc_colour_obj envvar)
 		return -1;  /* Terminal default foreground colour. */
 
 	return default_colour(envvar);
+}
+
+static const char *
+fnc_get_repo_colour(enum fnc_colour_obj id)
+{
+	fsl_cx	*f = NULL;
+	fsl_db	*db = NULL;
+
+	f = fcli_cx();
+	db = fsl_needs_repo(f);
+
+	if (!db) {
+		/* Theoretically, this shouldn't happen. */
+		RC(FSL_RC_DB, "%s", "fsl_needs_repo");
+		return NULL;
+	}
+
+	if (!fsl_db_table_exists(db, FSL_DBROLE_REPO, "fx_fnc"))
+		return NULL;
+
+	return fsl_db_g_text(db, NULL,
+	    "SELECT value FROM fx_fnc WHERE id=%d", id);
 }
 
 static int
@@ -7258,6 +7290,38 @@ default_colour(enum fnc_colour_obj obj)
 		return COLOR_MAGENTA;
 
 	return -1;  /* Terminal default foreground colour. */
+}
+
+static int
+fnc_set_repo_colour(enum fnc_colour_obj id, const char *val)
+{
+	fsl_cx	*f = NULL;
+	fsl_db	*db = NULL;
+	int	 rc = 0;
+
+	f = fcli_cx();
+	db = fsl_needs_repo(f);
+
+	if (!db)  /* Theoretically, this shouldn't happen. */
+		return RC(FSL_RC_DB, "%s", "fsl_needs_repo");
+
+	/*
+	 * fossil(1) provides the 'fx_' namespace for clients. Any tables with
+	 * this prefix will be spared by Fossil. Store fnc-related config; for
+	 * now, colour schemes. https://fossil-scm.org/home/info/dbec64585aac08
+	 */
+	if (!fsl_db_table_exists(db, FSL_DBROLE_REPO, "fx_fnc")) {
+		rc = fsl_db_exec(db,
+		    "CREATE TABLE repo.fx_fnc(id INTEGER UNIQUE, value TEXT);");
+		if (rc)
+			return RC(rc, "%s", "unable to create table: fx_fnc");
+	}
+
+	rc = fsl_db_exec_multi(db,
+	    "INSERT OR REPLACE INTO fx_fnc(id, value) VALUES(%d, %Q)",
+	    id, val);
+
+	return rc;
 }
 
 struct fnc_colour *

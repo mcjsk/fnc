@@ -726,10 +726,16 @@ Find the previous branch that matches the current search pattern.
 .Sh ENVIRONMENT
 .Nm
 displays coloured output by default in supported terminals.  Each colour object
-identified below can be defined by exporting environment variables (e.g.,
-.Cm export FNC_COLOUR_COMMIT=red Ns ).
-If none are set, the default colour scheme will
-be displayed.  Colours supported in
+identified below can be defined by exporting environment variables
+.Po e.g.,
+.Cm export FNC_COLOUR_COMMIT=red
+.Pc .
+If found, the colour pair (i.e., object and colour) will be inserted into the
+.Sy fx_fnc
+repository database table, making the scheme persistent for this repository.
+If no environment variables are set, the repository database will be queried
+for existing settings.  If none are found, the default colour scheme will be
+displayed.  Colours supported in
 .Nm
 are:
 .Bl -column "black" "yellow" "magenta" "default" -offset indent-two
@@ -789,6 +795,14 @@ Symbolic link entries displayed in the tree view.  If not defined, the default
 value is
 .Dq magenta .
 .El
+.Pp
+To reset existing settings, set the environment variable to an empty string
+.Po e.g.,
+.Cm export FNC_COLOUR_USER=
+.Pc .
+This will clear the colour setting in the repository database and the default
+.Nm
+colour scheme will be displayed.
 .Sh EXIT STATUS
 .Ex -std fnc
 .Sh SEE ALSO
