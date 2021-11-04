@@ -29,10 +29,10 @@
 .Nm
 .Cm timeline
 .Op Fl Cz
-.Op Fl T Ar tag
 .Op Fl b Ar branch
 .Op Fl c Ar commit
 .Op Fl n Ar number
+.Op Fl T Ar tag
 .Op Fl t Ar type
 .Op Fl u Ar user
 .Op Ar path
@@ -111,7 +111,7 @@ interpreted as the command-specific variant if such an option exists.
 Global key bindings are as follows:
 .Bl -tag -width Ds
 .It Cm H, ?, F1
-Open in-app help.
+Display in-app help.
 .It Cm Tab
 Switch focus between open views.
 .It Cm f
@@ -155,18 +155,6 @@ Options for
 .Cm fnc timeline
 are as follows:
 .Bl -tag -width Ds
-.It Fl C , -no-colour
-Disable colourised timeline, which is enabled by default on supported
-terminals. If this option is not used, colour can be toggled with the
-.Sy c
-timeline view key binding as documented below.
-.It Fl T , -tag Ar tag
-Only display commits with T cards containing
-.Ar tag .
-By default,
-.Nm
-will indiscriminately display all commits irrespective of which T cards
-are attached to the commit manifest.
 .It Fl b , -branch Ar branch
 Display commits that are members of the specified
 .Ar branch .
@@ -174,6 +162,14 @@ The expected argument is the symbolic name of a branch. By default,
 .Nm
 will display all commits irrespective of the branch on which they
 reside.
+.It Fl C , -no-colour
+Disable colourised timeline, which is enabled by default on supported
+terminals. If this option is not used, colour can be toggled with the
+.Sy c
+timeline view key binding as documented below.
+User-defined colours are also supported, see
+.Sx ENVIRONMENT
+for details.
 .It Fl c , -commit Ar commit
 Open the timeline from the check-in identified by
 .Ar commit .
@@ -197,13 +193,20 @@ By default,
 .Nm
 will load the entire history of the repository's local checkout.
 Negative values are a no-op.
+.It Fl T , -tag Ar tag
+Only display commits with T cards containing
+.Ar tag .
+By default,
+.Nm
+will indiscriminately display all commits irrespective of which T cards
+are attached to the commit manifest.
 .It Fl t , -type Ar type
 Only display
 .Ar type
 commits. Valid
 .Ar type
 values are as follows:
-.Bl -column YXZ description
+.Bl -column -offset 2s YXZ description
 .Sy ci Ta check-in
 .Sy w Ta wiki
 .Sy t Ta ticket
@@ -317,6 +320,9 @@ Disable coloured diff output, which is enabled by default on supported
 terminals. If this option is not used, colour can be toggled with the
 .Sy c
 diff view key binding as documented below.
+User-defined colours are also supported, see
+.Sx ENVIRONMENT
+for details.
 .It Fl h , -help
 Display diff command help and usage information then exit.
 .It Fl i , -invert
@@ -399,7 +405,7 @@ assumes a local checkout is open in or above the current working directory.
 Tree nodes are lexicographically ordered and may be postfixed with an identifier
 corresponding to the mode of the file object on disk as returned by
 .Xr lstat 2 :
-.Bl -column YXZ description
+.Bl -column -offset Ds YXZ description
 .It / Ta directory
 .It * Ta executable
 .It @ Ta symbolic link
@@ -417,6 +423,9 @@ Disable coloured output, which is enabled by default on supported terminals.
 If this option is not used, colour can be toggled with the
 .Sy c
 tree view key binding as documented below.
+User-defined colours are also supported, see
+.Sx ENVIRONMENT
+for details.
 .It Fl c , -commit Ar commit
 The displayed tree will reflect the state of the repository as at the check-in
 identified by
@@ -498,6 +507,9 @@ Disable coloured output, which is enabled by default on supported terminals.
 If this option is not used, colour can be toggled with the
 .Sy c
 blame view key binding as documented below.
+User-defined colours are also supported, see
+.Sx ENVIRONMENT
+for details.
 .It Fl c , -commit Ar commit
 Start blame of file at the specified
 .Ar path
@@ -599,7 +611,7 @@ Branches are lexicographically ordered by default, and are prefixed with an
 identifier corresponding to the branch state (i.e., open/closed). The
 current and private branches are additionally annotated with a postfixed
 identifier:
-.Bl -column ABCDEFGHIJ description
+.Bl -column -offset Ds ABCDEFGHIJ description
 .It +dev-foo Ta open
 .It -rm-bar Ta closed
 .It +trunk@ Ta current
@@ -613,17 +625,20 @@ Options for
 .Cm fnc branch
 are as follows:
 .Bl -tag -width Ds
-.It Fl C , -no-colour
-Disable coloured output, which is enabled by default on supported terminals.
-If this option is not used, colour can be toggled with the
-.Sy c
-branch view key binding as documented below.
 .It Fl a , -after Ar date
 Display only those branches with activity after the specified
 .Ar date .
 .It Fl b , -before Ar date
 Display only those branches with activity before the specified
 .Ar date .
+.It Fl C , -no-colour
+Disable coloured output, which is enabled by default on supported terminals.
+If this option is not used, colour can be toggled with the
+.Sy c
+branch view key binding as documented below.
+User-defined colours are also supported, see
+.Sx ENVIRONMENT
+for details.
 .It Fl c , -close
 Display only closed branches.
 .It Fl h , -help
@@ -641,7 +656,7 @@ Sort branches by
 Valid
 .Ar order
 values are as follows:
-.Bl -column YXZ description
+.Bl -column -offset 2s YXZ description
 .Sy mru Ta most recently used
 .Sy state Ta open/closed state
 .El
@@ -706,21 +721,19 @@ identified below can be defined by exporting environment variables (e.g.,
 If none are set, the default colour scheme will
 be displayed.  Colours supported in
 .Nm
-are
-.Dq black ,
-.Dq red ,
-.Dq green ,
-.Dq yellow ,
-.Dq blue ,
-.Dq magenta ,
-.Dq cyan ,
-and
-.Dq default ,
-which is the default foreground (i.e., text) colour in the terminal.
+are:
+.Bl -column "black" "yellow" "magenta" "default" -offset indent-two
+.It Sq black Ta Sq green Ta Sq blue Ta Sq cyan
+.It Sq red Ta Sq yellow Ta Sq magenta Ta Sq default
+.El
+.Pp
+Where
+.Dq default
+is the current foreground (i.e., text) colour in the terminal.
 User-definable colour objects displayed in various
 .Nm
 views are as follows:
-.Bl -tag -width FNC_COLOUR
+.Bl -tag -width FNC_COLOUR_DIFF_MINUS
 .It Ev FNC_COLOUR_COMMIT
 The commit hash ID field displayed in all views.  If not defined, the default
 value is
@@ -734,30 +747,36 @@ The date field displayed in the timeline and diff views.  If not defined, the
 default value is
 .Dq yellow .
 .It Ev FNC_COLOUR_TAGS
-The tag field in the timeline and diff views.  If not defined, the default value
-is
+The tag field displayed in the timeline and diff views.  If not defined, the
+default value is
 .Dq magenta .
 .It Ev FNC_COLOUR_DIFF_MINUS
-Removed lines in the diff view.  If not defined, the default value is
+Removed lines displayed in the diff view.  If not defined, the default value is
 .Dq magenta .
 .It Ev FNC_COLOUR_DIFF_PLUS
-Added lines in the diff view.  If not defined, the default value is
+Added lines displayed in the diff view.  If not defined, the default value is
 .Dq cyan .
 .It Ev FNC_COLOUR_DIFF_CHUNK
-Chunk header lines (i.e, @@ -www,xx +yyy,zz @@) in the diff view.  If not
-defined, the default value is
+Chunk header lines
+.Po e.g.,
+.Ql @@ -732,34 +747,40 @@
+.Pc
+displayed in the diff view.  If not defined, the default value is
 .Dq yellow .
 .It Ev FNC_COLOUR_DIFF_META
-Metadata in the diff view.  If not defined, the default value is
+Metadata displayed in the diff view.  If not defined, the default value is
 .Dq green .
 .It Ev FNC_COLOUR_TREE_DIR
-Directory entries in the tree view.  If not defined, the default value is
+Directory entries displayed in the tree view.  If not defined, the default value
+is
 .Dq cyan .
 .It Ev FNC_COLOUR_TREE_EXEC
-Executable file entries in the tree view.  If not set, the default value is
+Executable file entries displayed in the tree view.  If not defined, the default
+value is
 .Dq green .
 .It Ev FNC_COLOUR_TREE_LINK
-Symbolic link entries in the tree view.  If not defined, the default value is
+Symbolic link entries displayed in the tree view.  If not defined, the default
+value is
 .Dq magenta .
 .El
 .Sh EXIT STATUS
