@@ -253,6 +253,8 @@ in the repository).
 Open a
 .Cm diff
 view displaying the changeset of the currently selected commit.
+.It Cm b
+Open and populate branch view with all repository branches.
 .It Cm c
 Toggle colourised timeline. On supported terminals,
 .Nm
@@ -340,6 +342,34 @@ Key bindings for
 .Cm fnc diff
 are as follows:
 .Bl -tag -width Ds
+.It Cm Arrow-down, j
+Scroll down one line of diff output.
+.It Cm Arrow-up, k
+Scroll up one line of diff output.
+.It Cm Ctrl+f, Page-down, Space
+Scroll down one page of diff output.
+.It Cm Ctrl+b, Page-up
+Scroll up one page of diff output.
+.It Cm G, End
+Scroll to the end of the view (i.e., last line of diff output).
+.It Cm gg, Home
+Scroll to the top of the view (i.e., first line of diff output).
+.It Cm Ctrl+k, K, <, \&,
+Move up the
+.Cm timeline
+to the previous (i.e., newer) commit and display its diff. (Only available
+if the diff was accessed from the timeline.)
+.It Cm Ctrl+j, J, >, \&.
+Move down the
+.Cm timeline
+to the next (i.e., older) commit and display its diff. (Only available
+if the diff was accessed from the timeline.)
+.It Cm \&-, \&_
+Decrease the number of context lines shown in diff output.
+.It Cm \&=, \&+
+Increase the number of context lines shown in diff output.
+.It Cm b
+Open and populate branch view with all repository branches.
 .It Cm c
 Toggle coloured diff output. On supported terminals,
 .Nm
@@ -353,30 +383,6 @@ will display the entire content of newly added or deleted files.
 .It Cm w
 Toggle whether whitespace-only changes are ignored when comparing lines in the
 diff.
-.It Cm Arrow-down, j
-Scroll down one line of diff output.
-.It Cm Arrow-up, k
-Scroll up one line of diff output.
-.It Cm Ctrl+f, Page-down, Space
-Scroll down one page of diff output.
-.It Cm Ctrl+b, Page-up
-Scroll up one page of diff output.
-.It Cm G, End
-Scroll to the end of the view (i.e., last line of diff output).
-.It Cm gg, Home
-Scroll to the top of the view (i.e., first line of diff output).
-.It Cm \&-, \&_
-Decrease the number of context lines shown in diff output.
-.It Cm \&=, \&+
-Increase the number of context lines shown in diff output.
-.It Cm Ctrl+k, K, <, \&,
-Move up the
-.Cm timeline
-to the previous (i.e., more recent) commit and display its diff.
-.It Cm Ctrl+j, J, >, \&.
-Move down the
-.Cm timeline
-to the next (i.e., earlier) commit and display its diff.
 .It Cm /
 Prompt to enter a search term to begin searching the diff output for
 lines matching the pattern provided.  The search term is an extended
@@ -462,6 +468,8 @@ Move selection cursor one page up the tree.
 Move selection cursor to the first node in the tree.
 .It Cm End, G
 Move selection cursor to the last node in the tree.
+.It Cm b
+Open and populate branch view with all repository branches.
 .It Cm c
 Toggle coloured output. On supported terminals,
 .Nm
@@ -574,6 +582,8 @@ Blame the version of the file corresponding to the parent of the commit in
 the currently selected line.
 .It Cm B, Backspace
 Reload the previous blamed version of the file.
+.It Cm T
+Open and populate branch view with all repository branches.
 .It Cm c
 Toggle coloured output. On supported terminals,
 .Nm

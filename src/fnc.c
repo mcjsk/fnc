@@ -2735,10 +2735,12 @@ help(struct fnc_view *view)
 	    {"  <,,              ", "  ❬<❭❬,❭          "},
 	    {"  >,.              ", "  ❬>❭❬.❭          "},
 	    {"  Enter,Space      ", "  ❬Enter❭❬Space❭  "},
+	    {"  b                ", "  ❬b❭             "},
 	    {"  t                ", "  ❬t❭             "},
 	    {""},
 	    {""}, /* Diff */
 	    {"  Space            ", "  ❬Space❭         "},
+	    {"  b                ", "  ❬b❭             "},
 	    {"  i                ", "  ❬i❭             "},
 	    {"  v                ", "  ❬v❭             "},
 	    {"  w                ", "  ❬w❭             "},
@@ -2750,6 +2752,7 @@ help(struct fnc_view *view)
 	    {""}, /* Tree */
 	    {"  l,Enter,<Right>  ", "  ❬→❭❬l❭❬Enter❭   "},
 	    {"  h,<BS>,<Left>    ", "  ❬←❭❬h❭❬⌫❭       "},
+	    {"  b                ", "  ❬b❭             "},
 	    {"  i                ", "  ❬i❭             "},
 	    {"  t                ", "  ❬t❭             "},
 	    {""},
@@ -2759,6 +2762,7 @@ help(struct fnc_view *view)
 	    {"  b                ", "  ❬b❭             "},
 	    {"  p                ", "  ❬p❭             "},
 	    {"  B                ", "  ❬B❭             "},
+	    {"  T                ", "  ❬T❭             "},
 	    {""},
 	    {""}, /* Branch */
 	    {"  Enter,Space      ", "  ❬Enter❭❬Space❭  "},
@@ -2793,10 +2797,12 @@ help(struct fnc_view *view)
 	    "Move selection cursor up one commit",
 	    "Move selection cursor down one commit",
 	    "Open diff view of the selected commit",
+	    "Open and populate branch view with all repository branches",
 	    "Display a tree reflecting the state of the selected commit",
 	    "",
 	    "Diff",
 	    "Scroll down one page of diff output",
+	    "Open and populate branch view with all repository branches",
 	    "Toggle inversion of diff output",
 	    "Toggle verbosity of diff output",
 	    "Toggle ignore whitespace-only changes in diff",
@@ -2808,7 +2814,8 @@ help(struct fnc_view *view)
 	    "Tree",
 	    "Move into the selected directory",
 	    "Return to the parent directory",
-	    "Toggle display of file artifact SHA hashes",
+	    "Open and populate branch view with all repository branches",
+	    "Toggle display of file artifact SHA hash ID",
 	    "Display timeline of all commits modifying the selected entry",
 	    "",
 	    "Blame",
@@ -2818,13 +2825,14 @@ help(struct fnc_view *view)
 	    "Blame the version of the file found in the selected line's parent "
 	    "commit",
 	    "Reload the previous blamed version of the file",
+	    "Open and populate branch view with all repository branches",
 	    "",
 	    "Branch",
 	    "Display the timeline of the currently selected branch",
 	    "Toggle display of the date when the branch last received changes",
 	    "Toggle display of the SHA hash that identifies the branch",
 	    "Open a tree view of the currently selected branch",
-	    "Reload view with all repostory branches and no filters applied",
+	    "Reload view with all repository branches and no filters applied",
 	    "",
 	    "  See fnc(1) for complete list of options and key bindings."
 	};
@@ -2995,7 +3003,8 @@ static int
 tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 {
 	struct fnc_tl_view_state	*s = &view->state.timeline;
-	struct fnc_view			*diff_view = NULL, *tree_view = NULL;
+	struct fnc_view			*branch_view = NULL, *diff_view = NULL;
+	struct fnc_view			*tree_view = NULL;
 	int				 rc = 0, start_col = 0;
 
 	switch (ch) {
@@ -3102,6 +3111,30 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			view->focus_child = true;
 		} else
 			*new_view = diff_view;
+		break;
+	case 'b':
+		if (view_is_parent(view))
+			start_col = view_split_start_col(view->start_col);
+		branch_view = view_open(view->nlines, view->ncols,
+		    view->start_ln, start_col, FNC_VIEW_BRANCH);
+		if (branch_view == NULL)
+			return RC(FSL_RC_ERROR, "%s", "view_open");
+		rc = open_branch_view(branch_view, BRANCH_LS_OPEN_CLOSED, NULL,
+		    0, 0);
+		if (rc) {
+			view_close(branch_view);
+			return rc;
+		}
+		view->active = false;
+		branch_view->active = true;
+		if (view_is_parent(view)) {
+			rc = view_close_child(view);
+			if (rc)
+				return rc;
+			view_set_child(view, branch_view);
+			view->focus_child = true;
+		} else
+			*new_view = branch_view;
 		break;
 	case 'c':
 		s->colour = !s->colour;
@@ -5031,6 +5064,7 @@ draw_vborder(struct fnc_view *view)
 static int
 diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 {
+	struct fnc_view			*branch_view;
 	struct fnc_diff_view_state	*s = &view->state.diff;
 	struct fnc_tl_view_state	*tlstate;
 	struct commit_entry		*previous_selection;
@@ -5094,6 +5128,32 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case KEY_HOME:
 		s->first_line_onscreen = 1;
 		break;
+	case 'b': {
+		int start_col = 0;
+		if (view_is_parent(view))
+			start_col = view_split_start_col(view->start_col);
+		branch_view = view_open(view->nlines, view->ncols,
+		    view->start_ln, start_col, FNC_VIEW_BRANCH);
+		if (branch_view == NULL)
+			return RC(FSL_RC_ERROR, "%s", "view_open");
+		rc = open_branch_view(branch_view, BRANCH_LS_OPEN_CLOSED, NULL,
+		    0, 0);
+		if (rc) {
+			view_close(branch_view);
+			return rc;
+		}
+		view->active = false;
+		branch_view->active = true;
+		if (view_is_parent(view)) {
+			rc = view_close_child(view);
+			if (rc)
+				return rc;
+			view_set_child(view, branch_view);
+			view->focus_child = true;
+		} else
+			*new_view = branch_view;
+		break;
+	}
 	case 'c':
 	case 'i':
 	case 'v':
@@ -6500,12 +6560,36 @@ end:
 static int
 tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 {
-	struct fnc_view			*timeline_view/*, *branch_view */;
+	struct fnc_view			*branch_view, *timeline_view;
 	struct fnc_tree_view_state	*s = &view->state.tree;
 	struct fnc_tree_entry		*te;
 	int				 n, start_col = 0, rc = 0;
 
 	switch (ch) {
+	case 'b':
+		if (view_is_parent(view))
+			start_col = view_split_start_col(view->start_col);
+		branch_view = view_open(view->nlines, view->ncols,
+		    view->start_ln, start_col, FNC_VIEW_BRANCH);
+		if (branch_view == NULL)
+			return RC(FSL_RC_ERROR, "%s", "view_open");
+		rc = open_branch_view(branch_view, BRANCH_LS_OPEN_CLOSED, NULL,
+		    0, 0);
+		if (rc) {
+			view_close(branch_view);
+			return rc;
+		}
+		view->active = false;
+		branch_view->active = true;
+		if (view_is_parent(view)) {
+			rc = view_close_child(view);
+			if (rc)
+				return rc;
+			view_set_child(view, branch_view);
+			view->focus_child = true;
+		} else
+			*new_view = branch_view;
+		break;
 	case 'c':
 		s->colour = !s->colour;
 		break;
@@ -7855,7 +7939,7 @@ draw_blame(struct fnc_view *view)
 static int
 blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 {
-	struct fnc_view			*diff_view;
+	struct fnc_view			*branch_view, *diff_view;
 	struct fnc_blame_view_state	*s = &view->state.blame;
 	int				 start_col = 0, rc = 0;
 
@@ -8004,6 +8088,30 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			break;
 		break;
 	}
+	case 'T':
+		if (view_is_parent(view))
+			start_col = view_split_start_col(view->start_col);
+		branch_view = view_open(view->nlines, view->ncols,
+		    view->start_ln, start_col, FNC_VIEW_BRANCH);
+		if (branch_view == NULL)
+			return RC(FSL_RC_ERROR, "%s", "view_open");
+		rc = open_branch_view(branch_view, BRANCH_LS_OPEN_CLOSED, NULL,
+		    0, 0);
+		if (rc) {
+			view_close(branch_view);
+			return rc;
+		}
+		view->active = false;
+		branch_view->active = true;
+		if (view_is_parent(view)) {
+			rc = view_close_child(view);
+			if (rc)
+				return rc;
+			view_set_child(view, branch_view);
+			view->focus_child = true;
+		} else
+			*new_view = branch_view;
+		break;
 	case KEY_ENTER:
 	case '\r': {
 		fsl_cx				*f = fcli_cx();
