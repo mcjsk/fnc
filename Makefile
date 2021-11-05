@@ -48,8 +48,8 @@ FOSSIL_CFLAGS =	${CFLAGS} -Wall -Werror -Wsign-compare -pedantic -std=c99
 # I/.../ncursesw, but linking to -lncursesw (w/ no special -L path) works fine.
 # FLAGS NEEDED TO BUILD FNC
 FNC_CFLAGS =	${CFLAGS} -Wall -Werror -Wsign-compare -pedantic -std=c99 \
-		-I./lib -I/usr/include/ncursesw -D_XOPEN_SOURCE_EXTENDED \
-		-DVERSION=${VERSION}
+		-I./lib -I./include -I/usr/include/ncursesw \
+		-D_XOPEN_SOURCE_EXTENDED -DVERSION=${VERSION}
 
 FNC_LDFLAGS =	${LDFLAGS} -lm -lutil -lz -lpthread -fPIC
 
@@ -72,7 +72,7 @@ lib/sqlite3.o: lib/sqlite3.c lib/sqlite3.h $(MAKEFILE)
 lib/libfossil.o: lib/libfossil.c lib/libfossil.h $(MAKEFILE)
 	${CC} ${FOSSIL_CFLAGS} -c $< -o $@
 
-src/fnc.o: src/fnc.c $(MAKEFILE)
+src/fnc.o: src/fnc.c include/settings.h $(MAKEFILE)
 	${CC} ${FNC_CFLAGS} -c $< -o $@
 
 src/fnc: src/fnc.o lib/libfossil.o lib/sqlite3.o $(MAKEFILE)

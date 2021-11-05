@@ -66,6 +66,7 @@
 #include <langinfo.h>
 
 #include "libfossil.h"
+#include "settings.h"
 
 #define FNC_VERSION	VERSION  /* cf. Makefile */
 
@@ -146,12 +147,14 @@ static void		usage_diff(void);
 static void		usage_tree(void);
 static void		usage_blame(void);
 static void		usage_branch(void);
+static void		usage_config(void);
 static int		fcli_flag_type_arg_cb(fcli_cliflag const *);
 static int		cmd_timeline(fcli_command const *);
 static int		cmd_diff(fcli_command const *);
 static int		cmd_tree(fcli_command const *);
 static int		cmd_blame(fcli_command const *);
 static int		cmd_branch(fcli_command const *);
+static int		cmd_config(fcli_command const *);
 
 /*
  * Singleton initialising global configuration and state for app startup.
@@ -196,15 +199,21 @@ static struct fnc_setup {
 	bool		 open;		/* Show only open branches */
 	bool		 noprivate;	/* Don't show private branches. */
 
+	/* Config options. */
+	bool		 global;	/* Set fossil(1) global db. */
+	bool		 lsconf;	/* List all defined settings. */
+	bool		 unset;		/* Unset the specified setting. */
+
 	/* Command line flags and help. */
 	fcli_help_info	  fnc_help;			/* Global help. */
 	fcli_cliflag	  cliflags_global[3];		/* Global options. */
-	fcli_command	  cmd_args[6];			/* App commands. */
+	fcli_command	  cmd_args[7];			/* App commands. */
 	fcli_cliflag	  cliflags_timeline[11];	/* Timeline options. */
 	fcli_cliflag	  cliflags_diff[7];		/* Diff options. */
 	fcli_cliflag	  cliflags_tree[4];		/* Tree options. */
 	fcli_cliflag	  cliflags_blame[6];		/* Blame options. */
 	fcli_cliflag	  cliflags_branch[10];		/* Branch options. */
+	fcli_cliflag	  cliflags_config[6];		/* Config options. */
 } fnc_init = {
 	NULL,		/* cmdarg copy of argv[1] to aid usage/error report. */
 	NULL,		/* sym(bolic name) of commit to open defaults to tip. */
@@ -231,10 +240,13 @@ static struct fnc_setup {
 	false,		/* closed only branches is off (defaults to all). */
 	false,		/* open only branches is off by (defaults to all). */
 	false,		/* noprivate is off (default to show private branch). */
+	false,		/* the repository db is default for settings. */
+	false,		/* do not list all defined settings by default. */
+	false,		/* default to set—not unset—the specified setting. */
 
 	{ /* fnc_help global app help details. */
-	    "A read-only ncurses browser for Fossil repositories in the "
-	    "terminal.", NULL, usage
+	    "An ncurses browser for Fossil repositories in the terminal.",
+	    NULL, usage
 	},
 
 	{ /* cliflags_global global app options. */
@@ -261,6 +273,9 @@ static struct fnc_setup {
 	    {"branch", "br\0tag\0",
 	    "Show navigable list of repository branches.",
 	    cmd_branch, usage_branch, fnc_init.cliflags_branch},
+	    {"config", "conf\0cfg\0settings\0set\0",
+	    "Configure or view currently available settings.",
+	    cmd_config, usage_config, fnc_init.cliflags_config},
 	    {NULL, NULL, NULL, NULL, NULL}	/* Sentinel. */
 	},
 
@@ -417,6 +432,21 @@ static struct fnc_setup {
             "Branches are sorted in lexicographical order by default."),
 	    fcli_cliflag_empty_m
 	}, /* End cliflags_blame. */
+
+	{ /* cliflags_config config command related options. */
+	    FCLI_FLAG_BOOL("g", "global", &fnc_init.global,
+            "Retrieve, set, or unset the specified setting from global rather "
+            "than\n    local configuration."),
+	    FCLI_FLAG_BOOL("h", "help", NULL,
+            "Display config command help and usage."),
+	    FCLI_FLAG_BOOL(NULL, "ls", &fnc_init.lsconf,
+            "Display a list of all currently defined settings."),
+	    FCLI_FLAG_BOOL("u", "unset", &fnc_init.unset,
+            "Unset (i.e., remove) the specified setting and revert to the "
+            "default fnc value."),
+	    fcli_cliflag_empty_m
+	}, /* End cliflags_tree. */
+
 };
 
 enum fsl_list_object {
@@ -451,6 +481,9 @@ enum fnc_search_state {
 	SEARCH_FOR_END
 };
 
+/*
+ * User-definable setting that must map to SETTINGS in "settings.h".
+ */
 enum fnc_colour_obj {
 	FNC_COLOUR_DIFF_META = 1,
 	FNC_COLOUR_DIFF_MINUS,
@@ -1013,11 +1046,15 @@ static int		 fnc_date_to_mtime(double *, const char *, int);
 static char		*fnc_strsep (char **, const char *);
 static int		 set_colours(fsl_list *, enum fnc_view_id vid);
 static int		 init_colour(enum fnc_colour_obj);
-static const char	*fnc_get_repo_colour(enum fnc_colour_obj);
+static char		*fnc_get_repo_colour(enum fnc_colour_obj);
 static int		 default_colour(enum fnc_colour_obj);
-static int		 fnc_set_repo_colour(enum fnc_colour_obj, const char *);
+static int		 fnc_set_repo_colour(enum fnc_colour_obj, const char *,
+			    bool);
 static int		 match_colour(const void *, const void *);
 static bool		 fnc_home(struct fnc_view *);
+static int		 fnc_conf_ls_all(bool);
+static int		 fnc_conf_str2enum(const char *);
+static const char	*fnc_conf_enum2str(int);
 static struct fnc_colour	*get_colour(fsl_list *, int);
 static struct fnc_tree_entry	*get_tree_entry(struct fnc_tree_object *,
 				    int);
@@ -5546,6 +5583,16 @@ usage_branch(void)
 	    fcli_progname(), fcli_progname());
 }
 
+static void
+usage_config(void)
+{
+	fsl_fprintf(fnc_init.err ? stderr : stdout,
+	    " usage: %s config [-g|--global] [-h|--help] [--ls] [-u|--unset] "
+	    "[setting [value]]\n"
+	    "  e.g.: %s config FNC_DIFF_COMMIT blue\n\n" ,
+	    fcli_progname(), fcli_progname());
+}
+
 static int
 cmd_diff(fcli_command const *argv)
 {
@@ -7059,6 +7106,102 @@ fnc_close_repository_tree(struct fnc_repository_tree *repo)
 }
 
 static int
+cmd_config(const fcli_command *argv)
+{
+	const char	*set = NULL, *value = NULL;
+	int		 setid, rc = 0;
+
+	rc = fcli_process_flags(argv->flags);
+	if (rc || (rc = fcli_has_unused_flags(false)))
+		return rc;
+
+	set = fcli_next_arg(true);
+	if (set == NULL || fnc_init.lsconf) {
+		return fnc_conf_ls_all(fnc_init.lsconf ? false : true);
+	}
+	setid = fnc_conf_str2enum(set);
+	if (setid < 0)  /* Presently, the only valid settings are colours. */
+		return RC(FSL_RC_NOT_FOUND, "invalid setting: %s", set);
+
+	value = fcli_next_arg(true);
+	if (value || fnc_init.unset) {
+		if (value && fnc_init.unset)
+			return RC(FSL_RC_MISUSE,
+			    "\n--unset %s or set %s to %s?", set, set, value);
+		char *prev = fnc_get_repo_colour(setid);
+		rc = fnc_set_repo_colour(setid, value, fnc_init.unset);
+		if (!rc)
+			f_out("%s: %s -> %s", set, prev,
+			    value ? value : "unset");
+		fsl_free(prev);
+	} else {
+		char *v = fnc_get_repo_colour(setid);
+		f_out("%s=%s", fnc_conf_enum2str(setid), v);
+		fsl_free(v);
+	}
+
+	return rc;
+}
+
+static int
+fnc_conf_ls_all(bool all)
+{
+	static const char *fnc_settings[] = {
+		SETTINGS(GEN_STR)
+	};
+	enum settings {
+		SETTINGS(GEN_ENUM)
+	};
+	char	*value = NULL;
+	int	 idx;
+
+	for (idx = 1;  idx < FNC_EOF_SETTINGS;  ++idx) {
+		value = fnc_get_repo_colour(idx);
+		if (value || all)
+			f_out("%s%c%s\n", fnc_settings[idx],
+			    value ? '=' : ' ', value ? value : "");
+		fsl_free(value);
+		value = NULL;
+	}
+
+	return 0;
+}
+
+static int
+fnc_conf_str2enum(const char *str)
+{
+	static const char *fnc_settings[] = {
+		SETTINGS(GEN_STR)
+	};
+	enum settings {
+		SETTINGS(GEN_ENUM)
+	};
+	int	idx;
+
+	for (idx = 0;  idx < FNC_EOF_SETTINGS;  ++idx)
+		if (!fsl_strcmp(str, fnc_settings[idx]))
+			return idx;
+
+	return -1;
+}
+
+static const char *
+fnc_conf_enum2str(int id)
+{
+	static const char *fnc_settings[] = {
+		SETTINGS(GEN_STR)
+	};
+	enum settings {
+		SETTINGS(GEN_ENUM)
+	};
+
+	if (id >= FNC_EOF_SETTINGS)
+		return NULL;
+
+	return fnc_settings[id];
+}
+
+static int
 view_close_child(struct fnc_view *view)
 {
 	int	rc = 0;
@@ -7175,73 +7318,77 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 static int
 init_colour(enum fnc_colour_obj envvar)
 {
-	const char *val = NULL;
+	char	*val = NULL;
+	int	 rc = 0;
 
-	switch (envvar) {
-	case FNC_COLOUR_DIFF_META:
-		val = getenv(STRINGIFY(FNC_COLOUR_DIFF_META));
-		break;
-	case FNC_COLOUR_DIFF_MINUS:
-		val = getenv(STRINGIFY(FNC_COLOUR_DIFF_MINUS));
-		break;
-	case FNC_COLOUR_DIFF_PLUS:
-		val = getenv(STRINGIFY(FNC_COLOUR_DIFF_PLUS));
-		break;
-	case FNC_COLOUR_DIFF_CHUNK:
-		val = getenv(STRINGIFY(FNC_COLOUR_DIFF_CHUNK));
-		break;
-	case FNC_COLOUR_TREE_LINK:
-		val = getenv(STRINGIFY(FNC_COLOUR_TREE_LINK));
-		break;
-	case FNC_COLOUR_TREE_DIR:
-		val = getenv(STRINGIFY(FNC_COLOUR_TREE_DIR));
-		break;
-	case FNC_COLOUR_TREE_EXEC:
-		val = getenv(STRINGIFY(FNC_COLOUR_TREE_EXEC));
-		break;
-	case FNC_COLOUR_COMMIT:
-		val = getenv(STRINGIFY(FNC_COLOUR_COMMIT));
-		break;
-	case FNC_COLOUR_USER:
-		val = getenv(STRINGIFY(FNC_COLOUR_USER));
-		break;
-	case FNC_COLOUR_DATE:
-		val = getenv(STRINGIFY(FNC_COLOUR_DATE));
-		break;
-	case FNC_COLOUR_TAGS:
-		val = getenv(STRINGIFY(FNC_COLOUR_TAGS));
+	val = fnc_get_repo_colour(envvar);
+	if (val == NULL) {
+		const char *ev = NULL;
+		switch (envvar) {
+		case FNC_COLOUR_DIFF_META:
+			ev = getenv(STRINGIFY(FNC_COLOUR_DIFF_META));
+			break;
+		case FNC_COLOUR_DIFF_MINUS:
+			ev = getenv(STRINGIFY(FNC_COLOUR_DIFF_MINUS));
+			break;
+		case FNC_COLOUR_DIFF_PLUS:
+			ev = getenv(STRINGIFY(FNC_COLOUR_DIFF_PLUS));
+			break;
+		case FNC_COLOUR_DIFF_CHUNK:
+			ev = getenv(STRINGIFY(FNC_COLOUR_DIFF_CHUNK));
+			break;
+		case FNC_COLOUR_TREE_LINK:
+			ev = getenv(STRINGIFY(FNC_COLOUR_TREE_LINK));
+			break;
+		case FNC_COLOUR_TREE_DIR:
+			ev = getenv(STRINGIFY(FNC_COLOUR_TREE_DIR));
+			break;
+		case FNC_COLOUR_TREE_EXEC:
+			ev = getenv(STRINGIFY(FNC_COLOUR_TREE_EXEC));
+			break;
+		case FNC_COLOUR_COMMIT:
+			ev = getenv(STRINGIFY(FNC_COLOUR_COMMIT));
+			break;
+		case FNC_COLOUR_USER:
+			ev = getenv(STRINGIFY(FNC_COLOUR_USER));
+			break;
+		case FNC_COLOUR_DATE:
+			ev = getenv(STRINGIFY(FNC_COLOUR_DATE));
+			break;
+		case FNC_COLOUR_TAGS:
+			ev = getenv(STRINGIFY(FNC_COLOUR_TAGS));
+		}
+		if (ev)
+			val = fsl_strdup(ev);
 	}
 
-	if (val == NULL) {
-		val = fnc_get_repo_colour(envvar);
-		if (val == NULL)
-			return default_colour(envvar);
-	} else
-		fnc_set_repo_colour(envvar, val);
+	if (val == NULL)
+		return default_colour(envvar);
 
 	if (!fsl_stricmp(val, "black"))
-		return COLOR_BLACK;
+		rc = COLOR_BLACK;
 	if (!fsl_stricmp(val, "red"))
-		return COLOR_RED;
+		rc = COLOR_RED;
 	if (!fsl_stricmp(val, "green"))
-		return COLOR_GREEN;
+		rc = COLOR_GREEN;
 	if (!fsl_stricmp(val, "yellow"))
-		return COLOR_YELLOW;
+		rc = COLOR_YELLOW;
 	if (!fsl_stricmp(val, "blue"))
-		return COLOR_BLUE;
+		rc = COLOR_BLUE;
 	if (!fsl_stricmp(val, "magenta"))
-		return COLOR_MAGENTA;
+		rc = COLOR_MAGENTA;
 	if (!fsl_stricmp(val, "cyan"))
-		return COLOR_CYAN;
+		rc = COLOR_CYAN;
 	if (!fsl_stricmp(val, "white"))
-		return COLOR_WHITE;
+		rc = COLOR_WHITE;
 	if (!fsl_stricmp(val, "default"))
-		return -1;  /* Terminal default foreground colour. */
+		rc = -1;  /* Terminal default foreground colour. */
 
-	return default_colour(envvar);
+	fsl_free(val);
+	return rc ? rc : default_colour(envvar);
 }
 
-static const char *
+static char *
 fnc_get_repo_colour(enum fnc_colour_obj id)
 {
 	fsl_cx	*f = NULL;
@@ -7293,7 +7440,7 @@ default_colour(enum fnc_colour_obj obj)
 }
 
 static int
-fnc_set_repo_colour(enum fnc_colour_obj id, const char *val)
+fnc_set_repo_colour(enum fnc_colour_obj id, const char *val, bool unset)
 {
 	fsl_cx	*f = NULL;
 	fsl_db	*db = NULL;
@@ -7317,9 +7464,12 @@ fnc_set_repo_colour(enum fnc_colour_obj id, const char *val)
 			return RC(rc, "%s", "unable to create table: fx_fnc");
 	}
 
-	rc = fsl_db_exec_multi(db,
-	    "INSERT OR REPLACE INTO fx_fnc(id, value) VALUES(%d, %Q)",
-	    id, val);
+	if (unset)
+		rc = fsl_db_exec(db, "DELETE FROM fx_fnc WHERE id=%d", id);
+	else
+		rc = fsl_db_exec(db,
+		    "INSERT OR REPLACE INTO fx_fnc(id, value) VALUES(%d, %Q)",
+		    id, val);
 
 	return rc;
 }
