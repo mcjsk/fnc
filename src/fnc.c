@@ -200,7 +200,6 @@ static struct fnc_setup {
 	bool		 noprivate;	/* Don't show private branches. */
 
 	/* Config options. */
-	bool		 global;	/* Set fossil(1) global db. */
 	bool		 lsconf;	/* List all defined settings. */
 	bool		 unset;		/* Unset the specified setting. */
 
@@ -213,7 +212,7 @@ static struct fnc_setup {
 	fcli_cliflag	  cliflags_tree[4];		/* Tree options. */
 	fcli_cliflag	  cliflags_blame[6];		/* Blame options. */
 	fcli_cliflag	  cliflags_branch[10];		/* Branch options. */
-	fcli_cliflag	  cliflags_config[6];		/* Config options. */
+	fcli_cliflag	  cliflags_config[4];		/* Config options. */
 } fnc_init = {
 	NULL,		/* cmdarg copy of argv[1] to aid usage/error report. */
 	NULL,		/* sym(bolic name) of commit to open defaults to tip. */
@@ -240,7 +239,6 @@ static struct fnc_setup {
 	false,		/* closed only branches is off (defaults to all). */
 	false,		/* open only branches is off by (defaults to all). */
 	false,		/* noprivate is off (default to show private branch). */
-	false,		/* the repository db is default for settings. */
 	false,		/* do not list all defined settings by default. */
 	false,		/* default to set—not unset—the specified setting. */
 
@@ -434,16 +432,12 @@ static struct fnc_setup {
 	}, /* End cliflags_blame. */
 
 	{ /* cliflags_config config command related options. */
-	    FCLI_FLAG_BOOL("g", "global", &fnc_init.global,
-            "Retrieve, set, or unset the specified setting from global rather "
-            "than\n    local configuration."),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
             "Display config command help and usage."),
 	    FCLI_FLAG_BOOL(NULL, "ls", &fnc_init.lsconf,
             "Display a list of all currently defined settings."),
 	    FCLI_FLAG_BOOL("u", "unset", &fnc_init.unset,
-            "Unset (i.e., remove) the specified setting and revert to the "
-            "default fnc value."),
+            "Unset (i.e., remove) the specified repository setting."),
 	    fcli_cliflag_empty_m
 	}, /* End cliflags_tree. */
 
@@ -1052,7 +1046,7 @@ static int		 fnc_set_repo_colour(enum fnc_colour_obj, const char *,
 			    bool);
 static int		 match_colour(const void *, const void *);
 static bool		 fnc_home(struct fnc_view *);
-static int		 fnc_conf_ls_all(bool);
+static int		 fnc_conf_ls_settings(bool);
 static int		 fnc_conf_str2enum(const char *);
 static const char	*fnc_conf_enum2str(int);
 static struct fnc_colour	*get_colour(fsl_list *, int);
@@ -5587,7 +5581,7 @@ static void
 usage_config(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " usage: %s config [-g|--global] [-h|--help] [--ls] [-u|--unset] "
+	    " usage: %s config [-h|--help] [--ls] [-u|--unset] "
 	    "[setting [value]]\n"
 	    "  e.g.: %s config FNC_DIFF_COMMIT blue\n\n" ,
 	    fcli_progname(), fcli_progname());
@@ -7117,10 +7111,10 @@ cmd_config(const fcli_command *argv)
 
 	set = fcli_next_arg(true);
 	if (set == NULL || fnc_init.lsconf) {
-		return fnc_conf_ls_all(fnc_init.lsconf ? false : true);
+		return fnc_conf_ls_settings(fnc_init.lsconf ? false : true);
 	}
 	setid = fnc_conf_str2enum(set);
-	if (setid < 0)  /* Presently, the only valid settings are colours. */
+	if (!setid)  /* Presently, the only valid settings are colours. */
 		return RC(FSL_RC_NOT_FOUND, "invalid setting: %s", set);
 
 	value = fcli_next_arg(true);
@@ -7131,12 +7125,12 @@ cmd_config(const fcli_command *argv)
 		char *prev = fnc_get_repo_colour(setid);
 		rc = fnc_set_repo_colour(setid, value, fnc_init.unset);
 		if (!rc)
-			f_out("%s: %s -> %s", set, prev,
-			    value ? value : "unset");
+			f_out("%s: %s -> %s", fnc_conf_enum2str(setid),
+			    prev ? prev : "default", value ? value : "default");
 		fsl_free(prev);
 	} else {
 		char *v = fnc_get_repo_colour(setid);
-		f_out("%s=%s", fnc_conf_enum2str(setid), v);
+		f_out("%s = %s", fnc_conf_enum2str(setid), v ? v : "default");
 		fsl_free(v);
 	}
 
@@ -7144,7 +7138,7 @@ cmd_config(const fcli_command *argv)
 }
 
 static int
-fnc_conf_ls_all(bool all)
+fnc_conf_ls_settings(bool all)
 {
 	static const char *fnc_settings[] = {
 		SETTINGS(GEN_STR)
@@ -7154,12 +7148,17 @@ fnc_conf_ls_all(bool all)
 	};
 	char	*value = NULL;
 	int	 idx;
+	size_t	 maxlen = 0;
 
-	for (idx = 1;  idx < FNC_EOF_SETTINGS;  ++idx) {
+	for (idx = FNC_START_SETTINGS + 1; idx < FNC_EOF_SETTINGS; ++idx)
+		maxlen = MAX(fsl_strlen(fnc_settings[idx]), maxlen);
+
+	for (idx = FNC_START_SETTINGS + 1;  idx < FNC_EOF_SETTINGS;  ++idx) {
 		value = fnc_get_repo_colour(idx);
 		if (value || all)
-			f_out("%s%c%s\n", fnc_settings[idx],
-			    value ? '=' : ' ', value ? value : "");
+			f_out("%-*s%s%s%c", maxlen + 2, fnc_settings[idx],
+			    value ? " = " : "", value ? value : "",
+			    idx + 1 < FNC_EOF_SETTINGS ? '\n' : '\0');
 		fsl_free(value);
 		value = NULL;
 	}
@@ -7178,11 +7177,11 @@ fnc_conf_str2enum(const char *str)
 	};
 	int	idx;
 
-	for (idx = 0;  idx < FNC_EOF_SETTINGS;  ++idx)
-		if (!fsl_strcmp(str, fnc_settings[idx]))
+	for (idx = FNC_START_SETTINGS + 1;  idx < FNC_EOF_SETTINGS;  ++idx)
+		if (!fsl_stricmp(str, fnc_settings[idx]))
 			return idx;
 
-	return -1;
+	return FNC_START_SETTINGS;
 }
 
 static const char *
@@ -7195,7 +7194,7 @@ fnc_conf_enum2str(int id)
 		SETTINGS(GEN_ENUM)
 	};
 
-	if (id >= FNC_EOF_SETTINGS)
+	if (id <= FNC_START_SETTINGS || id >= FNC_EOF_SETTINGS)
 		return NULL;
 
 	return fnc_settings[id];
@@ -7388,6 +7387,11 @@ init_colour(enum fnc_colour_obj envvar)
 	return rc ? rc : default_colour(envvar);
 }
 
+/*
+ * Lookup setting id from the repository db. If found, return a dynamically
+ * allocated string obtained from fsl_db_g_text(), which must be disposed of
+ * by the caller. If not found, return NULL.
+ */
 static char *
 fnc_get_repo_colour(enum fnc_colour_obj id)
 {
@@ -7465,13 +7469,10 @@ fnc_set_repo_colour(enum fnc_colour_obj id, const char *val, bool unset)
 	}
 
 	if (unset)
-		rc = fsl_db_exec(db, "DELETE FROM fx_fnc WHERE id=%d", id);
-	else
-		rc = fsl_db_exec(db,
-		    "INSERT OR REPLACE INTO fx_fnc(id, value) VALUES(%d, %Q)",
-		    id, val);
+		return fsl_db_exec(db, "DELETE FROM fx_fnc WHERE id=%d", id);
 
-	return rc;
+	return fsl_db_exec(db,
+	    "INSERT OR REPLACE INTO fx_fnc(id, value) VALUES(%d, %Q)", id, val);
 }
 
 struct fnc_colour *
