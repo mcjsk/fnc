@@ -7110,9 +7110,9 @@ cmd_config(const fcli_command *argv)
 		return rc;
 
 	set = fcli_next_arg(true);
-	if (set == NULL || fnc_init.lsconf) {
+	if (set == NULL || fnc_init.lsconf)
 		return fnc_conf_ls_settings(fnc_init.lsconf ? false : true);
-	}
+
 	setid = fnc_conf_str2enum(set);
 	if (!setid)  /* Presently, the only valid settings are colours. */
 		return RC(FSL_RC_NOT_FOUND, "invalid setting: %s", set);
@@ -7407,11 +7407,8 @@ fnc_get_repo_colour(enum fnc_colour_obj id)
 		return NULL;
 	}
 
-	if (!fsl_db_table_exists(db, FSL_DBROLE_REPO, "fx_fnc"))
-		return NULL;
-
 	return fsl_db_g_text(db, NULL,
-	    "SELECT value FROM fx_fnc WHERE id=%d", id);
+	    "SELECT value FROM config WHERE name=%Q", fnc_conf_enum2str(id));
 }
 
 static int
@@ -7448,31 +7445,20 @@ fnc_set_repo_colour(enum fnc_colour_obj id, const char *val, bool unset)
 {
 	fsl_cx	*f = NULL;
 	fsl_db	*db = NULL;
-	int	 rc = 0;
 
 	f = fcli_cx();
-	db = fsl_needs_repo(f);
 
+	db = fsl_needs_repo(f);
 	if (!db)  /* Theoretically, this shouldn't happen. */
 		return RC(FSL_RC_DB, "%s", "fsl_needs_repo");
 
-	/*
-	 * fossil(1) provides the 'fx_' namespace for clients. Any tables with
-	 * this prefix will be spared by Fossil. Store fnc-related config; for
-	 * now, colour schemes. https://fossil-scm.org/home/info/dbec64585aac08
-	 */
-	if (!fsl_db_table_exists(db, FSL_DBROLE_REPO, "fx_fnc")) {
-		rc = fsl_db_exec(db,
-		    "CREATE TABLE repo.fx_fnc(id INTEGER UNIQUE, value TEXT);");
-		if (rc)
-			return RC(rc, "%s", "unable to create table: fx_fnc");
-	}
-
 	if (unset)
-		return fsl_db_exec(db, "DELETE FROM fx_fnc WHERE id=%d", id);
+		return fsl_db_exec(db, "DELETE FROM config WHERE name=%Q",
+		    fnc_conf_enum2str(id));
 
 	return fsl_db_exec(db,
-	    "INSERT OR REPLACE INTO fx_fnc(id, value) VALUES(%d, %Q)", id, val);
+	    "INSERT OR REPLACE INTO config(name, value, mtime) "
+	    "VALUES(%Q, %Q, now())", fnc_conf_enum2str(id), val);
 }
 
 struct fnc_colour *
