@@ -158,11 +158,24 @@ will display a list of all configurable settings.  Alternatively, see
 .Sx ENVIRONMENT
 for a detailed list of available settings
 used in the display or processing of data.  When no value is found for a given
-setting in the local repository, environment variables will be searched.
-If still not found, default values will be used.  Options for
+setting in the local repository,
+.Nm
+will search the
+.Xr fossil 1
+global configuration database in
+.Pa $HOME/.fossil
+before checking environment variables.  If still not found, default values will
+be used.  Options for
 .Cm fnc config
 are as follows:
 .Bl -tag -width Ds
+.It Fl g , -global
+Configure the specified
+.Ar setting
+in the global
+.Xr fossil 1
+.Pa $HOME/.fossil
+configuration database rather than the local repository.
 .It Fl h , -help
 Display config command help and usage information then exit.
 .It Fl -ls
