@@ -1045,10 +1045,10 @@ static int		 fnc_date_to_mtime(double *, const char *, int);
 static char		*fnc_strsep (char **, const char *);
 static int		 set_colours(fsl_list *, enum fnc_view_id vid);
 static int		 init_colour(enum fnc_colour_obj);
-static char		*fnc_get_repo_colour(enum fnc_colour_obj, bool);
+static char		*fnc_conf_get(enum fnc_colour_obj, bool);
 static int		 default_colour(enum fnc_colour_obj);
-static int		 fnc_set_repo_colour(enum fnc_colour_obj, const char *,
-			    bool, bool);
+static int		 fnc_conf_set(enum fnc_colour_obj, const char *, bool,
+			    bool);
 static int		 match_colour(const void *, const void *);
 static bool		 fnc_home(struct fnc_view *);
 static int		 fnc_conf_ls_settings(bool);
@@ -1063,7 +1063,6 @@ static struct fnc_tree_entry	*find_tree_entry(struct fnc_tree_object *,
 int
 main(int argc, const char **argv)
 {
-	fsl_cx		*f = NULL;
 	fcli_command	*cmd = NULL;
 	char		*path = NULL;
 	int		 rc = 0;
@@ -1091,10 +1090,7 @@ main(int argc, const char **argv)
 		usage();
 		/* NOT REACHED */
 
-	f = fcli_cx();
 	rc = fcli_fingerprint_check(true);
-	if (!rc)
-		rc = fsl_config_open(f, NULL);
 	if (rc)
 		goto end;
 
@@ -1138,13 +1134,13 @@ main(int argc, const char **argv)
 	if (cmd != NULL)
 		rc = cmd->f(cmd);
 end:
-	rc = fsl_config_close(f);
 	fsl_free(path);
 	endwin();
 	if (rc) {
 		if (rc == FCLI_RC_HELP)
 			rc = 0;
 		else if (rc == FSL_RC_BREAK) {
+			fsl_cx *f = fcli_cx();
 			const char *errstr;
 			fsl_error_get(&f->error, &errstr, NULL);
 			fsl_fprintf(stdout, "%s", errstr);
@@ -7131,8 +7127,8 @@ cmd_config(const fcli_command *argv)
 		if (value && fnc_init.unset)
 			return RC(FSL_RC_MISUSE,
 			    "\n--unset %s or set %s to %s?", set, set, value);
-		char *prev = fnc_get_repo_colour(setid, true);
-		rc = fnc_set_repo_colour(setid, value, fnc_init.unset,
+		char *prev = fnc_conf_get(setid, true);
+		rc = fnc_conf_set(setid, value, fnc_init.unset,
 		    fnc_init.global);
 		if (!rc)
 			f_out("%s: %s -> %s %s", fnc_conf_enum2str(setid),
@@ -7140,7 +7136,7 @@ cmd_config(const fcli_command *argv)
 			    fnc_init.global ? "(global)" : "(local)");
 		fsl_free(prev);
 	} else {
-		char *v = fnc_get_repo_colour(setid, true);
+		char *v = fnc_conf_get(setid, true);
 		f_out("%s = %s", fnc_conf_enum2str(setid), v ? v : "default");
 		fsl_free(v);
 	}
@@ -7165,7 +7161,7 @@ fnc_conf_ls_settings(bool all)
 		maxlen = MAX(fsl_strlen(fnc_settings[idx]), maxlen);
 
 	for (idx = FNC_START_SETTINGS + 1;  idx < FNC_EOF_SETTINGS;  ++idx) {
-		value = fnc_get_repo_colour(idx, true);
+		value = fnc_conf_get(idx, true);
 		if (value || all)
 			f_out("%-*s%s%s%c", maxlen + 2, fnc_settings[idx],
 			    value ? " = " : "", value ? value : "",
@@ -7331,7 +7327,7 @@ init_colour(enum fnc_colour_obj envvar)
 	char	*val = NULL;
 	int	 rc = 0;
 
-	val = fnc_get_repo_colour(envvar, false);
+	val = fnc_conf_get(envvar, false);
 	if (val == NULL) {
 		const char *ev = NULL;
 		switch (envvar) {
@@ -7377,21 +7373,21 @@ init_colour(enum fnc_colour_obj envvar)
 
 	if (!fsl_stricmp(val, "black"))
 		rc = COLOR_BLACK;
-	if (!fsl_stricmp(val, "red"))
+	else if (!fsl_stricmp(val, "red"))
 		rc = COLOR_RED;
-	if (!fsl_stricmp(val, "green"))
+	else if (!fsl_stricmp(val, "green"))
 		rc = COLOR_GREEN;
-	if (!fsl_stricmp(val, "yellow"))
+	else if (!fsl_stricmp(val, "yellow"))
 		rc = COLOR_YELLOW;
-	if (!fsl_stricmp(val, "blue"))
+	else if (!fsl_stricmp(val, "blue"))
 		rc = COLOR_BLUE;
-	if (!fsl_stricmp(val, "magenta"))
+	else if (!fsl_stricmp(val, "magenta"))
 		rc = COLOR_MAGENTA;
-	if (!fsl_stricmp(val, "cyan"))
+	else if (!fsl_stricmp(val, "cyan"))
 		rc = COLOR_CYAN;
-	if (!fsl_stricmp(val, "white"))
+	else if (!fsl_stricmp(val, "white"))
 		rc = COLOR_WHITE;
-	if (!fsl_stricmp(val, "default"))
+	else if (!fsl_stricmp(val, "default"))
 		rc = -1;  /* Terminal default foreground colour. */
 
 	fsl_free(val);
@@ -7408,7 +7404,7 @@ init_colour(enum fnc_colour_obj envvar)
  * if not found, return NULL.
  */
 static char *
-fnc_get_repo_colour(enum fnc_colour_obj id, bool ls)
+fnc_conf_get(enum fnc_colour_obj id, bool ls)
 {
 	fsl_cx	*f = NULL;
 	fsl_db	*db = NULL;
@@ -7426,9 +7422,13 @@ fnc_get_repo_colour(enum fnc_colour_obj id, bool ls)
 	colour = fsl_db_g_text(db, NULL,
 	    "SELECT value FROM config WHERE name=%Q", fnc_conf_enum2str(id));
 
-	if (colour == NULL || ls)
+	if (colour == NULL || ls) {
+		if (!fsl_cx_db_config(f))
+			if (fsl_config_open(f, NULL))  /* DO NOT CLOSE */
+				RC(FSL_RC_DB, "%s", "fsl_config_open");
 		colour_g = fsl_config_get_text(f, FSL_CONFDB_GLOBAL,
 		    fnc_conf_enum2str(id), NULL);
+	}
 
 	if (ls && (colour || colour_g)) {
 		char *colour_ls = fsl_mprintf("%s%s%s%s%s",
@@ -7473,8 +7473,7 @@ default_colour(enum fnc_colour_obj obj)
 }
 
 static int
-fnc_set_repo_colour(enum fnc_colour_obj id, const char *val, bool unset,
-    bool global)
+fnc_conf_set(enum fnc_colour_obj id, const char *val, bool unset, bool global)
 {
 	fsl_cx	*f = NULL;
 	fsl_db	*db = NULL;
@@ -7482,11 +7481,25 @@ fnc_set_repo_colour(enum fnc_colour_obj id, const char *val, bool unset,
 	f = fcli_cx();
 
 	if (global) {
+		int rc = 0;
+		if (!fsl_cx_db_config(f)) {
+			rc = fsl_config_open(f, NULL);
+			if (rc)
+				return RC(rc, "%s", "fsl_config_open");
+		}
 		if (unset)
-			return fsl_config_unset(f, FSL_CONFDB_GLOBAL,
+			rc = fsl_config_unset(f, FSL_CONFDB_GLOBAL,
 			    fnc_conf_enum2str(id));
-		return fsl_config_set_text(f, FSL_CONFDB_GLOBAL,
-		    fnc_conf_enum2str(id), val);
+		else
+			rc = fsl_config_set_text(f, FSL_CONFDB_GLOBAL,
+			    fnc_conf_enum2str(id), val);
+		/*
+		 * fnc_conf_set() is only called from cmd_config(), thus no
+		 * other db is attached with potential open statements, so we
+		 * can safely close the global config database now.
+		 */
+		rc = fsl_config_close(f);
+		return rc;
 	}
 
 	db = fsl_needs_repo(f);
