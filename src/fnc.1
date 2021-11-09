@@ -60,6 +60,11 @@
 .Op Fl s Ar order
 .Op Ar glob
 .Nm
+.Cm config
+.Op Fl ghu
+.Op Fl -ls
+.Op Ar setting Op Ar value
+.Nm
 .Op Ar path
 .Sh DESCRIPTION
 .Nm
@@ -131,6 +136,54 @@ Commands available to
 .Nm
 are as follows:
 .Bl -tag -width 4v
+.Tg conf
+.It Cm config Oo Fl g | -global Oc Oo Fl h | -help Oc Oo Fl -ls Oc \
+Oo Fl u | -unset Oc Oo Ar setting Op Ar value Oc
+.Dl (aliases: Cm conf , Cm cfg, settings, set )
+Retrieve the current, or set a new,
+.Ar value
+for
+.Ar setting
+in the local repository.  When specified,
+.Ar value
+will become the new value for
+.Ar setting ,
+otherwise
+.Nm
+will display the current value of
+.Ar setting .
+With no arguments,
+.Cm fnc config
+will display a list of all configurable settings.  Alternatively, see
+.Sx ENVIRONMENT
+for a detailed list of available settings
+used in the display or processing of data.  When no value is found for a given
+setting in the local repository,
+.Nm
+will search the
+.Xr fossil 1
+global configuration database in
+.Pa $HOME/.fossil
+before checking environment variables.  If still not found, default values will
+be used.  Options for
+.Cm fnc config
+are as follows:
+.Bl -tag -width Ds
+.It Fl g , -global
+Configure the specified
+.Ar setting
+in the global
+.Xr fossil 1
+.Pa $HOME/.fossil
+configuration database rather than the local repository.
+.It Fl h , -help
+Display config command help and usage information then exit.
+.It Fl -ls
+List all currently defined settings.
+.It Fl u , -unset
+Clear the specified
+.Ar setting.
+.El
 .Tg log
 .It Cm timeline Oo Fl C | -no-colour Oc Oo Fl T | -tag Ar tag Oc \
 Oo Fl b | -branch Ar branch Oc Oo Fl c | -commit Ar commit Oc \
@@ -726,10 +779,26 @@ Find the previous branch that matches the current search pattern.
 .Sh ENVIRONMENT
 .Nm
 displays coloured output by default in supported terminals.  Each colour object
-identified below can be defined by exporting environment variables (e.g.,
-.Cm export FNC_COLOUR_COMMIT=red Ns ).
-If none are set, the default colour scheme will
-be displayed.  Colours supported in
+identified below can be defined by either exporting environment variables
+.Po e.g.,
+.Cm export FNC_COLOUR_COMMIT=red
+.Pc ,
+or with
+.Nm Cm config
+as documented previously.  At startup,
+.Nm
+will search for user-defined colours in the following order:
+.Bl -column " environment variables " description -offset Ds
+.It 1. repository settings Ta Pa repo.fossil
+.It 2. global settings Ta Pa $HOME/.fossil
+.It 3. environment variables Ta Sy shell
+.El
+.Pp
+This enables setting per-project colours to visually distinguish the current
+repository being viewed in
+.Nm .
+If none are found, the default colour scheme will be displayed.  Colours
+supported in
 .Nm
 are:
 .Bl -column "black" "yellow" "magenta" "default" -offset indent-two
@@ -789,6 +858,10 @@ Symbolic link entries displayed in the tree view.  If not defined, the default
 value is
 .Dq magenta .
 .El
+.Pp
+To clear environment variables, issue
+.Cm unset Ar ENVIRONMENT_VARIABLE
+in the shell.
 .Sh EXIT STATUS
 .Ex -std fnc
 .Sh SEE ALSO

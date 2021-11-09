@@ -468,7 +468,6 @@ struct fsl_list {
 */
 FSL_EXPORT const fsl_list fsl_list_empty;
 
-
 /**
    Generic interface for finalizing/freeing memory. Intended
    primarily for use as a destructor/finalizer for high-level
@@ -1057,8 +1056,8 @@ FSL_EXPORT int fsl_error_get( fsl_error const * const err,
 
 /**
    Frees up any resources owned by err and sets its error code to 0,
-   but does not free err. This is harmless no-op if !err or if err
-   holds no dynamically allocated no memory.
+   but does not free err. This is harmless no-op if err holds no
+   dynamically allocated no memory.
 
    @see fsl_error_set()
    @see fsl_error_get()
@@ -1785,7 +1784,7 @@ FSL_EXPORT int fsl_strncmp(const char *zA, const char *zB, fsl_size_t nByte);
    dstsz - 1 characters from src to dst and NUL-terminate the resulting string
    if dstsz is not 0.
 */
-FSL_EXPORT size_t fsl_strlcpy(char *restrict dst, const char *restrict src, size_t dstsz);
+FSL_EXPORT fsl_size_t fsl_strlcpy(char *dst, const char *src, fsl_size_t dstsz);
 
 /**
    BSD strlcat() variant which is less error prone than strncat. Append src to
@@ -1793,7 +1792,7 @@ FSL_EXPORT size_t fsl_strlcpy(char *restrict dst, const char *restrict src, size
    NUL-terminate unless dstsize is 0 or the passed in dst string was longer
    than dstsz to begin with.
 */
-FSL_EXPORT size_t fsl_strlcat(char *restrict dst, const char *restrict src, size_t dstsz);
+FSL_EXPORT fsl_size_t fsl_strlcat(char *dst, const char *src, fsl_size_t dstsz);
 
 /**
    Equivalent to fsl_strncmp(lhs, rhs, X), where X is either
@@ -2817,7 +2816,7 @@ FSL_EXPORT int fsl_mkdir_for_file(char const *zName, bool forceFlag);
    @see fsl_cx_user_set()
    @see fsl_cx_user_get()
 */
-FSL_EXPORT char * fsl_guess_user_name();
+FSL_EXPORT char * fsl_user_name_guess();
 
 /**
    Tries to find the user's home directory. If found, 0 is
@@ -4684,7 +4683,8 @@ FSL_EXPORT const fsl_zip_writer fsl_zip_writer_empty;
 
    @see fsl_zip_finalize()
 */
-FSL_EXPORT int fsl_zip_root_set(fsl_zip_writer * z, char const * zRoot );
+FSL_EXPORT int fsl_zip_root_set(fsl_zip_writer * const z,
+                                char const * zRoot );
 
 /**
    Adds a file or directory to the ZIP writer z. zFilename is the
@@ -4760,8 +4760,10 @@ FSL_EXPORT int fsl_zip_root_set(fsl_zip_writer * z, char const * zRoot );
    @see fsl_zip_body()
    @see fsl_zip_finalize()
 */
-FSL_EXPORT int fsl_zip_file_add( fsl_zip_writer * z, char const * zFilename,
-                                 fsl_buffer const * pContent, int permsFlag );
+FSL_EXPORT int fsl_zip_file_add( fsl_zip_writer * const z,
+                                 char const * zFilename,
+                                 fsl_buffer const * pContent,
+                                 int permsFlag );
 
 /**
    Ends the ZIP-creation process, padding all buffers, writing all
@@ -4784,7 +4786,7 @@ FSL_EXPORT int fsl_zip_file_add( fsl_zip_writer * z, char const * zFilename,
    @see fsl_zip_finalize()
    @see fsl_zip_end_take()
 */
-FSL_EXPORT int fsl_zip_end( fsl_zip_writer * z );
+FSL_EXPORT int fsl_zip_end( fsl_zip_writer * const z );
 
 /**
    This variant of fsl_zip_end() transfers the current contents
@@ -4800,7 +4802,8 @@ FSL_EXPORT int fsl_zip_end( fsl_zip_writer * z );
    failure (even if dest is NULL). i.e. on error z is still cleaned
    up.
 */
-FSL_EXPORT int fsl_zip_end_take( fsl_zip_writer * z, fsl_buffer * dest );
+FSL_EXPORT int fsl_zip_end_take( fsl_zip_writer * const z,
+                                 fsl_buffer * const dest );
 
 /**
    This variant of fsl_zip_end_take() passes z to fsl_zip_end(),
@@ -4815,7 +4818,8 @@ FSL_EXPORT int fsl_zip_end_take( fsl_zip_writer * z, fsl_buffer * dest );
    started). In either case, z is cleaned up and ready for re-use or
    (in the case of a heap-allocated instance) freed.
 */
-FSL_EXPORT int fsl_zip_end_to_filename( fsl_zip_writer * z, char const * filename );
+FSL_EXPORT int fsl_zip_end_to_filename( fsl_zip_writer * const z,
+                                        char const * filename );
 
 
 /**
@@ -4829,7 +4833,7 @@ FSL_EXPORT int fsl_zip_end_to_filename( fsl_zip_writer * z, char const * filenam
    @see fsl_zip_end_take()
    @see fsl_zip_finalize()
 */
-FSL_EXPORT fsl_buffer const * fsl_zip_body( fsl_zip_writer const * z );
+FSL_EXPORT fsl_buffer const * fsl_zip_body( fsl_zip_writer const * const z );
 
 /**
    Frees all memory owned by z and resets it to a clean state, but
@@ -4845,7 +4849,7 @@ FSL_EXPORT fsl_buffer const * fsl_zip_body( fsl_zip_writer const * z );
    @see fsl_zip_end()
    @see fsl_zip_body()
 */
-FSL_EXPORT void fsl_zip_finalize(fsl_zip_writer * z);
+FSL_EXPORT void fsl_zip_finalize(fsl_zip_writer * const z);
 
 /**
    Set z's date and time from a Julian Day number. Results are
@@ -4858,7 +4862,8 @@ FSL_EXPORT void fsl_zip_finalize(fsl_zip_writer * z);
    @see fsl_zip_end()
    @see fsl_zip_body()
 */
-FSL_EXPORT void fsl_zip_timestamp_set_julian(fsl_zip_writer *z, double rDate);
+FSL_EXPORT void fsl_zip_timestamp_set_julian(fsl_zip_writer * const z,
+                                             double rDate);
 
 /**
    Set z's date and time from a Unix Epoch time. Results are
@@ -4866,7 +4871,8 @@ FSL_EXPORT void fsl_zip_timestamp_set_julian(fsl_zip_writer *z, double rDate);
    timestamp is applied to all fsl_zip_file_add() operations until it
    is re-set.
 */
-FSL_EXPORT void fsl_zip_timestamp_set_unix(fsl_zip_writer *z, fsl_time_t epochTime);
+FSL_EXPORT void fsl_zip_timestamp_set_unix(fsl_zip_writer * const z,
+                                           fsl_time_t epochTime);
 
 /**
    State for the fsl_timer_xxx() family of functions.
@@ -5924,6 +5930,9 @@ typedef enum fsl_configset_e fsl_configset_e;
 
 /**
    Runtime-configurable flags for a fsl_cx instance.
+
+   @see fsl_cx_flag_set()
+   @see fsl_cx_flags_get()
 */
 enum fsl_cx_flags_e {
 /**
@@ -6478,7 +6487,7 @@ FSL_EXPORT int fsl_cx_init( fsl_cx ** tgt, fsl_cx_init_opt const * param );
    This is a no-op if !f and is effectively a no-op if f has no
    state to destruct.
 */
-FSL_EXPORT void fsl_cx_finalize( fsl_cx * f );
+FSL_EXPORT void fsl_cx_finalize( fsl_cx * const f );
 
 
 /**
@@ -6487,13 +6496,17 @@ FSL_EXPORT void fsl_cx_finalize( fsl_cx * f );
    fsl_cx_flags_e enum).  If enable is true the flag(s) is (are) set,
    else it (they) is (are) unset. Returns the _previous_ set of flags
    (that is, the state they were in before this call was made).
+
+   @see fsl_cx_flags_get()
 */
-FSL_EXPORT int fsl_cx_flag_set( fsl_cx * f, int flags, bool enable );
+FSL_EXPORT int fsl_cx_flag_set( fsl_cx * const f, int flags, bool enable );
 
 /**
    Returns f's flags.
+
+   @see fsl_cx_flag_set()
 */
-FSL_EXPORT int fsl_cx_flags_get( fsl_cx * f );
+FSL_EXPORT int fsl_cx_flags_get( fsl_cx const * const f );
 
 /**
    Sets the Fossil error state to the given error code and
@@ -6570,13 +6583,16 @@ FSL_EXPORT int fsl_cx_err_set_e( fsl_cx * f, fsl_error * err );
 FSL_EXPORT int fsl_cx_err_report( fsl_cx * const f, bool addNewline );
 
 /**
-   Unconditionally Moves db->error's state into f. If db is NULL then
-   f's primary db connection is used. Returns FSL_RC_MISUSE if !f or
-   (!db && f-is-not-opened). On success it returns f's new error code.
+   Unconditionally Moves db->error's state into f (without requiring
+   any allocation). If db is NULL then f's primary db connection is
+   used. Returns FSL_RC_MISUSE if (!db && f-is-not-opened), with the
+   caveat f _always_ has a db connection under the current connection
+   architecture. On success it returns f's new error code (which may be
+   0).
 
-   The main purpose of this function is to propagate db-level
-   errors up to higher-level code which deals directly with the f
-   object but not the underlying db(s).
+   The main purpose of this function is to propagate db-level errors
+   up to higher-level code which deals directly with the f object but
+   not the underlying db(s).
 
    @see fsl_cx_uplift_db_error2()
 */
@@ -6588,6 +6604,11 @@ FSL_EXPORT int fsl_cx_uplift_db_error( fsl_cx * const f, fsl_db * db );
    rc. If db is NULL, f's main db connection is used. It is intended
    to be called immediately after calling a db operation which might
    have failed, and passed that operation's result.
+
+   As a special case, if rc is FSL_RC_OOM, this function has no side
+   effects and returns rc. The intention of that is to keep a
+   propagated db-level error (which may perhaps be stale by the time
+   this is called) from hiding an OOM error.
 
    Results are undefined if db is NULL and f has no main db
    connection.
@@ -6684,9 +6705,13 @@ FSL_EXPORT int fsl_repo_open( fsl_cx * const f, char const * repoDbFile/*, char 
 
 /**
    If fsl_repo_open_xxx() has been used to open a respository db, this
-   call closes that db and returns 0. Returns FSL_RC_NOT_FOUND if f
-   has not opened a repository (that can normally be ignored but is
-   provided for completeness's sake).
+   call closes that db.
+
+   Returns 0 on success or if no config db is opened. It may propagate
+   an error from the db layer if closing/detaching the db
+   fails. Returns FSL_RC_MISUSE if f has any transactions pending or
+   if f still has a checkout opened (a checkout db is only valid in
+   conjunction with its repository db).
 
    If a repository is opened "indirectly" via fsl_ckout_open_dir()
    then attempting to close it using this function will result in
@@ -6709,22 +6734,38 @@ FSL_EXPORT int fsl_repo_close( fsl_cx * const f );
 
    Example usage:
    ```
-   char * u = fsl_guess_user_name();
+   char * u = fsl_user_name_guess();
    int rc = fsl_cx_user_set(f, u);
    fsl_free(u);
    ```
 
    (Sorry about the extra string copy there, but adding a function
    which passes ownership of the name string seems like overkill.)
+
+   @see fsl_cx_user_guess()
 */
-FSL_EXPORT int fsl_cx_user_set( fsl_cx * f, char const * userName );
+FSL_EXPORT int fsl_cx_user_set( fsl_cx * const f, char const * userName );
+
+/**
+   If f has a user name set (via fsl_cx_user_set()) then this function
+   returns that value. If none has been set, this tries to guess one,
+   as per fsl_user_name_guess(), and then assign it as f's current
+   user name. Returns NULL only on allocation error or if an
+   environment setup error prevents detection of the user name.
+
+   The returned bytes are owned by f and will be invalidated by
+   any future calls to fsl_cx_user_set().
+*/
+FSL_EXPORT char const * fsl_cx_user_guess(fsl_cx * const f);
 
 /**
    Returns the name set by fsl_cx_user_set(), or NULL if f has no
-   default user name set. The returned bytes are owned by f and may
-   be invalidated by any call to fsl_cx_user_set().
+   default user name set. The returned bytes are owned by f and will
+   be invalidated by any future calls to fsl_cx_user_set().
+
+   @see fsl_cx_user_guess()
 */
-FSL_EXPORT char const * fsl_cx_user_get( fsl_cx const * f );
+FSL_EXPORT char const * fsl_cx_user_get( fsl_cx const * const f );
 
 /**
    Configuration parameters for fsl_repo_create().  Always
@@ -6981,10 +7022,11 @@ FSL_EXPORT int fsl_ckout_db_search( char const * dirName,
 
 /**
    If fsl_ckout_open_dir() (or similar) has been used to open a
-   checkout db, this call closes that db and returns 0. Returns
-   FSL_RC_MISUSE if f has any transactions pending, FSL_RC_NOT_FOUND
-   if f has not opened a checkout (which can safely be ignored and
-   does not update f's error state).
+   checkout db, this call closes that db.
+
+   Returns 0 on success or if no config db is opened. It may propagate
+   an error from the db layer if closing/detaching the db
+   fails. Returns FSL_RC_MISUSE if f has any transactions pending.
 
    This also closes the repository which was implicitly opened for the
    checkout.
@@ -6994,7 +7036,10 @@ FSL_EXPORT int fsl_ckout_close( fsl_cx * const f );
 /**
    Attempts to close any opened databases (repo/checkout/config). This
    will fail if any transactions are pending. Any databases which are
-   already closed are silently skipped.
+   already closed are silently skipped. This will fail if any cached
+   statements are currently active for the being-closed
+   db(s). "Active" means that fsl_db_prepare_cached() was used without
+   a corresponding call to fsl_stmt_cached_yield().
 */
 FSL_EXPORT int fsl_cx_close_dbs( fsl_cx * const f );
 
@@ -7180,30 +7225,50 @@ FSL_EXPORT fsl_db * fsl_needs_ckout(fsl_cx * const f);
 FSL_EXPORT bool fsl_cx_has_ckout(fsl_cx const * const f );
 
 /**
-   Opens the given database file as f's configuration database. If f
-   already has a config database opened, it is closed before opening
-   the new one. The database is created and populated with an
-   initial schema if needed.
+   Opens the given database file as f's configuration database.
+
+   If f already has a config database opened then:
+
+   1) If passed a NULL dbName or dbName is an empty string then this
+   function returns without side-effects.
+
+   2) If passed a non-NULL/non-empty dbName, any existing config db is
+   closed before opening the named one. The database is created and
+   populated with an initial schema if needed.
 
    If dbName is NULL or empty then it uses a default db name,
-   "probably" under the user's home directory. To get the name of
-   the database after it has been opened/attached, use
+   "probably" under the user's home directory (see
+   fsl_config_global_preferred_name()). To get the name of the
+   database after it has been opened/attached, use
    fsl_cx_db_file_config().
 
-   TODO: strongly consider supporting non-attached
+   Results are undefined if f is NULL or not properly initialized.
+
+   TODO(?): strongly consider supporting non-attached
    (i.e. sqlite3_open()'d) use of the config db. Comments in fossil(1)
    suggest that it is possible to lock the config db for other apps
-   when it is attached to a long-running op by a fossil process.
+   when it is attached to a long-running op by a fossil process. That
+   change is easier said than done, as it affects many different
+   functions and rules out any SQL JOINs against the rest of the
+   repository state (whether any such joins are needed is as yet
+   unknown).
 
    @see fsl_cx_db_config()
    @see fsl_config_close()
+   @see fsl_config_global_preferred_name()
 */
 FSL_EXPORT int fsl_config_open( fsl_cx * const f, char const * dbName );
 
 /**
    Closes/detaches the database connection opened by
-   fsl_config_open(). Returns 0 on succes, FSL_RC_MISUSE if !f,
-   FSL_RC_NOT_FOUND if no config db connection is opened/attached.
+   fsl_config_open(). Returns 0 on success or if no config
+   db is opened. It may propagate an error from the db layer
+   if closing/detaching the db fails.
+
+   ACHTUNG: the config handle cannot be closed if any active
+   (stepped-but-not-reset) statements are opened on any of f's db
+   handles because the attached config db will be locked for the
+   duration of such statements. In such cases, this routine WILL FAIL.
 
    @see fsl_cx_db_config()
    @see fsl_config_open()
@@ -8213,6 +8278,17 @@ struct fsl_stmt {
   fsl_size_t rowCount;
 
   /**
+     Describes the database(s) used by this statement handle, in the
+     form of a bitmask of fsl_dbrole_e values. This is a bit of a
+     kludge used to allow the internals to flush cached statements
+     from the fossil global config db when detaching that database.
+     Code which requires this to be set must set it itself and must
+     set it correctly. Hypothetically, no client-level code requires
+     it but _some_ libfossil-internal code does.
+  */
+  int role;
+
+  /**
      Internal state flags.
   */
   short flags;
@@ -8247,6 +8323,7 @@ struct fsl_stmt {
     0/*colCount*/,                            \
     0/*paramCount*/,                          \
     0/*rowCount*/,                            \
+    0/*role*/,                                \
     0/*flags*/,                               \
     0/*cachedHits*/,                          \
     NULL/*next*/,                             \
@@ -10349,7 +10426,7 @@ struct fsl_card_F_list {
      Maintenance notes: internal updates to this member are the only
      reason some of the deck APIs require a non-const deck. This type
      needs to be signed for compatibility with some of the older
-     algos, e.g. fsl_deck_F_seek_base().
+     algos, e.g. fsl__deck_F_seek_base().
   */
   int32_t cursor;
   /**
@@ -11354,8 +11431,13 @@ FSL_EXPORT int fsl_deck_W_set( fsl_deck * const mf, char const *content, fsl_int
    instance. This function clears out all contents of the d
    parameter except for its (f, type, allocStamp) members, sets its
    (f, type) members, and leaves d->allocStamp intact.
+
+   Note that, prior to calling this, the deck _must_ have been cleanly
+   initialized via copying from fsl_deck_empty or (depending on the
+   context) fsl_deck_empty_m or results are undefined.
 */
-FSL_EXPORT void fsl_deck_init( fsl_cx * cx, fsl_deck * d, fsl_satype_e type );
+FSL_EXPORT void fsl_deck_init( fsl_cx * const cx, fsl_deck * const d,
+                               fsl_satype_e type );
 
 /**
    Returns true if d contains data for all _required_ cards, as
@@ -11530,46 +11612,9 @@ FSL_EXPORT int fsl_deck_output( fsl_deck * d, fsl_output_f out,
    artifact-type-specific processing.
 
    @see fsl_deck_output()
-   @see fsl_content_put_ex()
+   @see fsl__content_put_ex()
 */
 FSL_EXPORT int fsl_deck_save( fsl_deck * const d, bool isPrivate );
-
-/**
-    This starts a transaction (possibly nested) on the repository db
-    and initializes some temporary db state needed for the
-    crosslinking certain artifact types. It "should" (see below) be
-    called at the start of the crosslinking process. Crosslinking
-    *can* work without this but certain steps for certain (subject to
-    change) artifact types will be skipped, possibly leading to
-    unexpected timeline data or similar funkiness. No permanent
-    SCM-relevant state will be missing, but the timeline might not be
-    updated and tickets might not be fully processed. This should be
-    used before crosslinking any artifact types, but will only have
-    significant side effects for certain (subject to change) types.
-
-    Returns 0 on success.
-
-    If this function succeeds, the caller is OBLIGATED to either call
-    fsl_crosslink_end() or fsl_db_transaction_rollback(), depending
-    on whether the work done after this call succeeds
-    resp. fails. This process may install temporary tables and/or
-    triggers, so failing to call one or the other of those will result
-    in misbehavior.
-
-    @see fsl_deck_crosslink()
-*/
-int fsl_crosslink_begin(fsl_cx * f);
-
-/**
-    Must not be called unless fsl_crosslink_begin() has
-    succeeded.  This performs crosslink post-processing on certain
-    artifact types and cleans up any temporary db state initialized by
-    fsl_crosslink_begin().
-
-    Returns 0 on success. On error it initiates (or propagates) a
-    rollback for the current transaction.
-*/
-int fsl_crosslink_end(fsl_cx * f);
 
 /**
    Parses src as Control Artifact content and populates d with it.
@@ -11591,18 +11636,20 @@ int fsl_crosslink_end(fsl_cx * f);
    if it decides to implement certain memory optimizations.
 
    Ownership of src itself is never changed by this function, only
-   (possibly!) the ownership of its contents.
+   the ownership of its contents. On success, this function always
+   clears the buffer's contents, possibly (but not necessarily)
+   transfering ownership of them to the deck.
 
-   In any case, the content of the source buffer is modified by
-   this function because (A) that simplifies tokenization greatly,
-   (B) saves us having to make another copy to work on, (C) the
-   original implementation did it that way, (D) because in
+   In any case, the content of the source buffer is (normally)
+   modified by this function because (A) that simplifies tokenization
+   greatly, (B) saves us having to make another copy to work on, (C)
+   the original implementation did it that way, (D) because in
    historical use the source is normally thrown away after parsing,
    anyway, and (E) in combination with taking ownership of src's
-   contents it allows us to optimize away some memory allocations
-   by re-using the internal memory of the buffer. This function
-   never changes src's size, but it mutilates its contents
-   (injecting NUL bytes as token delimiters).
+   contents it allows us to optimize away some memory allocations by
+   re-using the internal memory of the buffer. This function never
+   changes src's size, but it mutilates its contents (injecting NUL
+   bytes as token delimiters).
 
    If d->type is _not_ FSL_SATYPE_ANY when this is called, then
    this function requires that the input to be of that type. We can
@@ -11613,15 +11660,25 @@ int fsl_crosslink_end(fsl_cx * f);
    not need to set this (unless they want to, as a small
    optimization).
 
-   On success it returns 0 and d will be updated with the state
-   from the input artifact. (Ideally, outputing d via
-   fsl_deck_output() will produce a lossless copy of the original.)
+   On success it returns 0 and d will be updated with the state from
+   the input artifact and the contents of the source buffer will
+   either be cleared or taken over by d. (Ideally, outputing d via
+   fsl_deck_output() will produce a lossless copy of the original, but
+   timestamp granularity might prevent that.)
 
    On error, if there is error information to propagate beyond the
-   result code then it is stored in d->f (if that is not NULL),
-   else in d->error. Whether or not such error info is propagated
-   depends on the type of error, but anything more trivial than
-   invalid arguments will be noted there.
+   result code then it is stored in d->f (if that is not NULL), else
+   in d->error. Whether or not such error info is propagated depends
+   on the type of error, but anything more trivial than invalid
+   arguments will be noted there. On error, the source buffer's
+   contents _might_, depending on which phase the error happened, be
+   left in place but may have been modified by the parsing process.
+   If the error happens after _certain_ parsing steps then the deck
+   will be required to take over the buffer's memory in order to keep
+   memory management sane. On error, clients should always eventually
+   pass the source buffer to fsl_buffer_clear(). On success its
+   contents are guaranteed to have been cleared or or transfered to
+   the destination deck when this function returns.
 
    d might be partially populated on error, so regardless of success
    or failure, the client must eventually pass d to
@@ -11653,10 +11710,10 @@ FSL_EXPORT int fsl_deck_parse(fsl_deck * const d, fsl_buffer * const src);
 
     If you happen to know the _correct_ RID for the deck being parsed,
     pass it as the rid argument, else pass 0. A negative value will
-    result in a FSL_RC_RANGE error. This value is (or will be) only
-    used as an optimization in other places. Passing a positive value
-    has no effect on how the content is parsed or on the result - it
-    only affects internal details/optimizations.
+    result in a FSL_RC_RANGE error. This value is (or may be) only
+    used as an optimization in this function and/or downstream
+    functions. Passing a positive value will cause d->f to do a cache
+    lookup which may avoid it having to parse the deck at all.
 */
 FSL_EXPORT int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_id_t rid);
 
@@ -11806,7 +11863,7 @@ FSL_EXPORT int fsl_deck_baseline_fetch( fsl_deck * d );
 
    @see fsl_xlink_listener()
 */
-typedef int (*fsl_deck_xlink_f)(fsl_deck * d, void * state);
+typedef int (*fsl_deck_xlink_f)(fsl_deck * const d, void * state);
 
 /**
     A type for holding a callback/state pair for manifest
@@ -11858,7 +11915,7 @@ fsl_xlinker * fsl_xlinker_by_name( fsl_cx * f, char const * name );
 /**
    Adds the given function as a "crosslink callback" for the given
    Fossil context. The callback is called at the end of a
-   successfull fsl_deck_crosslink() operation and provides a way
+   successfull fsl__deck_crosslink() operation and provides a way
    for the client to perform their own work based on the app having
    crosslinked an artifact. Crosslinking happens when artifacts are
    saved or upon a rebuild operation.
@@ -12162,7 +12219,7 @@ typedef enum fsl_wiki_save_mode_t fsl_wiki_save_mode_t;
    b contains the content for the page.
 
    userName specifies the user name to apply to the change. If NULL
-   or empty then fsl_cx_user_get() or fsl_guess_user_name() are
+   or empty then fsl_cx_user_get() or fsl_user_name_guess() are
    used (in that order) to determine the name.
 
    mimeType specifies the mime type for the content (may be NULL).
@@ -12762,7 +12819,7 @@ FSL_EXPORT int fsl_tag_sym( fsl_cx * f, fsl_tagtype_e tagType,
    tagValue is the optional value for the tag. May be NULL.
 
    userName is the user's name to apply to the artifact. May not be
-   empty/NULL. Use fsl_guess_user_name() to try to figure out a
+   empty/NULL. Use fsl_user_name_guess() to try to figure out a
    proper user name based on the environment. See also:
    fsl_cx_user_get(), but note that the application must first
    use fsl_cx_user_set() to set a context's user name.
@@ -13031,7 +13088,7 @@ FSL_EXPORT fsl_id_t fsl_repo_filename_fnid( fsl_cx * f, char const * filename );
    therefore cannot delta-compress the older version.
 
    Maintenance reminder: this is basically just a glorified form of
-   the internal fsl_content_put(). Interestingly, fsl_content_put()
+   the internal fsl__content_put(). Interestingly, fsl__content_put()
    always sets content to public (by default - the f object may
    override that later). It is not yet clear whether this routine
    needs to have a flag to set the blob private or not. Generally
@@ -14029,7 +14086,7 @@ struct fsl_ckout_unmanage_opt {
   /**
      An alternative to assigning this->filename is to point
      this->vfileIds to a bag of vfile.id values. If this member is not
-     NULL, fsl_ckout_revert() will ignore this->filename.
+     NULL, fsl_ckout_unmanage() will ignore this->filename.
 
      @see fsl_filename_to_vfile_ids()
   */
@@ -15793,7 +15850,7 @@ FSL_EXPORT const fsl_ckout_revert_opt fsl_ckout_revert_opt_empty;
 
    Returns 0 on success, any number of non-0 results on error.
 */
-FSL_EXPORT int fsl_ckout_revert( fsl_cx * f,
+FSL_EXPORT int fsl_ckout_revert( fsl_cx * const f,
                                  fsl_ckout_revert_opt const * opt );
 
 /**
@@ -15850,8 +15907,8 @@ FSL_EXPORT int fsl_filename_to_vfile_id( fsl_cx * f, fsl_id_t vid,
 
    @see fsl_ckout_vfile_ids()
 */
-FSL_EXPORT int fsl_filename_to_vfile_ids( fsl_cx * f, fsl_id_t vid,
-                                          fsl_id_bag * dest,
+FSL_EXPORT int fsl_filename_to_vfile_ids( fsl_cx * const f, fsl_id_t vid,
+                                          fsl_id_bag * const dest,
                                           char const * zName,
                                           bool changedOnly);
 
@@ -15872,8 +15929,8 @@ FSL_EXPORT int fsl_filename_to_vfile_ids( fsl_cx * f, fsl_id_t vid,
    FSL_RC_OOM on allocation error, FSL_RC_NOT_A_CKOUT if f has no
    opened checkout.
 */
-FSL_EXPORT int fsl_ckout_vfile_ids( fsl_cx * f, fsl_id_t vid,
-                                    fsl_id_bag * dest, char const * zName,
+FSL_EXPORT int fsl_ckout_vfile_ids( fsl_cx * const f, fsl_id_t vid,
+                                    fsl_id_bag * const dest, char const * zName,
                                     bool relativeToCwd, bool changedOnly );
 
 
@@ -16560,7 +16617,7 @@ FSL_EXPORT int fsl_config_transaction_begin(fsl_cx * f, fsl_confdb_e mode);
    @see fsl_config_transaction_begin()
    @see fsl_db_transaction_end()
 */
-FSL_EXPORT int fsl_config_transaction_end(fsl_cx * f, fsl_confdb_e mode, char rollback);
+FSL_EXPORT int fsl_config_transaction_end(fsl_cx * f, fsl_confdb_e mode, bool rollback);
 
 /**
    Populates li as a glob list from the given configuration key.
@@ -16610,9 +16667,8 @@ FSL_EXPORT int fsl_config_globs_load(fsl_cx * f, fsl_list * li, char const * key
 
    Windows:
 
-   - We need a Windows port of this routine. Currently it simply uses
-   the Windows home directory + "/_fossil" or "/.fossil", depending on
-   the build-time environment.
+   - We need a Windows port of this routine. Currently it `#error`'s
+   out at compile-time on Windows.
 */
 FSL_EXPORT int fsl_config_global_preferred_name(char ** zOut);
 
@@ -16886,19 +16942,19 @@ FSL_EXPORT void fsl_vpath_reverse(fsl_vpath * path);
 extern "C" {
 #endif
 
-typedef struct fsl_acache fsl_acache;
-typedef struct fsl_acache_line fsl_acache_line;
-typedef struct fsl_pq fsl_pq;
-typedef struct fsl_pq_entry fsl_pq_entry;
+typedef struct fsl__acache fsl__acache;
+typedef struct fsl__acache_line fsl__acache_line;
+typedef struct fsl__pq fsl__pq;
+typedef struct fsl__pq_entry fsl__pq_entry;
 
 /** @internal
 
-    Queue entry type for the fsl_pq class.
+    Queue entry type for the fsl__pq class.
 
     Potential TODO: we don't currently use the (data) member. We can
     probably remove it.
 */
-struct fsl_pq_entry {
+struct fsl__pq_entry {
   /** RID of the entry. */
   fsl_id_t id;
   /** Raw data associated with this entry. */
@@ -16907,48 +16963,48 @@ struct fsl_pq_entry {
   double priority;
 };
 /** @internal
-    Empty-initialized fsl_pq_entry structure.
+    Empty-initialized fsl__pq_entry structure.
 */
-#define fsl_pq_entry_empty_m {0,NULL,0.0}
+#define fsl__pq_entry_empty_m {0,NULL,0.0}
 
 /** @internal
 
     A simple priority queue class. Instances _must_ be initialized
-    by copying fsl_pq_empty or fsl_pq_empty_m (depending on where
+    by copying fsl__pq_empty or fsl__pq_empty_m (depending on where
     the instance lives).
 */
-struct fsl_pq {
+struct fsl__pq {
   /** Number of items allocated in this->list. */
   uint16_t capacity;
   /** Number of items used in this->list. */
   uint16_t used;
   /** The queue. It is kept sorted by entry->priority. */
-  fsl_pq_entry * list;
+  fsl__pq_entry * list;
 };
 
 /** @internal
-    Empty-initialized fsl_pq struct, intended for const-copy initialization.
+    Empty-initialized fsl__pq struct, intended for const-copy initialization.
 */
-#define fsl_pq_empty_m {0,0,NULL}
+#define fsl__pq_empty_m {0,0,NULL}
 
 /** @internal
-    Empty-initialized fsl_pq struct, intended for copy initialization.
+    Empty-initialized fsl__pq struct, intended for copy initialization.
 */
-extern  const fsl_pq fsl_pq_empty;
+extern  const fsl__pq fsl__pq_empty;
 
 /** @internal
 
     Clears the contents of p, freeing any memory it owns, but not
     freeing p. Results are undefined if !p.
 */
-void fsl_pq_clear(fsl_pq * p);
+void fsl__pq_clear(fsl__pq * p);
 
 /** @internal
 
     Insert element e into the queue. Returns 0 on success, FSL_RC_OOM
     on error. Results are undefined if !p. pData may be NULL.
 */
-int fsl_pq_insert(fsl_pq *p, fsl_id_t e,
+int fsl__pq_insert(fsl__pq *p, fsl_id_t e,
                   double v, void *pData);
 
 /** @internal
@@ -16958,13 +17014,13 @@ int fsl_pq_insert(fsl_pq *p, fsl_id_t e,
     is empty. If pp is not NULL then *pp is (on success) assigned to
     opaquedata pointer mapped to the entry.
 */
-fsl_id_t fsl_pq_extract(fsl_pq *p, void **pp);
+fsl_id_t fsl__pq_extract(fsl__pq *p, void **pp);
 
 /** @internal
 
-    Holds one "line" of a fsl_acache cache.
+    Holds one "line" of a fsl__acache cache.
 */
-struct fsl_acache_line {
+struct fsl__acache_line {
   /**
      RID of the cached record.
   */
@@ -16980,9 +17036,9 @@ struct fsl_acache_line {
 };
 /** @internal
 
-    Empty-initialized fsl_acache_line structure.
+    Empty-initialized fsl__acache_line structure.
 */
-#define fsl_acache_line_empty_m { 0,0,fsl_buffer_empty_m }
+#define fsl__acache_line_empty_m { 0,0,fsl_buffer_empty_m }
 
 
 /** @internal
@@ -17002,9 +17058,9 @@ struct fsl_acache_line {
     non-structural artifacts (i.e. opaque client blobs).
 
     Potential TODO: the limits of the cache size are hard-coded in
-    fsl_acache_insert. Those really should be part of this struct.
+    fsl__acache_insert. Those really should be part of this struct.
 */
-struct fsl_acache {
+struct fsl__acache {
   /**
      Total amount of buffer memory (in bytes) used by cached content.
      This does not account for memory held by this->list.
@@ -17039,7 +17095,7 @@ struct fsl_acache {
   /**
      List of cached content, ordered by age.
   */
-  fsl_acache_line * list;
+  fsl__acache_line * list;
   /**
      All artifacts currently in the cache.
   */
@@ -17055,10 +17111,10 @@ struct fsl_acache {
 };
 /** @internal
 
-    Empty-initialized fsl_acache structure, intended
+    Empty-initialized fsl__acache structure, intended
     for const-copy initialization.
 */
-#define fsl_acache_empty_m {                \
+#define fsl__acache_empty_m {                \
   0/*szTotal*/,                             \
   20000000/*szLimit. Historical fossil value=50M*/, \
   0/*used*/,300U/*usedLimit. Historical fossil value=500*/,\
@@ -17070,10 +17126,10 @@ struct fsl_acache {
 }
 /** @internal
 
-    Empty-initialized fsl_acache structure, intended
+    Empty-initialized fsl__acache structure, intended
     for copy initialization.
 */
-extern const fsl_acache fsl_acache_empty;
+extern const fsl__acache fsl__acache_empty;
 
 /** @internal
 
@@ -17088,7 +17144,7 @@ extern const fsl_acache fsl_acache_empty;
    The array members in this struct MUST have the same length
    or results are undefined.
 */
-struct fsl_mcache {
+struct fsl__mcache {
   /** Next age value. No clue how the cache will react once this
       overflows. */
   unsigned nextAge;
@@ -17108,17 +17164,17 @@ struct fsl_mcache {
      copy).
 
      Array sizes of 6 and 10 do not appreciably change the hit rate
-     compared to 4, at least not for current (2021-03-26) uses.
+     compared to 4, at least not for current (2021-11-01) uses.
   */
   fsl_deck decks[4];
 };
 
 /** Convenience typedef. */
-typedef struct fsl_mcache fsl_mcache;
+typedef struct fsl__mcache fsl__mcache;
 
-/** Initialized-with-defaults fsl_mcache structure, intended for
+/** Initialized-with-defaults fsl__mcache structure, intended for
     const-copy initialization. */
-#define fsl_mcache_empty_m {\
+#define fsl__mcache_empty_m {\
   0,                  \
   {0,0,0,0},\
   0,0, \
@@ -17126,9 +17182,9 @@ typedef struct fsl_mcache fsl_mcache;
   fsl_deck_empty_m} \
 }
 
-/** Initialized-with-defaults fsl_mcache structure, intended for
+/** Initialized-with-defaults fsl__mcache structure, intended for
     non-const copy initialization. */
-extern const fsl_mcache fsl_mcache_empty;
+extern const fsl__mcache fsl__mcache_empty;
 
 
 /* The fsl_cx class is documented in main public header. */
@@ -17326,8 +17382,8 @@ struct fsl_cx {
      this->fileContent for that. This list should stay relatively
      short.
 
-     @see fsl_cx_scratchpad()
-     @see fsl_cx_scratchpad_yield()
+     @see fsl__cx_scratchpad()
+     @see fsl__cx_scratchpad_yield()
   */
   struct {
     /**
@@ -17343,7 +17399,7 @@ struct fsl_cx {
        extended, but anything beyond 8, maybe 10, seems a bit extreme.
        They should only be increased if we find code paths which
        require it. As of this writing (2021-03-17), the peak
-       concurrently used was 5. In any case fsl_cx_scratchpad() fails
+       concurrently used was 5. In any case fsl__cx_scratchpad() fails
        fatally if it needs more than it has, so we won't fail to
        overlook such a case.
     */
@@ -17353,7 +17409,7 @@ struct fsl_cx {
     */
     bool used[8];
     /**
-       A cursor _hint_ to try to speed up fsl_cx_scratchpad() by about
+       A cursor _hint_ to try to speed up fsl__cx_scratchpad() by about
        half a nanosecond, making it O(1) instead of O(small N) for the
        common case.
     */
@@ -17404,8 +17460,8 @@ struct fsl_cx {
     bool markPrivate;
 
     /**
-       True if fsl_crosslink_begin() has been called but
-       fsl_crosslink_end() is still pending.
+       True if fsl__crosslink_begin() has been called but
+       fsl__crosslink_end() is still pending.
     */
     bool isCrosslinking;
 
@@ -17485,7 +17541,7 @@ struct fsl_cx {
     /**
        Artifact cache used during processing of manifests.
     */
-    fsl_acache arty;
+    fsl__acache arty;
     /**
        Used during manifest parsing to keep track of artifacts we have
        seen. Whether that's really necessary or is now an unnecessary
@@ -17525,7 +17581,7 @@ struct fsl_cx {
     /**
        Parsed-deck cache.
     */
-    fsl_mcache mcache;
+    fsl__mcache mcache;
     
     /**
        Holds various glob lists. That said... these features are
@@ -17654,14 +17710,14 @@ struct fsl_cx {
       -1/*searchIndexExists*/,                  \
       -1/*manifestSetting*/,\
       0/*rcvId*/,                               \
-      fsl_acache_empty_m/*arty*/,               \
+      fsl__acache_empty_m/*arty*/,               \
       fsl_id_bag_empty_m/*mfSeen*/,           \
       fsl_id_bag_empty_m/*leafCheck*/,        \
       fsl_id_bag_empty_m/*toVerify*/,         \
       0/*mtimeManifest*/,                     \
       NULL/*projectCode*/,                    \
       fsl_fstat_empty_m/*fstat*/,             \
-      fsl_mcache_empty_m/*mcache*/,           \
+      fsl__mcache_empty_m/*mcache*/,           \
       {/*globs*/                              \
         fsl_list_empty_m/*ignore*/,           \
         fsl_list_empty_m/*binary*/,         \
@@ -17680,7 +17736,7 @@ struct fsl_cx {
 /** @internal
     Initialized-with-defaults fsl_cx instance.
 */
-FSL_EXPORT const fsl_cx fsl_cx_empty;
+extern const fsl_cx fsl_cx_empty;
 
 /*
   TODO:
@@ -17698,7 +17754,7 @@ FSL_EXPORT const fsl_cx fsl_cx_empty;
     Expires the single oldest entry in c. Returns true if it removes
     an item, else false.
 */
-FSL_EXPORT bool fsl_acache_expire_oldest(fsl_acache * c);
+bool fsl__acache_expire_oldest(fsl__acache * c);
 
 /** @internal
 
@@ -17717,14 +17773,14 @@ FSL_EXPORT bool fsl_acache_expire_oldest(fsl_acache * c);
     blob is normally semantically illegal but is not strictly illegal
     for this cache's purposes.
 */
-FSL_EXPORT int fsl_acache_insert(fsl_acache * c, fsl_id_t rid, fsl_buffer *pBlob);
+int fsl__acache_insert(fsl__acache * c, fsl_id_t rid, fsl_buffer *pBlob);
 
 /** @internal
 
     Frees all memory held by c, and clears out c's state, but does
     not free c. Results are undefined if !c.
 */
-FSL_EXPORT void fsl_acache_clear(fsl_acache * c);
+void fsl__acache_clear(fsl__acache * c);
 
 /** @internal
 
@@ -17741,7 +17797,7 @@ FSL_EXPORT void fsl_acache_clear(fsl_acache * c);
     assert() in debug builds and returns FSL_RC_CONSISTENCY in
     non-debug builds. That doesn't happen in real life, though.
 */
-FSL_EXPORT int fsl_acache_check_available(fsl_cx * f, fsl_id_t rid);
+int fsl__acache_check_available(fsl_cx * f, fsl_id_t rid);
 
 /** @internal
 
@@ -17798,24 +17854,24 @@ FSL_EXPORT int fsl_acache_check_available(fsl_cx * f, fsl_id_t rid);
     however, know the UUID of the decompressed content unless the
     client passes it in to us.
 
-    @see fsl_content_put()
+    @see fsl__content_put()
 */
-FSL_EXPORT int fsl_content_put_ex( fsl_cx * const f,
-                                   fsl_buffer const * pBlob,
-                                   fsl_uuid_cstr zUuid, fsl_id_t srcId,
-                                   fsl_size_t uncompSize, bool isPrivate,
-                                   fsl_id_t * outRid);
+int fsl__content_put_ex( fsl_cx * const f,
+                        fsl_buffer const * pBlob,
+                        fsl_uuid_cstr zUuid, fsl_id_t srcId,
+                        fsl_size_t uncompSize, bool isPrivate,
+                        fsl_id_t * outRid);
 /** @internal
 
-    Equivalent to fsl_content_put_ex(f,pBlob,NULL,0,0,0,newRid).
+    Equivalent to fsl__content_put_ex(f,pBlob,NULL,0,0,0,newRid).
 
     This must only be used for saving raw (non-delta) content.
 
-    @see fsl_content_put_ex()
+    @see fsl__content_put_ex()
 */
-FSL_EXPORT int fsl_content_put( fsl_cx * const f,
-                                fsl_buffer const * pBlob,
-                                fsl_id_t * newRid);
+int fsl__content_put( fsl_cx * const f,
+                     fsl_buffer const * pBlob,
+                     fsl_id_t * newRid);
 
 
 /** @internal
@@ -17830,14 +17886,14 @@ FSL_EXPORT int fsl_content_put( fsl_cx * const f,
     content operations. This function treats already unexpanded
     content as success.
 
-    @see fsl_content_deltify()
+    @see fsl__content_deltify()
 */
-FSL_EXPORT int fsl_content_undeltify(fsl_cx * const f, fsl_id_t rid);
+int fsl__content_undeltify(fsl_cx * const f, fsl_id_t rid);
 
 
 /** @internal
 
-    The converse of fsl_content_undeltify(), this replaces the storage
+    The converse of fsl__content_undeltify(), this replaces the storage
     of the given blob record so that it is a delta of srcid.
 
     If rid is already a delta from some other place then no
@@ -17867,10 +17923,10 @@ FSL_EXPORT int fsl_content_undeltify(fsl_cx * const f, fsl_id_t rid);
     Returns 0 if a delta is successfully made or none needs to be
     made, non-0 on error.
 
-    @see fsl_content_undeltify()
+    @see fsl__content_undeltify()
 */
-FSL_EXPORT int fsl_content_deltify(fsl_cx * f, fsl_id_t rid,
-                                   fsl_id_t srcid, bool force);
+int fsl__content_deltify(fsl_cx * f, fsl_id_t rid,
+                        fsl_id_t srcid, bool force);
 
 
 /** @internal
@@ -17886,8 +17942,8 @@ FSL_EXPORT int fsl_content_deltify(fsl_cx * f, fsl_id_t rid,
     then the caller will have to find the record id himself by using
     the UUID (see fsl_uuid_to_rid()).
 */
-FSL_EXPORT int fsl_content_new( fsl_cx * f, fsl_uuid_cstr uuid, bool isPrivate,
-                                fsl_id_t * newId );
+int fsl__content_new( fsl_cx * f, fsl_uuid_cstr uuid, bool isPrivate,
+                     fsl_id_t * newId );
 
 /** @internal
 
@@ -17899,21 +17955,21 @@ FSL_EXPORT int fsl_content_new( fsl_cx * f, fsl_uuid_cstr uuid, bool isPrivate,
     (e.g. FSL_RC_DB) may indicate that db is not a repo. On error
     db's error state may be updated.
 */
-FSL_EXPORT int fsl_repo_leaf_check(fsl_cx * f, fsl_id_t pid);  
+int fsl__repo_leafcheck(fsl_cx * f, fsl_id_t pid);  
 
 /** @internal
 
     Schedules a leaf check for "rid" and its parents. Returns 0 on
     success.
 */
-FSL_EXPORT int fsl_repo_leaf_eventually_check( fsl_cx * f, fsl_id_t rid);
+int fsl__repo_leafeventually_check( fsl_cx * f, fsl_id_t rid);
 
 /** @internal
 
     Perform all pending leaf checks. Returns 0 on success or if it
     has nothing to do.
 */
-FSL_EXPORT int fsl_repo_leaf_do_pending_checks(fsl_cx *f);
+int fsl__repo_leafdo_pending_checks(fsl_cx *f);
 
 /** @internal
 
@@ -17941,7 +17997,7 @@ FSL_EXPORT int fsl_repo_leaf_do_pending_checks(fsl_cx *f);
     Returns 0 on success, and has a huge number of potential error
     codes.
 */
-FSL_EXPORT int fsl_tag_insert( fsl_cx * f,
+int fsl__tag_insert( fsl_cx * const f,
                     fsl_tagtype_e tagtype,
                     char const * zTag,
                     char const * zValue,
@@ -17954,7 +18010,7 @@ FSL_EXPORT int fsl_tag_insert( fsl_cx * f,
     Propagate all propagatable tags in artifact pid to the children of
     pid. Returns 0 on... non-error. Returns FSL_RC_RANGE if pid<=0.
 */
-FSL_EXPORT int fsl_tag_propagate_all(fsl_cx * f, fsl_id_t pid);
+int fsl__tag_propagate_all(fsl_cx * const f, fsl_id_t pid);
 
 /** @internal
 
@@ -17986,40 +18042,25 @@ FSL_EXPORT int fsl_tag_propagate_all(fsl_cx * f, fsl_id_t pid);
     in debug mode if passed invalid ids (values<=0), a NULL f, or if f has
     no opened repo.
 */
-FSL_EXPORT int fsl_tag_propagate(fsl_cx *f,
-                                 fsl_tagtype_e tagType,
-                                 fsl_id_t pid,
-                                 fsl_id_t tagid,
-                                 fsl_id_t origId,
-                                 const char *zValue,
-                                 double mtime );
-
-/** @internal
-
-    Remove the PGP signature from a raw artifact, if there is one.
-
-    Expects *pz to point to *pn bytes of string memory which might
-    or might not be prefixed by a PGP signature.  If the string is
-    enveloped in a signature, then upon returning *pz will point to
-    the first byte after the end of the PGP header and *pn will
-    contain the length of the content up to, but not including, the
-    PGP footer.
-
-    If *pz does not look like a PGP header then this is a no-op.
-
-    Neither pointer may be NULL and *pz must point to *pn bytes of
-    valid memory. If *pn is initially less than 59, this is a no-op.
-*/
-FSL_EXPORT void fsl_remove_pgp_signature(unsigned char const **pz, fsl_size_t *pn);
+int fsl__tag_propagate(fsl_cx * const f,
+                      fsl_tagtype_e tagType,
+                      fsl_id_t pid,
+                      fsl_id_t tagid,
+                      fsl_id_t origId,
+                      const char *zValue,
+                      double mtime );
 
 /** @internal
 
     Clears the "seen" cache used by manifest parsing. Should be
     called by routines which initialize parsing, but not until their
     work has finished all parsing (so that recursive parsing can
-    use it).
+    use that cache).
+
+    If freeMemory is true the cache's list memory is freed, otherwise
+    the cache is reset for reuse without clearing its memory.
 */
-FSL_EXPORT void fsl_cx_clear_mf_seen(fsl_cx * f);
+void fsl__cx_clear_mf_seen(fsl_cx * const f, bool freeMemory);
 
 /** @internal
 
@@ -18033,7 +18074,7 @@ FSL_EXPORT void fsl_cx_clear_mf_seen(fsl_cx * f);
 
     This function does not return.
 */
-FSL_EXPORT void fsl_fatal( int code, char const * fmt, ... )
+void fsl__fatal( int code, char const * fmt, ... )
 #ifdef __GNUC__
   __attribute__ ((noreturn))
 #endif
@@ -18052,7 +18093,7 @@ FSL_EXPORT void fsl_fatal( int code, char const * fmt, ... )
     In debug builds, this function asserts that no pointer arguments
     are NULL and that f has an opened repository.
 */
-FSL_EXPORT int fsl_repo_filename_fnid2( fsl_cx * f, char const * filename,
+int fsl__repo_filename_fnid2( fsl_cx * f, char const * filename,
                              fsl_id_t * rv, bool createNew );
 
 
@@ -18062,7 +18103,7 @@ FSL_EXPORT int fsl_repo_filename_fnid2( fsl_cx * f, char const * filename,
     intact. If alsoErrorState is true then the error state is also
     freed, else it is kept as well.
 */
-FSL_EXPORT void fsl_db_clear_strings(fsl_db * const db, bool alsoErrorState );
+void fsl__db_clear_strings(fsl_db * const db, bool alsoErrorState );
 
 /** @internal
 
@@ -18071,7 +18112,7 @@ FSL_EXPORT void fsl_db_clear_strings(fsl_db * const db, bool alsoErrorState );
     appears to not be a repository. Results are undefined if db is
     NULL or not opened.
 */
-FSL_EXPORT int fsl_db_repo_verify_schema(fsl_db * db);
+int fsl__db_repo_verify_schema(fsl_db * db);
 
 
 /** @internal
@@ -18085,24 +18126,24 @@ FSL_EXPORT int fsl_db_repo_verify_schema(fsl_db * db);
     as files in a repo (like this project's repository does, storing
     artifacts from *other* projects for testing purposes).
 */
-enum fsl_phantom_e {
+enum fsl__phantom_e {
 /**
-   Indicates to fsl_uuid_to_rid2() that no phantom artifact
+   Indicates to fsl__uuid_to_rid2() that no phantom artifact
    should be created.
 */
 FSL_PHANTOM_NONE = 0,
 /**
-   Indicates to fsl_uuid_to_rid2() that a public phantom
+   Indicates to fsl__uuid_to_rid2() that a public phantom
    artifact should be created if no artifact is found.
 */
 FSL_PHANTOM_PUBLIC = 1,
 /**
-   Indicates to fsl_uuid_to_rid2() that a private phantom
+   Indicates to fsl__uuid_to_rid2() that a private phantom
    artifact should be created if no artifact is found.
 */
 FSL_PHANTOM_PRIVATE = 2
 };
-typedef enum fsl_phantom_e fsl_phantom_e;
+typedef enum fsl__phantom_e fsl__phantom_e;
 
 /** @internal
 
@@ -18116,13 +18157,13 @@ typedef enum fsl_phantom_e fsl_phantom_e;
     just like fsl_uuid_to_rid().
 
     Returns a positive value on success, 0 if it finds no entry and
-    mode==FSL_PHANTOM_NONE, and a negative value on error (e.g.  if
+    mode==FSL_PHANTOM_NONE, and a negative value on error (e.g. if
     fsl_is_uuid(uuid) returns false). Errors which happen after
     argument validation will "most likely" update f's error state
     with details.
 */
-FSL_EXPORT fsl_id_t fsl_uuid_to_rid2( fsl_cx * f, fsl_uuid_cstr uuid,
-                           fsl_phantom_e mode );
+fsl_id_t fsl__uuid_to_rid2( fsl_cx * const f, fsl_uuid_cstr uuid,
+                           fsl__phantom_e mode );
 
 /** @internal
 
@@ -18134,19 +18175,19 @@ FSL_EXPORT fsl_id_t fsl_uuid_to_rid2( fsl_cx * f, fsl_uuid_cstr uuid,
     allocation error while appending rid to the internal to-verify
     queue.
 
-    @see fsl_repo_verify_at_commit()
+    @see fsl__repo_verify_at_commit()
     @see fsl_repo_verify_cancel()
 */
-FSL_EXPORT int fsl_repo_verify_before_commit( fsl_cx * f, fsl_id_t rid );
+int fsl__repo_verify_before_commit( fsl_cx * const f, fsl_id_t rid );
 
 /** @internal
 
     Clears f's verify-at-commit list of RIDs.
 
-    @see fsl_repo_verify_at_commit()
-    @see fsl_repo_verify_before_commit()
+    @see fsl__repo_verify_at_commit()
+    @see fsl__repo_verify_before_commit()
 */
-FSL_EXPORT void fsl_repo_verify_cancel( fsl_cx * f );
+void fsl_repo_verify_cancel( fsl_cx * const f );
 
 /** @internal
 
@@ -18164,9 +18205,9 @@ FSL_EXPORT void fsl_repo_verify_cancel( fsl_cx * f );
     will be updated.
 
     @see fsl_repo_verify_cancel()
-    @see fsl_repo_verify_before_commit()
+    @see fsl__repo_verify_before_commit()
 */
-FSL_EXPORT int fsl_repo_verify_at_commit( fsl_cx * f );
+int fsl__repo_verify_at_commit( fsl_cx * const f );
 
 /** @internal
 
@@ -18177,7 +18218,7 @@ FSL_EXPORT int fsl_repo_verify_at_commit( fsl_cx * f );
 
     Returns 0 on success.
 */
-FSL_EXPORT int fsl_repo_shun_artifacts(fsl_cx * f);
+int fsl__repo_shun_artifacts(fsl_cx * const f);
 
 /** @internal.
 
@@ -18191,7 +18232,7 @@ FSL_EXPORT int fsl_repo_shun_artifacts(fsl_cx * f);
     Reminder to self: this is part of the infrastructure for copying
     config state from an existing repo when creating new repo.
 */
-FSL_EXPORT char *fsl_config_inop_rhs(int iMask);
+char *fsl__config_inop_rhs(int iMask);
 
 /** @internal
 
@@ -18204,7 +18245,7 @@ FSL_EXPORT char *fsl_config_inop_rhs(int iMask);
     Reminder to self: this is part of the infrastructure for copying
     config state from an existing repo when creating new repo.
 */
-FSL_EXPORT char *fsl_db_setting_inop_rhs();
+char *fsl_db_setting_inop_rhs();
 
 /** @internal
 
@@ -18217,7 +18258,7 @@ FSL_EXPORT char *fsl_db_setting_inop_rhs();
 
     Returns 0 on success.
 */
-FSL_EXPORT int fsl_cx_ticket_create_table(fsl_cx * const f);
+int fsl__cx_ticket_create_table(fsl_cx * const f);
 
 /** @internal
 
@@ -18229,7 +18270,7 @@ FSL_EXPORT int fsl_cx_ticket_create_table(fsl_cx * const f);
 
     Results are undefined if li is NULL.
 */
-FSL_EXPORT void fsl_card_J_list_free( fsl_list * li, bool alsoListMem );
+void fsl__card_J_list_free( fsl_list * li, bool alsoListMem );
 
 /** @internal
 
@@ -18265,7 +18306,7 @@ FSL_CARD_J_BOTH = FSL_CARD_J_TICKET | FSL_CARD_J_CHNG
 
     @see fsl_cx::ticket::customFields
 */
-FSL_EXPORT int fsl_cx_ticket_load_fields(fsl_cx * f, bool forceReload);
+int fsl__cx_ticket_load_fields(fsl_cx * const f, bool forceReload);
 
 /** @internal
 
@@ -18276,7 +18317,7 @@ FSL_EXPORT int fsl_cx_ticket_load_fields(fsl_cx * f, bool forceReload);
     This routine expects to get passed (fsl_card_J**) (namely from
     fsl_list entries), and will not work on an array of J-cards.
 */
-FSL_EXPORT int fsl_qsort_cmp_J_cards( void const * lhs, void const * rhs );
+int fsl__qsort_cmp_J_cards( void const * lhs, void const * rhs );
 
 /** @internal
 
@@ -18292,7 +18333,7 @@ FSL_EXPORT int fsl_qsort_cmp_J_cards( void const * lhs, void const * rhs );
     If a checkout is opened, global config (if opened) and the
     repo are updated to point to the checked-out db.
 */
-FSL_EXPORT int fsl_repo_record_filename(fsl_cx * f);
+int fsl__repo_record_filename(fsl_cx * const f);
 
 /** @internal
 
@@ -18307,9 +18348,9 @@ FSL_EXPORT int fsl_repo_record_filename(fsl_cx * f);
     checkin, and otherwise as needed, and so calling it from other
     code is normally not necessary.
 
-    @see fsl_ckout_version_write()
+    @see fsl__ckout_version_write()
 */
-FSL_EXPORT int fsl_ckout_version_fetch( fsl_cx *f );
+int fsl__ckout_version_fetch( fsl_cx * const f );
 
 /** @internal
 
@@ -18330,11 +18371,11 @@ FSL_EXPORT int fsl_ckout_version_fetch( fsl_cx *f );
     removes any such files which themselves are not part of the
     current checkout.
 
-    @see fsl_ckout_version_fetch()
+    @see fsl__ckout_version_fetch()
     @see fsl_cx_ckout_version_set()
 */
-FSL_EXPORT int fsl_ckout_version_write( fsl_cx *f, fsl_id_t vid,
-                                        fsl_uuid_cstr uuid );
+int fsl__ckout_version_write( fsl_cx * const f, fsl_id_t vid,
+                             fsl_uuid_cstr uuid );
 
 /**
    @internal
@@ -18375,8 +18416,8 @@ FSL_EXPORT int fsl_ckout_version_write( fsl_cx *f, fsl_id_t vid,
    case unless maybe we change it to a callback, which seems like
    overkill for our use cases.
 */
-FSL_EXPORT int fsl_vfile_to_ckout(fsl_cx * f, fsl_id_t vfileId,
-                                  int * wasWritten);
+int fsl__vfile_to_ckout(fsl_cx * const f, fsl_id_t vfileId,
+                       int * wasWritten);
 
 /** @internal
 
@@ -18384,7 +18425,7 @@ FSL_EXPORT int fsl_vfile_to_ckout(fsl_cx * f, fsl_id_t vfileId,
     and ':' == zFile[1] then this returns zFile+2,
     otherwise it returns zFile.
 */
-FSL_EXPORT char * fsl_file_without_drive_letter(char * zFile);
+char * fsl__file_without_drive_letter(char * zFile);
 
 /** @internal
 
@@ -18413,7 +18454,7 @@ FSL_EXPORT char * fsl_file_without_drive_letter(char * zFile);
     operation. It degrades to O(N) if out-of-lexical-order searches
     are performed.
 */
-FSL_EXPORT fsl_card_F * fsl_deck_F_seek(fsl_deck * const d, const char *zName);
+fsl_card_F * fsl__deck_F_seek(fsl_deck * const d, const char *zName);
 
 /** @internal
 
@@ -18422,7 +18463,7 @@ FSL_EXPORT fsl_card_F * fsl_deck_F_seek(fsl_deck * const d, const char *zName);
     (unspecified, unconfigurable) size then it is trimmed to that
     size.
 */
-FSL_EXPORT void fsl_cx_content_buffer_yield(fsl_cx * const f);
+void fsl__cx_content_buffer_yield(fsl_cx * const f);
 
 /** @internal
 
@@ -18440,8 +18481,8 @@ FSL_EXPORT void fsl_cx_content_buffer_yield(fsl_cx * const f);
    is marked as private, this function returns 0 and makes no changes
    to the db.
 */
-FSL_EXPORT int fsl_search_doc_touch(fsl_cx * const f, fsl_satype_e saType,
-                                    fsl_id_t rid, const char * docName);
+int fsl__search_doc_touch(fsl_cx * const f, fsl_satype_e saType,
+                         fsl_id_t rid, const char * docName);
 
 /** @internal
 
@@ -18458,8 +18499,8 @@ FSL_EXPORT int fsl_search_doc_touch(fsl_cx * const f, fsl_satype_e saType,
 
    @deprecated Use fsl_diff_v2_raw() instead.
 */
-FSL_EXPORT int fsl_diff_text_raw(fsl_buffer const *p1, fsl_buffer const *p2,
-                                 int diffFlags, int ** outRaw);
+int fsl__diff_text_raw(fsl_buffer const *p1, fsl_buffer const *p2,
+                      int diffFlags, int ** outRaw);
 
 /** @internal
 
@@ -18471,14 +18512,14 @@ FSL_EXPORT int fsl_diff_text_raw(fsl_buffer const *p1, fsl_buffer const *p2,
    separators. nameLen is the length of zPath. If negative, fsl_strlen()
    is used to determine its length.
 */
-FSL_EXPORT bool fsl_is_reserved_fn_windows(const char *zPath, fsl_int_t nameLen);
+bool fsl__is_reserved_fn_windows(const char *zPath, fsl_int_t nameLen);
 
 /** @internal
 
    Clears any pending merge state from the checkout db's vmerge table.
    Returns 0 on success.
 */
-FSL_EXPORT int fsl_ckout_clear_merge_state( fsl_cx *f );
+int fsl__ckout_clear_merge_state( fsl_cx *f );
 
 
 /** @internal
@@ -18493,7 +18534,7 @@ FSL_EXPORT int fsl_ckout_clear_merge_state( fsl_cx *f );
    If dropIfExists is false and the schema appears to already exists
    (without actually validating its validity), 0 is returned.
 */
-FSL_EXPORT int fsl_ckout_install_schema(fsl_cx *f, bool dropIfExists);
+int fsl_ckout_install_schema(fsl_cx * const f, bool dropIfExists);
 
 /** @internal
 
@@ -18515,7 +18556,7 @@ FSL_EXPORT int fsl_ckout_install_schema(fsl_cx *f, bool dropIfExists);
    There are any number of valid reasons removal of a directory might
    fail, and this routine stops at the first one which does.
 */
-FSL_EXPORT unsigned int fsl_ckout_rm_empty_dirs(fsl_cx * f, fsl_buffer * tgtDir);
+unsigned int fsl_ckout_rm_empty_dirs(fsl_cx * const f, fsl_buffer * const tgtDir);
 
 /** @internal
 
@@ -18534,7 +18575,7 @@ FSL_EXPORT unsigned int fsl_ckout_rm_empty_dirs(fsl_cx * f, fsl_buffer * tgtDir)
    @see fsl_is_rooted_in_ckout()
    @see fsl_rm_empty_dirs()
 */
-FSL_EXPORT int fsl_ckout_rm_empty_dirs_for_file(fsl_cx * f, char const *zAbsPath);
+int fsl_ckout_rm_empty_dirs_for_file(fsl_cx * const f, char const *zAbsPath);
 
 /** @internal
 
@@ -18543,7 +18584,7 @@ FSL_EXPORT int fsl_ckout_rm_empty_dirs_for_file(fsl_cx * f, char const *zAbsPath
     else this has no side effects. Returns 0 on success, non-0 if
     there is an error while writing to the repository config.
 */
-FSL_EXPORT int fsl_cx_update_seen_delta_mf(fsl_cx *f);
+int fsl__cx_update_seen_delta_deck(fsl_cx * const f);
 
 /** @internal
 
@@ -18552,7 +18593,7 @@ FSL_EXPORT int fsl_cx_update_seen_delta_mf(fsl_cx *f);
    Returns the next available buffer from f->scratchpads. Fatally
    aborts if there are no free buffers because "that should not
    happen."  Calling this obligates the caller to eventually pass
-   its result to fsl_cx_scratchpad_yield().
+   its result to fsl__cx_scratchpad_yield().
 
    This function guarantees the returned buffer's 'used' member will be
    set to 0.
@@ -18560,21 +18601,20 @@ FSL_EXPORT int fsl_cx_update_seen_delta_mf(fsl_cx *f);
    Maintenance note: the number of buffers is hard-coded in the
    fsl_cx::scratchpads anonymous struct.
 */
-FSL_EXPORT fsl_buffer * fsl_cx_scratchpad(fsl_cx *f);
+fsl_buffer * fsl__cx_scratchpad(fsl_cx * const f);
 
 /** @internal
 
    Very, VERY internal.
 
-   "Yields" a buffer which was returned from fsl_cx_scratchpad(),
+   "Yields" a buffer which was returned from fsl__cx_scratchpad(),
    making it available for re-use. The caller must treat the buffer as
    if this routine frees it: using the buffer after having passed it
    to this function will internally be flagged as explicit misuse and
    will lead to a fatal crash the next time that buffer is fetched via
-   fsl_cx_scratchpad(). So don't do that.
+   fsl__cx_scratchpad(). So don't do that.
 */
-FSL_EXPORT void fsl_cx_scratchpad_yield(fsl_cx *f, fsl_buffer * b);
-
+void fsl__cx_scratchpad_yield(fsl_cx * const f, fsl_buffer * const b);
 
 /** @internal
 
@@ -18594,14 +18634,14 @@ FSL_EXPORT void fsl_cx_scratchpad_yield(fsl_cx *f, fsl_buffer * b);
    contain all required cards for its d->type value. It may return
    various other codes from the many routines it delegates work to.
 
-   Crosslinking of ticket artifacts is currently (2021-03) missing.
+   Crosslinking of ticket artifacts is currently (2021-11) missing.
 
    Design note: d "really should" be const here but some internals
    (d->F.cursor and delayed baseline loading) prohibit it.
 
-   @see fsl_deck_crosslink_one()
+   @see fsl__deck_crosslink_one()
 */
-FSL_EXPORT int fsl_deck_crosslink( fsl_deck /* const */ * const d );
+int fsl__deck_crosslink( fsl_deck /* const */ * const d );
 
 /** @internal
 
@@ -18611,13 +18651,13 @@ FSL_EXPORT int fsl_deck_crosslink( fsl_deck /* const */ * const d );
    This is a convience form of crosslinking which must only be used
    when a single deck (and only a single deck) is to be crosslinked.
    This function wraps the crosslinking in fsl_crosslink_begin()
-   and fsl_crosslink_end(), but otherwise behaves the same as
-   fsl_deck_crosslink(). If crosslinking fails, any in-progress
+   and fsl__crosslink_end(), but otherwise behaves the same as
+   fsl__deck_crosslink(). If crosslinking fails, any in-progress
    transaction will be flagged as failed.
 
    Returns 0 on success.
 */
-FSL_EXPORT int fsl_deck_crosslink_one( fsl_deck * const d );
+int fsl__deck_crosslink_one( fsl_deck * const d );
 
 /** @internal
 
@@ -18643,7 +18683,7 @@ FSL_EXPORT int fsl_deck_crosslink_one( fsl_deck * const d );
    Returns 0 on success. On error f's error state is updated with
    information about the problem.
 */
-FSL_EXPORT int fsl_ckout_safe_file_check(fsl_cx *f, char const * zFilename);
+int fsl__ckout_safe_file_check(fsl_cx * const f, char const * zFilename);
 
 /** @internal
    UNTESTED!
@@ -18673,8 +18713,8 @@ FSL_EXPORT int fsl_ckout_safe_file_check(fsl_cx *f, char const * zFilename);
    by only supporting them in the way fossil does for platforms which
    do not support symlinks.
 */
-FSL_EXPORT int fsl_ckout_symlink_create(fsl_cx * f, char const *zTgtFile,
-                                        char const * zLinkFile);
+int fsl__ckout_symlink_create(fsl_cx * const f, char const *zTgtFile,
+                             char const * zLinkFile);
 
 
 /**
@@ -18698,40 +18738,40 @@ FSL_EXPORT int fsl_ckout_symlink_create(fsl_cx * f, char const *zTgtFile,
    Space to hold *aiChng is obtained from fsl_malloc() and must
    be released by the caller.
 */
-FSL_EXPORT int fsl__find_filename_changes(fsl_cx * const f,
-                                          fsl_id_t iFrom,
-                                          fsl_id_t iTo,
-                                          bool revOK,
-                                          uint32_t *pnChng,
-                                          fsl_id_t **aiChng);
+int fsl__find_filename_changes(fsl_cx * const f,
+                               fsl_id_t iFrom,
+                               fsl_id_t iTo,
+                               bool revOK,
+                               uint32_t *pnChng,
+                               fsl_id_t **aiChng);
 
 /**
    Bitmask of file change types for use with
-   fsl_is_locally_modified().
+   fsl__is_locally_modified().
  */
-enum fsl_localmod_e {
+enum fsl__localmod_e {
 /** Sentinel value. */
-FSL_LOCALMOD_NONE = 0,
+FSL__LOCALMOD_NONE = 0,
 /**
    Permissions changed.
 */
-FSL_LOCALMOD_PERM = 0x01,
+FSL__LOCALMOD_PERM = 0x01,
 /**
    File size or hash (i.e. content) differ.
 */
-FSL_LOCALMOD_CONTENT = 0x02,
+FSL__LOCALMOD_CONTENT = 0x02,
 /**
    The file type was switched between symlink and normal file.  In
    this case, no check for content change, beyond the file size
    change, is performed.
 */
-FSL_LOCALMOD_LINK = 0x04,
+FSL__LOCALMOD_LINK = 0x04,
 /**
    File was not found in the local checkout.
  */
-FSL_LOCALMOD_NOTFOUND = 0x10
+FSL__LOCALMOD_NOTFOUND = 0x10
 };
-typedef enum fsl_localmod_e fsl_localmod_e;
+typedef enum fsl__localmod_e fsl__localmod_e;
 /** @internal
 
    Checks whether the given file has been locally modified compared to
@@ -18760,23 +18800,23 @@ typedef enum fsl_localmod_e fsl_localmod_e;
    checking.
 
    If isModified is not NULL then on success it is set to a bitmask of
-   values from the fsl_localmod_e enum specifying the type(s) of
+   values from the fsl__localmod_e enum specifying the type(s) of
    change(s) detected:
 
-   - FSL_LOCALMOD_PERM = permissions changed.
+   - FSL__LOCALMOD_PERM = permissions changed.
 
-   - FSL_LOCALMOD_CONTENT = file size or hash (i.e. content) differ.
+   - FSL__LOCALMOD_CONTENT = file size or hash (i.e. content) differ.
 
-   - FSL_LOCALMOD_LINK = the file type was switched between symlink
+   - FSL__LOCALMOD_LINK = the file type was switched between symlink
      and normal file. In this case, no check for content change,
      beyond the file size change, is performed.
 
-   - FSL_LOCALMOD_NOFOUND = file was not found in the local checkout.
+   - FSL__LOCALMOD_NOFOUND = file was not found in the local checkout.
 
    Noting that:
 
-   - Combined values of (FSL_LOCALMOD_PERM | FSL_LOCALMOD_CONTENT) are
-   possible, but FSL_LOCALMOD_NOFOUND will never be combined with one
+   - Combined values of (FSL__LOCALMOD_PERM | FSL__LOCALMOD_CONTENT) are
+   possible, but FSL__LOCALMOD_NOFOUND will never be combined with one
    of the other values.
 
    If stat() fails for any reason other than file-not-found
@@ -18806,13 +18846,13 @@ typedef enum fsl_localmod_e fsl_localmod_e;
    Internal detail, not relevant for clients: this updates f's
    cache stat entry.
 */
-FSL_EXPORT int fsl_is_locally_modified(fsl_cx * f,
-                                       const char * zFilename,
-                                       fsl_size_t fileSize,
-                                       const char * zOrigHash,
-                                       fsl_int_t zOrigHashLen,
-                                       fsl_fileperm_e origPerm,
-                                       int * isModified);
+int fsl__is_locally_modified(fsl_cx * const f,
+                            const char * zFilename,
+                            fsl_size_t fileSize,
+                            const char * zOrigHash,
+                            fsl_int_t zOrigHashLen,
+                            fsl_fileperm_e origPerm,
+                            int * isModified);
 
 /** @internal
 
@@ -18823,7 +18863,61 @@ FSL_EXPORT int fsl_is_locally_modified(fsl_cx * f,
    which is not cleaned up by this routine. Unknown letters are simply
    ignored.
 */
-FSL_EXPORT void fsl_deck_clean_cards(fsl_deck * d, char const * letters);
+void fsl__deck_clean_cards(fsl_deck * const d, char const * letters);
+
+/** @internal
+
+    This starts a transaction (possibly nested) on the repository db
+    and initializes some temporary db state needed for the
+    crosslinking certain artifact types. It "should" (see below) be
+    called at the start of the crosslinking process. Crosslinking
+    *can* work without this but certain steps for certain (subject to
+    change) artifact types will be skipped, possibly leading to
+    unexpected timeline data or similar funkiness. No permanent
+    SCM-relevant state will be missing, but the timeline might not be
+    updated and tickets might not be fully processed. This should be
+    used before crosslinking any artifact types, but will only have
+    significant side effects for certain (subject to change) types.
+
+    Returns 0 on success.
+
+    If it returns 0 then the caller is OBLIGATED to either 1) call
+    fsl__crosslink_end() or 2) call fsl_db_transaction_rollback() and
+    set f->cache.isCrosslinking to false. This process may install
+    temporary tables and/or triggers, so failing to call one or the
+    other of those will result in misbehavior.
+
+    @see fsl__deck_crosslink()
+*/
+int fsl__crosslink_begin(fsl_cx * const f);
+
+/** @internal
+
+    Must not be called unless fsl_crosslink_begin() has
+    succeeded. This performs crosslink post-processing on certain
+    artifact types and cleans up any temporary db state initialized by
+    fsl__crosslink_begin().
+
+    If the 2nd argument is not 0 then this routine triggers a rollback
+    of the transaction started by fsl__crosslink_begin() and
+    propagates any pending error code from f or (if f has no error
+    code) from f's db handle.
+
+    The second argument is intended to be the value of any pending
+    result code (0 or otherwise) from any work done _after_
+    fsl__crosslink_begin() succeeded. If passed 0, it assumes that
+    there is no propagating error state and will attempt to complete
+    the crosslinking process. If passed non-0, it triggers a rollback
+    and unsets the f->cache.isCrosslinking flag, but does no
+    additional work, then returns resultCode.
+
+    Returns 0 on success. On error it initiates (or propagates) a
+    rollback for the current transaction. If called when a rollback is
+    pending, it unsets the crosslink-is-running flag and returns the
+    propagating result code.
+*/
+int fsl__crosslink_end(fsl_cx * const f, int resultCode);
+
 
 /** @internal
 
@@ -18853,7 +18947,8 @@ FSL_EXPORT void fsl_deck_clean_cards(fsl_deck * d, char const * letters);
 
    @see fsl_ckout_fingerprint_check()
 */
-FSL_EXPORT int fsl_repo_fingerprint_search(fsl_cx *f, fsl_id_t rcvid, char ** zOut);
+int fsl__repo_fingerprint_search(fsl_cx * const f, fsl_id_t rcvid,
+                                char ** zOut);
 
 /**
    A context for running a raw diff.
@@ -18868,7 +18963,7 @@ FSL_EXPORT int fsl_repo_fingerprint_search(fsl_cx *f, fsl_id_t rcvid, char ** zO
    The triples repeat until all lines of both aFrom and aTo are accounted
    for.
 */
-struct fsl_diff_cx {
+struct fsl__diff_cx {
   /*TODO unsigned*/ int *aEdit;        /* Array of copy/delete/insert triples */
   /*TODO unsigned*/ int nEdit;         /* Number of integers (3x num of triples) in aEdit[] */
   /*TODO unsigned*/ int nEditAlloc;    /* Space allocated for aEdit[] */
@@ -18881,22 +18976,22 @@ struct fsl_diff_cx {
 /**
    Convenience typeef.
 */
-typedef struct fsl_diff_cx fsl_diff_cx;
-/** Initialized-with-defaults fsl_diff_cx structure, intended for
+typedef struct fsl__diff_cx fsl__diff_cx;
+/** Initialized-with-defaults fsl__diff_cx structure, intended for
     const-copy initialization. */
-#define fsl_diff_cx_empty_m {\
+#define fsl__diff_cx_empty_m {\
   NULL,0,0,NULL,0,NULL,0,fsl_dline_cmp \
 }
-/** Initialized-with-defaults fsl_diff_cx structure, intended for
+/** Initialized-with-defaults fsl__diff_cx structure, intended for
     non-const copy initialization. */
-extern const fsl_diff_cx fsl_diff_cx_empty;
+extern const fsl__diff_cx fsl__diff_cx_empty;
 
 
 
 /** @internal
 
     Compute the differences between two files already loaded into
-    the fsl_diff_cx structure.
+    the fsl__diff_cx structure.
    
     A divide and conquer technique is used.  We look for a large
     block of common text that is in the middle of both files.  Then
@@ -18911,21 +19006,21 @@ extern const fsl_diff_cx fsl_diff_cx_empty;
    
     Returns 0 on succes, FSL_RC_OOM on an allocation error.
 */
-int fsl__diff_all(fsl_diff_cx * const p);
+int fsl__diff_all(fsl__diff_cx * const p);
 
 /** @internal
  */
-void fsl__diff_optimize(fsl_diff_cx * const p);
+void fsl__diff_optimize(fsl__diff_cx * const p);
 
 /** @internal
  */
-void fsl__diff_cx_clean(fsl_diff_cx * const cx);
+void fsl__diff_cx_clean(fsl__diff_cx * const cx);
 
 /** @internal
 
     Undocumented. For internal debugging only.
  */
-void fsl__dump_triples(fsl_diff_cx const * const p,
+void fsl__dump_triples(fsl__diff_cx const * const p,
                        char const * zFile, int ln );
 
 /** @internal
@@ -18937,15 +19032,36 @@ void fsl__dump_triples(fsl_diff_cx const * const p,
 int fsl__shunned_remove(fsl_cx * const f);
 
 
+
+/** @internal
+
+   This is a fossil-specific internal detail not needed by the more
+   generic parts of the fsl_db API. It loops through all "cached"
+   prepared statements for which stmt->role has been assigned a value
+   which bitmasks as true against the given role and finalizes
+   them. If such a statement is currently held by a call to/via
+   fsl_db_prepare_cachedv() then this will NOT finalize that
+   statement, will update db's error state, and return
+   FSL_RC_MISUSE.
+
+   Returns 0 on success.
+
+   As a special case, if role==0 then ALL cached statements are
+   closed, with the caveat that the process will still fail if any
+   statement is currently flagged as active.
+*/
+int fsl__db_cached_clear_role(fsl_db * const db, int role);
+
+
 /** @internal
 
     Maximum length of a line in a text file, in bytes. (2**15 = 32k)
 */
-#define FSL_LINE_LENGTH_MASK_SZ  15
+#define FSL__LINE_LENGTH_MASK_SZ  15
 /** @internal
 
  */
-#define FSL_LINE_LENGTH_MASK     ((1<<FSL_LINE_LENGTH_MASK_SZ)-1)
+#define FSL__LINE_LENGTH_MASK     ((1<<FSL__LINE_LENGTH_MASK_SZ)-1)
 
 #if defined(__cplusplus)
 } /*extern "C"*/
