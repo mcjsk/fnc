@@ -1700,18 +1700,16 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 		goto end;
 	}
 	rc = fsl_stmt_step(s->thread_cx.q);
-	if (rc) {
-		switch (rc) {
-		case FSL_RC_STEP_ROW:
-			rc = 0;
-			break;
-		case FSL_RC_STEP_ERROR:
-			rc = RC(rc, "%s", "fsl_stmt_step");
-			goto end;
-		case FSL_RC_STEP_DONE:
-			rc = RC(FSL_RC_BREAK, "%s", "no matching records");
-			goto end;
-		}
+	switch (rc) {
+	case FSL_RC_STEP_ROW:
+		rc = 0;
+		break;
+	case FSL_RC_STEP_ERROR:
+		rc = RC(rc, "%s", "fsl_stmt_step");
+		break;
+	case FSL_RC_STEP_DONE:
+		rc = RC(FSL_RC_BREAK, "%s", "no matching records");
+		break;
 	}
 
 	s->colour = !fnc_init.nocolour && has_colors();
@@ -7423,9 +7421,8 @@ fnc_conf_get(enum fnc_colour_obj id, bool ls)
 	    "SELECT value FROM config WHERE name=%Q", fnc_conf_enum2str(id));
 
 	if (colour == NULL || ls) {
-		if (!fsl_cx_db_config(f))
-			if (fsl_config_open(f, NULL))  /* DO NOT CLOSE */
-				RC(FSL_RC_DB, "%s", "fsl_config_open");
+		if (fsl_config_open(f, NULL))
+			RC(FSL_RC_DB, "%s", "fsl_config_open");
 		colour_g = fsl_config_get_text(f, FSL_CONFDB_GLOBAL,
 		    fnc_conf_enum2str(id), NULL);
 	}
@@ -7482,11 +7479,9 @@ fnc_conf_set(enum fnc_colour_obj id, const char *val, bool unset, bool global)
 
 	if (global) {
 		int rc = 0;
-		if (!fsl_cx_db_config(f)) {
-			rc = fsl_config_open(f, NULL);
-			if (rc)
-				return RC(rc, "%s", "fsl_config_open");
-		}
+		rc = fsl_config_open(f, NULL);
+		if (rc)
+			return RC(rc, "%s", "fsl_config_open");
 		if (unset)
 			rc = fsl_config_unset(f, FSL_CONFDB_GLOBAL,
 			    fnc_conf_enum2str(id));

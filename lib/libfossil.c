@@ -39,7 +39,7 @@
   Please keep all fsl_XXX_empty initializers in one place (here)
   and lexically sorted.
 */
-const fsl_acache fsl_acache_empty = fsl_acache_empty_m;
+const fsl__acache fsl__acache_empty = fsl__acache_empty_m;
 const fsl_branch_opt fsl_branch_opt_empty = fsl_branch_opt_empty_m;
 const fsl_buffer fsl_buffer_empty = fsl_buffer_empty_m;
 const fsl_card_F fsl_card_F_empty = fsl_card_F_empty_m;
@@ -69,12 +69,12 @@ const fsl_checkin_queue_opt fsl_checkin_queue_opt_empty =
   fsl_checkin_queue_opt_empty_m;
 const fsl_fstat fsl_fstat_empty = fsl_fstat_empty_m;
 const fsl_list fsl_list_empty = fsl_list_empty_m;
-const fsl_mcache fsl_mcache_empty = fsl_mcache_empty_m;
+const fsl__mcache fsl__mcache_empty = fsl__mcache_empty_m;
 const fsl_merge_opt fsl_merge_opt_empty = fsl_merge_opt_empty_m;
 const fsl_outputer fsl_outputer_FILE = fsl_outputer_FILE_m;
 const fsl_outputer fsl_outputer_empty = fsl_outputer_empty_m;
 const fsl_pathfinder fsl_pathfinder_empty = fsl_pathfinder_empty_m;
-const fsl_pq fsl_pq_empty = fsl_pq_empty_m;
+const fsl__pq fsl__pq_empty = fsl__pq_empty_m;
 const fsl_repo_create_opt fsl_repo_create_opt_empty =
   fsl_repo_create_opt_empty_m;
 const fsl_repo_extract_opt fsl_repo_extract_opt_empty =
@@ -161,23 +161,18 @@ int fsl_is_uuid_len(int x){
   }
 }
 void fsl_error_clear( fsl_error * const err ){
-  if(err){
-    fsl_buffer_clear(&err->msg);
-    *err = fsl_error_empty;
-  }
+  fsl_buffer_clear(&err->msg);
+  *err = fsl_error_empty;
 }
 
 void fsl_error_reset( fsl_error * const err ){
-  if(err){
-    err->code = 0;
-    err->msg.used = err->msg.cursor = 0;
-    if(err->msg.mem) err->msg.mem[0] = 0;
-  }
+  err->code = 0;
+  err->msg.used = err->msg.cursor = 0;
+  if(err->msg.mem) err->msg.mem[0] = 0;
 }
 
-
 int fsl_error_copy( fsl_error const * const src, fsl_error * const dest ){
-  if(!src || !dest || (src==dest)) return FSL_RC_MISUSE;
+  if(src==dest) return FSL_RC_MISUSE;
   else {
     int rc = 0;
     dest->msg.used = dest->msg.cursor = 0;
@@ -199,8 +194,7 @@ void fsl_error_move( fsl_error * const lower, fsl_error * const higher ){
 
 int fsl_error_setv( fsl_error * const err, int code, char const * fmt,
                     va_list args ){
-  if(!err) return FSL_RC_MISUSE;
-  else if(!code){ /* clear error state */
+  if(!code){ /* clear error state */
     err->code = 0;
     err->msg.used = err->msg.cursor = 0;
     if(err->msg.mem){
@@ -234,14 +228,11 @@ int fsl_error_set( fsl_error * const err, int code, char const * fmt,
 
 int fsl_error_get( fsl_error const * const err, char const ** str,
                    fsl_size_t * const len ){
-  if(!err) return FSL_RC_MISUSE;
-  else{
-    if(str) *str = err->msg.used
-      ? (char const *)err->msg.mem
-      : NULL;
-    if(len) *len = err->msg.used;
-    return err->code;
-  }
+  if(str) *str = err->msg.used
+            ? (char const *)err->msg.mem
+            : NULL;
+  if(len) *len = err->msg.used;
+  return err->code;
 }
 
 
@@ -405,8 +396,8 @@ char * fsl_strdup( char const * src ){
   return fsl_strndup(src, -1);
 }
 
-size_t fsl_strlcpy(char *restrict dst, const char *restrict src, size_t dstsz){
-  size_t offset = 0;
+fsl_size_t fsl_strlcpy(char * dst, const char * src, fsl_size_t dstsz){
+  fsl_size_t offset = 0;
 
   if(dstsz<1){
     goto end;
@@ -425,8 +416,8 @@ end:
   return offset;
 }
 
-size_t fsl_strlcat(char *restrict dst, const char *restrict src, size_t dstsz){
-  size_t offset;
+fsl_size_t fsl_strlcat(char *dst, const char *src, fsl_size_t dstsz){
+  fsl_size_t offset;
   int dstlen, srclen, idx = 0;
 
   offset = dstlen = fsl_strlen(dst);
@@ -509,7 +500,7 @@ bool fsl_str_bool( char const * s ){
   }
 }
 
-char * fsl_guess_user_name(){
+char * fsl_user_name_guess(){
   char const ** e;
   static char const * list[] = {
   "FOSSIL_USER",
@@ -542,14 +533,14 @@ char * fsl_guess_user_name(){
   return rv;
 }
 
-void fsl_fatal( int code, char const * fmt, ... ){
+void fsl__fatal( int code, char const * fmt, ... ){
   static bool inFatal = false;
   if(inFatal){
     /* This can only happen if the fsl_appendv() bits
        call this AND trigger it via fsl_fprintf() below,
        neither of which is currently the case.
     */
-    assert(!"fsl_fatal() called recursively.");
+    assert(!"fsl__fatal() called recursively.");
     abort();
   }else{
     va_list args;
@@ -949,7 +940,7 @@ char fsl_isatty(int fd){
   return isatty(fd) ? 1 : 0;
 }
 
-bool fsl_is_reserved_fn_windows(const char *zPath, fsl_int_t nameLen){
+bool fsl__is_reserved_fn_windows(const char *zPath, fsl_int_t nameLen){
   static const char *const azRes[] = {
     "CON", "PRN", "AUX", "NUL", "COM", "LPT"
   };
@@ -980,7 +971,7 @@ bool fsl_is_reserved_fn(const char *zFilename, fsl_int_t nameLen){
   int gotSuffix = 0;
   assert( zFilename && "API misuse" );
 #if FSL_PLATFORM_IS_WINDOWS // || 1
-  if(nFilename>2 && fsl_is_reserved_fn_windows(zFilename, nameLen)){
+  if(nFilename>2 && fsl__is_reserved_fn_windows(zFilename, nameLen)){
     return true;
   }
 #endif
@@ -1068,7 +1059,7 @@ const fsl_annotate_opt fsl_annotate_opt_empty = fsl_annotate_opt_empty_m;
 */
 typedef struct Annotator Annotator;
 struct Annotator {
-  fsl_diff_cx c;       /* The diff-engine context */
+  fsl__diff_cx c;       /* The diff-engine context */
   fsl_buffer headVersion;/*starting version of the content*/
   struct AnnLine {  /* Lines of the original files... */
     const char *z;       /* The text of the line. Points into
@@ -1092,7 +1083,7 @@ struct Annotator {
 };
 
 static const Annotator Annotator_empty = {
-fsl_diff_cx_empty_m,
+fsl__diff_cx_empty_m,
 fsl_buffer_empty_m/*headVersion*/,
 NULL/*aOrig*/,
 0U/*nOrig*/, 0U/*nVers*/,
@@ -1436,7 +1427,7 @@ int fsl_annotate( fsl_cx * const f, fsl_annotate_opt const * const opt ){
   int rc;
   Annotator ann = Annotator_empty;
   unsigned int i;
-  fsl_buffer * const scratch = fsl_cx_scratchpad(f);
+  fsl_buffer * const scratch = fsl__cx_scratchpad(f);
   fsl_annotate_step aStep;
   assert(opt->out);
 
@@ -1491,7 +1482,7 @@ int fsl_annotate( fsl_cx * const f, fsl_annotate_opt const * const opt ){
   }
   
   end:
-  fsl_cx_scratchpad_yield(f, scratch);
+  fsl__cx_scratchpad_yield(f, scratch);
   fsl__annotator_clean(&ann);
   return rc;
 }
@@ -2114,7 +2105,9 @@ static int spech_sqlstring( int xtype, fsl_output_f pf,
   char const * escarg = (char const *) varg;
   bool const isnull = escarg==0;
   bool const needQuote =
-    !isnull && (xtype==etSQLESCAPE2 || xtype==etSQLESCAPE3);
+    !isnull && (xtype==etSQLESCAPE2
+                || xtype==etBLOBSQL
+                || xtype==etSQLESCAPE3);
   if( isnull ){
     escarg = (xtype==etSQLESCAPE2||xtype==etSQLESCAPE3)
       ? "NULL" : "(NULL)";
@@ -4352,7 +4345,7 @@ int fsl_buffer_append_tcl_literal(fsl_buffer * const b,
     printf pfexp;                                                   \
   } while(0)
 
-bool fsl_acache_expire_oldest(fsl_acache * c){
+bool fsl__acache_expire_oldest(fsl__acache * c){
   static uint16_t const sentinel = 0xFFFF;
   uint16_t i;
   fsl_int_t mnAge = c->nextAge;
@@ -4373,13 +4366,13 @@ bool fsl_acache_expire_oldest(fsl_acache * c){
   return sentinel!=mn;
 }
 
-int fsl_acache_insert(fsl_acache * c, fsl_id_t rid, fsl_buffer *pBlob){
-  fsl_acache_line *p;
+int fsl__acache_insert(fsl__acache * c, fsl_id_t rid, fsl_buffer *pBlob){
+  fsl__acache_line *p;
   if( c->used>c->usedLimit || c->szTotal>c->szLimit ){
     fsl_size_t szBefore;
     do{
       szBefore = c->szTotal;
-      fsl_acache_expire_oldest(c);
+      fsl__acache_expire_oldest(c);
     }while( c->szTotal>c->szLimit && c->szTotal<szBefore );
   }
   if((!c->usedLimit || !c->szLimit)
@@ -4394,15 +4387,15 @@ int fsl_acache_insert(fsl_acache * c, fsl_id_t rid, fsl_buffer *pBlob){
       : fsl_malloc( cap*sizeof(c->list[0]) );
     assert((c->capacity && cap<c->capacity) ? !"Numeric overflow" : 1);
     if(c->capacity && cap<c->capacity){
-        fsl_fatal(FSL_RC_RANGE,"Numeric overflow. Bump "
-                  "fsl_acache::capacity to a larger int type.");
+        fsl__fatal(FSL_RC_RANGE,"Numeric overflow. Bump "
+                  "fsl__acache::capacity to a larger int type.");
     }
     if(!remem){
       fsl_buffer_clear(pBlob) /* for consistency */;
       return FSL_RC_OOM;
     }
     c->capacity = cap;
-    c->list = (fsl_acache_line*)remem;
+    c->list = (fsl__acache_line*)remem;
   }
   p = &c->list[c->used++];
   p->rid = rid;
@@ -4414,9 +4407,9 @@ int fsl_acache_insert(fsl_acache * c, fsl_id_t rid, fsl_buffer *pBlob){
 }
 
 
-void fsl_acache_clear(fsl_acache * c){
+void fsl__acache_clear(fsl__acache * c){
 #if 0
-  while(fsl_acache_expire_oldest(c)){}
+  while(fsl__acache_expire_oldest(c)){}
 #else
   fsl_size_t i;
   for(i=0; i<c->used; i++){
@@ -4427,16 +4420,16 @@ void fsl_acache_clear(fsl_acache * c){
   fsl_id_bag_clear(&c->missing);
   fsl_id_bag_clear(&c->available);
   fsl_id_bag_clear(&c->inCache);
-  *c = fsl_acache_empty;
+  *c = fsl__acache_empty;
 }
 
 
-int fsl_acache_check_available(fsl_cx * f, fsl_id_t rid){
+int fsl__acache_check_available(fsl_cx * f, fsl_id_t rid){
   fsl_id_t srcid;
   int depth = 0;  /* Limit to recursion depth */
   static const int limit = 10000000 /* historical value */;
   int rc;
-  fsl_acache * c = &f->cache.arty;
+  fsl__acache * c = &f->cache.arty;
   assert(f);
   assert(c);
   assert(rid>0);
@@ -4521,7 +4514,7 @@ static int fsl_checkin_import_file( fsl_cx * f, char const * zRelName,
                                     fsl_id_t parentRid,
                                     bool allowMergeConflict,
                                     fsl_id_t *rid, fsl_uuid_str * uuid){
-  fsl_buffer * nbuf = fsl_cx_scratchpad(f);
+  fsl_buffer * nbuf = fsl__cx_scratchpad(f);
   fsl_size_t const oldSize = nbuf->used;
   fsl_buffer * fbuf = &f->fileContent;
   char const * fn;
@@ -4530,7 +4523,7 @@ static int fsl_checkin_import_file( fsl_cx * f, char const * zRelName,
   fsl_id_t rcRid = 0;
   assert(!fbuf->used && "Misuse of f->fileContent");
   assert(f->ckout.dir);
-  rc = fsl_repo_filename_fnid2(f, zRelName, &fnid, 1);
+  rc = fsl__repo_filename_fnid2(f, zRelName, &fnid, 1);
   if(rc) goto end;
   assert(fnid>0);
 
@@ -4551,11 +4544,11 @@ static int fsl_checkin_import_file( fsl_cx * f, char const * zRelName,
     goto end;
   }
 
-  rc = fsl_content_put( f, fbuf, &rcRid );
+  rc = fsl__content_put( f, fbuf, &rcRid );
   if(!rc){
     assert(rcRid > 0);
     if(parentRid>0){
-      rc = fsl_content_deltify(f, parentRid, rcRid, 0);
+      rc = fsl__content_deltify(f, parentRid, rcRid, 0);
     }
     if(!rc){
       if(rid) *rid = rcRid;
@@ -4566,8 +4559,8 @@ static int fsl_checkin_import_file( fsl_cx * f, char const * zRelName,
     }
   }
   end:
-  fsl_cx_scratchpad_yield(f, nbuf);
-  fsl_cx_content_buffer_yield(f);
+  fsl__cx_scratchpad_yield(f, nbuf);
+  fsl__cx_content_buffer_yield(f);
   assert(0==fbuf->used);
   return rc;
 }
@@ -4580,7 +4573,7 @@ int fsl_filename_to_vfile_ids( fsl_cx * f, fsl_id_t vid,
   int rc;
   fsl_buffer * sql = 0;
   if(!db) return FSL_RC_NOT_A_CKOUT;
-  sql = fsl_cx_scratchpad(f);
+  sql = fsl__cx_scratchpad(f);
   if(0>=vid) vid = f->ckout.rid;
   if(zName && *zName
      && !('.'==*zName && !zName[1])){
@@ -4609,7 +4602,7 @@ int fsl_filename_to_vfile_ids( fsl_cx * f, fsl_id_t vid,
   }
   if(FSL_RC_STEP_DONE==rc) rc = 0;
   end:
-  fsl_cx_scratchpad_yield(f, sql);
+  fsl__cx_scratchpad_yield(f, sql);
   fsl_stmt_finalize(&st);
   if(rc && !f->error.code && db->error.code){
     fsl_cx_uplift_db_error(f, db);
@@ -4697,7 +4690,7 @@ static int fsl_xqueue_callback(fsl_cx * f, fsl_db * db, fsl_stmt * st,
 int fsl_checkin_enqueue(fsl_cx * f, fsl_checkin_queue_opt const * opt){
   fsl_db * const db = fsl_needs_ckout(f);
   if(!db) return FSL_RC_NOT_A_CKOUT;
-  fsl_buffer * const canon = opt->vfileIds ? 0 : fsl_cx_scratchpad(f);
+  fsl_buffer * const canon = opt->vfileIds ? 0 : fsl__cx_scratchpad(f);
   fsl_stmt qName = fsl_stmt_empty;
   fsl_id_bag _vfileIds = fsl_id_bag_empty;
   fsl_id_bag const * const vfileIds =
@@ -4749,7 +4742,7 @@ int fsl_checkin_enqueue(fsl_cx * f, fsl_checkin_queue_opt const * opt){
     assert(!_vfileIds.list);
   }else{
     assert(canon);
-    fsl_cx_scratchpad_yield(f, canon);
+    fsl__cx_scratchpad_yield(f, canon);
     fsl_id_bag_clear(&_vfileIds);
   }
   fsl_stmt_finalize(&qName);
@@ -4770,7 +4763,7 @@ int fsl_checkin_dequeue(fsl_cx * f, fsl_checkin_queue_opt const * opt){
   char const * fn;
   fsl_stmt qName = fsl_stmt_empty;
   if(opt->filename && *opt->filename){
-    canon = fsl_cx_scratchpad(f);
+    canon = fsl__cx_scratchpad(f);
     rc = fsl_ckout_filename_check(f, opt->relativeToCwd,
                                   opt->filename, canon);
     if(rc) goto end;
@@ -4791,7 +4784,7 @@ int fsl_checkin_dequeue(fsl_cx * f, fsl_checkin_queue_opt const * opt){
     }
   }
   end:
-  if(canon) fsl_cx_scratchpad_yield(f, canon);
+  if(canon) fsl__cx_scratchpad_yield(f, canon);
   fsl_stmt_finalize(&qName);
   fsl_id_bag_clear(&list);
   if(rc) fsl_db_transaction_rollback(db);
@@ -4812,7 +4805,7 @@ bool fsl_checkin_is_enqueued(fsl_cx * f, char const * zName,
   }
   else {
     bool rv = false;
-    fsl_buffer * const canon = fsl_cx_scratchpad(f);
+    fsl_buffer * const canon = fsl__cx_scratchpad(f);
     int rc = fsl_ckout_filename_check(f, relativeToCwd, zName, canon);
     if(!rc){
       fsl_id_t vfid = 0;
@@ -4825,7 +4818,7 @@ bool fsl_checkin_is_enqueued(fsl_cx * f, char const * zName,
            /* ^^^^ asserts that arg2!=0*/
            : false);
     }
-    fsl_cx_scratchpad_yield(f, canon);
+    fsl__cx_scratchpad_yield(f, canon);
     return rv;
   }
 }
@@ -4979,7 +4972,7 @@ int fsl_checkin_calc_F_cards2( fsl_cx * f, fsl_deck * d,
 
     if(isExe) perm = FSL_FILE_PERM_EXE;
     else if(isLink){
-      fsl_fatal(FSL_RC_NYI, "This code does not yet deal "
+      fsl__fatal(FSL_RC_NYI, "This code does not yet deal "
                 "with symlinks. file: %s", zName)
         /* does not return */;
       perm = FSL_FILE_PERM_LINK;
@@ -4995,7 +4988,7 @@ int fsl_checkin_calc_F_cards2( fsl_cx * f, fsl_deck * d,
 
 #if 0
     if(mergeRid && (mergeRid != rid)){
-      fsl_fatal(FSL_RC_NYI, "This code does not yet deal "
+      fsl__fatal(FSL_RC_NYI, "This code does not yet deal "
                 "with merges. file: %s", zName)
         /* does not return */;
     }
@@ -5649,12 +5642,12 @@ int fsl_checkin_commit(fsl_cx * f, fsl_checkin_opt const * opt,
                          "chnged=0, deleted=0, origname=NULL "
                          "WHERE fsl_is_enqueued(id)",
                          vid, d->rid);
-  if(!rc) rc = fsl_ckout_version_write(f, d->rid, NULL);
+  if(!rc) rc = fsl__ckout_version_write(f, d->rid, NULL);
   RC;
   assert(d->f == f);
   rc = fsl_checkin_add_unsent(f, d->rid);
   RC;
-  rc = fsl_ckout_clear_merge_state(f);
+  rc = fsl__ckout_clear_merge_state(f);
   RC;
   /*
     todo(?) from fossil(1) follows. Most of this seems to be what the
@@ -5714,7 +5707,7 @@ int fsl_checkin_commit(fsl_cx * f, fsl_checkin_opt const * opt,
     /* MARKER(("Deltifying parent manifest #%d...\n", (int)prid)); */
     assert(p0);
     assert(prid>0);
-    rc = fsl_content_deltify(f, prid, d->rid, 0);
+    rc = fsl__content_deltify(f, prid, d->rid, 0);
     RC;
   }
 
@@ -5806,7 +5799,7 @@ int fsl_ckout_filename_check( fsl_cx * f, bool relativeToCwd,
     char const * zFull;
     fsl_size_t nLocalRoot;
     fsl_size_t nFull;
-    fsl_buffer * full = fsl_cx_scratchpad(f);
+    fsl_buffer * full = fsl__cx_scratchpad(f);
     int (*xCmp)(char const *, char const *,fsl_size_t);
     bool endsWithSlash;
     assert(f->ckout.dir);
@@ -5876,7 +5869,7 @@ int fsl_ckout_filename_check( fsl_cx * f, bool relativeToCwd,
     }
 
     end:
-    fsl_cx_scratchpad_yield(f, full);
+    fsl__cx_scratchpad_yield(f, full);
   }
   return rc;
 }
@@ -5892,7 +5885,7 @@ int fsl_ckout_filename_check( fsl_cx * f, bool relativeToCwd,
     their hard-coded values and leaving room in the enum for upward
     growth of that set.
 */
-static fsl_ckout_change_e fsl_vfile_to_ckout_change(int vChange){
+static fsl_ckout_change_e fsl__vfile_to_ckout_change(int vChange){
   switch((fsl_vfile_change_e)vChange){
 #define EE(X) case FSL_VFILE_CHANGE_##X: return FSL_CKOUT_CHANGE_##X
     EE(NONE);
@@ -5972,7 +5965,7 @@ int fsl_ckout_changes_visit( fsl_cx * f, fsl_id_t vid,
       }else if(!changed){
         continue;
       }else{
-        coChange = fsl_vfile_to_ckout_change(changed);
+        coChange = fsl__vfile_to_ckout_change(changed);
       }
     }
     if(!coChange){
@@ -6142,7 +6135,7 @@ static int co_add_one(CoAddState * cas, bool isCrawling){
         }
       }else{
         assert(!"Cannot happen - caught higher up");
-        fsl_fatal(FSL_RC_ERROR, "Internal API misuse in/around %s().",
+        fsl__fatal(FSL_RC_ERROR, "Internal API misuse in/around %s().",
                   __func__);
       }
       break;
@@ -6175,8 +6168,8 @@ int fsl_ckout_manage( fsl_cx * const f, fsl_ckout_manage_opt * const opt_ ){
   opt = *opt_
     /*use a copy in case the user manages to modify
       opt_ from a callback. */;
-  cas.absBuf = fsl_cx_scratchpad(f);
-  cas.coRelBuf = fsl_cx_scratchpad(f);
+  cas.absBuf = fsl__cx_scratchpad(f);
+  cas.coRelBuf = fsl__cx_scratchpad(f);
   rc = fsl_file_canonical_name(opt.filename, cas.absBuf, false);
   if(!rc){
     cas.f = f;
@@ -6184,8 +6177,8 @@ int fsl_ckout_manage( fsl_cx * const f, fsl_ckout_manage_opt * const opt_ ){
     rc = co_add_one(&cas, false);
     opt_->counts = opt.counts;
   }
-  fsl_cx_scratchpad_yield(f, cas.absBuf);
-  fsl_cx_scratchpad_yield(f, cas.coRelBuf);
+  fsl__cx_scratchpad_yield(f, cas.absBuf);
+  fsl__cx_scratchpad_yield(f, cas.coRelBuf);
   return rc;
 }
 
@@ -6195,7 +6188,7 @@ int fsl_ckout_manage( fsl_cx * const f, fsl_ckout_manage_opt * const opt_ ){
 
    Returns 0 on success, any number of non-0 codes on error.
 */
-static int fsl_ckout_bag_to_ids(fsl_cx *f, fsl_db * db,
+static int fsl_ckout_bag_to_ids(fsl_cx * const f, fsl_db * const db,
                                 char const * tableName,
                                 fsl_id_bag const * bag){
   fsl_stmt insId = fsl_stmt_empty;
@@ -6233,7 +6226,7 @@ static int fsl_ckout_bag_to_ids(fsl_cx *f, fsl_db * db,
   goto end;
 }
 
-int fsl_ckout_unmanage(fsl_cx * f, fsl_ckout_unmanage_opt const * opt){
+int fsl_ckout_unmanage(fsl_cx * const f, fsl_ckout_unmanage_opt const * opt){
   int rc;
   fsl_db * const db = fsl_needs_ckout(f);
   fsl_buffer * fname = 0;
@@ -6272,7 +6265,7 @@ int fsl_ckout_unmanage(fsl_cx * f, fsl_ckout_unmanage_opt const * opt){
       if(rc) goto dberr;
     }
   }else{// Process opt->filename
-    fname = fsl_cx_scratchpad(f);
+    fname = fsl__cx_scratchpad(f);
     rc = fsl_ckout_filename_check(f, opt->relativeToCwd,
                                   opt->filename, fname);
     if(rc) goto end;
@@ -6329,7 +6322,7 @@ int fsl_ckout_unmanage(fsl_cx * f, fsl_ckout_unmanage_opt const * opt){
                    vid);
   if(rc) goto dberr;
   end:
-  if(fname) fsl_cx_scratchpad_yield(f, fname);
+  if(fname) fsl__cx_scratchpad_yield(f, fname);
   fsl_stmt_finalize(&q);
   if(opt->vfileIds){
     fsl_db_exec(db, "DROP TABLE IF EXISTS fx_unmanage_id /* %s() */",
@@ -6348,11 +6341,11 @@ int fsl_ckout_unmanage(fsl_cx * f, fsl_ckout_unmanage_opt const * opt){
 
 }
 
-int fsl_ckout_changes_scan(fsl_cx * f){
+int fsl_ckout_changes_scan(fsl_cx * const f){
   return fsl_vfile_changes_scan(f, -1, 0);
 }
 
-int fsl_ckout_install_schema(fsl_cx *f, bool dropIfExists){
+int fsl_ckout_install_schema(fsl_cx * const f, bool dropIfExists){
   char const * tNames[] = {
   "vvar", "vfile", "vmerge", 0
   };
@@ -6393,7 +6386,7 @@ bool fsl_ckout_has_changes(fsl_cx *f){
     || fsl_db_exists(db,"SELECT 1 FROM vmerge /*%s()*/", __func__);
 }
 
-int fsl_ckout_clear_merge_state( fsl_cx *f ){
+int fsl__ckout_clear_merge_state( fsl_cx *f ){
   fsl_db * const d = fsl_needs_ckout(f);
   int rc;
   if(d){
@@ -6471,11 +6464,11 @@ int fsl_repo_open_ckout(fsl_cx *f, const fsl_repo_open_ckout_opt *opt){
                             opt->targetDir);
     }
   }
-  cwd = fsl_cx_scratchpad(f);
+  cwd = fsl__cx_scratchpad(f);
   assert(!cwd->used);
   if((rc = fsl_cx_getcwd(f, cwd))){
     assert(!cwd->used);
-    fsl_cx_scratchpad_yield(f, cwd);
+    fsl__cx_scratchpad_yield(f, cwd);
     return fsl_cx_err_set(f, rc, "Error %d [%s]: unable to "
                           "determine current directory.",
                           rc, fsl_rc_cstr(rc));
@@ -6504,13 +6497,13 @@ int fsl_repo_open_ckout(fsl_cx *f, const fsl_repo_open_ckout_opt *opt){
        find one. If opt->checkForOpenedCkout is false then we will use
        the dbOverwritePolicy to determine what to do if we find a
        checkout db in cwd (as opposed to a parent). */
-    fsl_buffer * const foundAt = fsl_cx_scratchpad(f);
+    fsl_buffer * const foundAt = fsl__cx_scratchpad(f);
     if (!fsl_ckout_db_search(fsl_buffer_cstr(cwd), true, foundAt)) {
       rc = fsl_cx_err_set(f, FSL_RC_ALREADY_EXISTS,
                           "There is already a checkout db at %b",
                           foundAt);
     }
-    fsl_cx_scratchpad_yield(f, foundAt);
+    fsl__cx_scratchpad_yield(f, foundAt);
     if(rc) goto end;
   }
 
@@ -6546,7 +6539,7 @@ int fsl_repo_open_ckout(fsl_cx *f, const fsl_repo_open_ckout_opt *opt){
     fsl_chdir(fsl_buffer_cstr(cwd))
       /* Ignoring error because we have no recovery strategy! */;
   }
-  fsl_cx_scratchpad_yield(f, cwd);
+  fsl__cx_scratchpad_yield(f, cwd);
   if(!rc){
     fsl_db * const dbR = fsl_cx_db_for_role(f, FSL_DBROLE_REPO);
     assert(dbR);
@@ -6559,7 +6552,8 @@ int fsl_repo_open_ckout(fsl_cx *f, const fsl_repo_open_ckout_opt *opt){
   return rc;
 }
 
-int fsl_is_locally_modified(fsl_cx * f, const char * zFilename,
+int fsl__is_locally_modified(fsl_cx * const f,
+                            const char * zFilename,
                             fsl_size_t origSize,
                             const char * zOrigHash,
                             fsl_int_t zOrigHashLen,
@@ -6569,7 +6563,7 @@ int fsl_is_locally_modified(fsl_cx * f, const char * zFilename,
   int const hashLen = zOrigHashLen>=0
     ? zOrigHashLen : fsl_is_uuid(zOrigHash);
   fsl_buffer * hash = 0;
-  fsl_buffer * fname = fsl_cx_scratchpad(f);
+  fsl_buffer * fname = fsl__cx_scratchpad(f);
   fsl_fstat * const fst = &f->cache.fstat;
   int mod = 0;
   if(!fsl_is_uuid_len(hashLen)){
@@ -6614,7 +6608,7 @@ int fsl_is_locally_modified(fsl_cx * f, const char * zFilename,
     }
     goto end;
   }
-  hash = fsl_cx_scratchpad(f);
+  hash = fsl__cx_scratchpad(f);
   switch(hashLen){
     case FSL_STRLEN_SHA1:
       rc = fsl_sha1sum_filename(zFilename, hash);
@@ -6623,7 +6617,7 @@ int fsl_is_locally_modified(fsl_cx * f, const char * zFilename,
       rc = fsl_sha3sum_filename(zFilename, hash);
       break;
     default:
-      fsl_fatal(FSL_RC_UNSUPPORTED, "This cannot happen. %s()",
+      fsl__fatal(FSL_RC_UNSUPPORTED, "This cannot happen. %s()",
                 __func__);
   }
   if(rc){
@@ -6638,8 +6632,8 @@ int fsl_is_locally_modified(fsl_cx * f, const char * zFilename,
   }
   end:
   if(!rc && isModified) *isModified = mod;
-  fsl_cx_scratchpad_yield(f, fname);
-  if(hash) fsl_cx_scratchpad_yield(f, hash);
+  fsl__cx_scratchpad_yield(f, fname);
+  if(hash) fsl__cx_scratchpad_yield(f, hash);
   return rc;
 }
 
@@ -6848,7 +6842,7 @@ static int fsl_repo_extract_f_ckout( fsl_repo_extract_state const * xs ){
             break;
           }
           default:
-            fsl_fatal(FSL_RC_UNSUPPORTED,"Internal error: invalid "
+            fsl__fatal(FSL_RC_UNSUPPORTED,"Internal error: invalid "
                       "fsl_reco_is_file_modified() response.");
         }
       }
@@ -6973,7 +6967,7 @@ static int fsl_repo_ckout_rm_list_fini(fsl_cx * f,
   int rc;
   fsl_db * db = fsl_cx_db_ckout(f);
   fsl_stmt q = fsl_stmt_empty;
-  fsl_buffer * absPath = fsl_cx_scratchpad(f);
+  fsl_buffer * absPath = fsl__cx_scratchpad(f);
   fsl_size_t const ckdirLen = f->ckout.dirLen;
   char const *zAbs;
   int rmCounter = 0;
@@ -7088,7 +7082,7 @@ static int fsl_repo_ckout_rm_list_fini(fsl_cx * f,
                             "in an inconsistent state!");
         goto end;
       default:
-        fsl_fatal(FSL_RC_UNSUPPORTED,"Internal error: invalid "
+        fsl__fatal(FSL_RC_UNSUPPORTED,"Internal error: invalid "
                   "fsl_cx_confirm() response #%d.",
                   rec->confirmAnswer.response);
         break;
@@ -7150,7 +7144,7 @@ static int fsl_repo_ckout_rm_list_fini(fsl_cx * f,
   }
   end:
   fsl_stmt_finalize(&q);
-  fsl_cx_scratchpad_yield(f, absPath);
+  fsl__cx_scratchpad_yield(f, absPath);
   return fsl_cx_uplift_db_error2(f, db, rc);
 }
 
@@ -7164,7 +7158,7 @@ int fsl_repo_ckout(fsl_cx * f, fsl_ckup_opt const * cOpt){
   else if(!fsl_needs_ckout(f)) return f->error.code;
   rc = fsl_cx_transaction_begin(f);
   if(rc) return rc;
-  rec.tgtDir = fsl_cx_scratchpad(f);
+  rec.tgtDir = fsl__cx_scratchpad(f);
   if(cOpt->confirmer.callback){
     fsl_cx_confirmer(f, &cOpt->confirmer, &oldConfirm);
   }
@@ -7255,7 +7249,7 @@ int fsl_repo_ckout(fsl_cx * f, fsl_ckup_opt const * cOpt){
   end:
   if(!rc){
     rc = fsl_vfile_unload_except(f, cOpt->checkinRid);
-    if(!rc) rc = fsl_ckout_clear_merge_state(f);
+    if(!rc) rc = fsl__ckout_clear_merge_state(f);
   }
   /*
     TODO: if "repo-cksum" config db setting is set, confirm R-card of
@@ -7267,7 +7261,7 @@ int fsl_repo_ckout(fsl_cx * f, fsl_ckup_opt const * cOpt){
   fsl_stmt_finalize(&rec.stChanged);
   fsl_stmt_finalize(&rec.stIsInVfile);
   fsl_stmt_finalize(&rec.stRidSize);
-  fsl_cx_scratchpad_yield(f, rec.tgtDir);
+  fsl__cx_scratchpad_yield(f, rec.tgtDir);
   int const rc2 = fsl_cx_transaction_end(f, rc || cOpt->dryRun);
   return rc ? rc : rc2;
 }
@@ -7493,7 +7487,7 @@ int fsl_ckout_update(fsl_cx * f, fsl_ckup_opt const *cuOpt){
   rec.originRid = ckRid;
   rec.eOpt = &eOpt;
   rec.cOpt = cuOpt;
-  rec.tgtDir = fsl_cx_scratchpad(f);
+  rec.tgtDir = fsl__cx_scratchpad(f);
   rec.tgtDirLen = f->ckout.dirLen;
   rc = fsl_buffer_append(rec.tgtDir, f->ckout.dir,
                          (fsl_int_t)f->ckout.dirLen);
@@ -7508,9 +7502,9 @@ int fsl_ckout_update(fsl_cx * f, fsl_ckup_opt const *cuOpt){
      - symlink_create() (done, untested)
      - ...
   */
-  bFullPath = fsl_cx_scratchpad(f);
-  bFullNewPath = fsl_cx_scratchpad(f);
-  bFileUuid = fsl_cx_scratchpad(f);
+  bFullPath = fsl__cx_scratchpad(f);
+  bFullNewPath = fsl__cx_scratchpad(f);
+  bFileUuid = fsl__cx_scratchpad(f);
   rc = fsl_buffer_append(bFullPath, f->ckout.dir,
                          (fsl_int_t)f->ckout.dirLen);
   if(rc) goto end;
@@ -7595,7 +7589,7 @@ int fsl_ckout_update(fsl_cx * f, fsl_ckup_opt const *cuOpt){
       }
       //if( !dryRunFlag && !internalUpdate ) undo_save(zName);
       if( !cuOpt->dryRun ){
-        rc = fsl_vfile_to_ckout(f, idt, &wasWritten);
+        rc = fsl__vfile_to_ckout(f, idt, &wasWritten);
         if(rc) goto end;
       }
     }else if( idt>0 && idv>0 && ridt!=ridv && (chnged==0 || deleted) ){
@@ -7608,7 +7602,7 @@ int fsl_ckout_update(fsl_cx * f, fsl_ckup_opt const *cuOpt){
         uState.fileChangeType = FSL_CKUP_FCHANGE_UPDATED;
       }
       if( !cuOpt->dryRun ){
-        rc = fsl_vfile_to_ckout(f, idt, &wasWritten);
+        rc = fsl__vfile_to_ckout(f, idt, &wasWritten);
         if(rc) goto end;
       }
     }else if( idt>0 && idv>0 && !deleted &&
@@ -7617,7 +7611,7 @@ int fsl_ckout_update(fsl_cx * f, fsl_ckup_opt const *cuOpt){
       ** the version that appears in the target. */
       uState.fileChangeType = FSL_CKUP_FCHANGE_UPDATED;
       if( !cuOpt->dryRun ){
-        rc = fsl_vfile_to_ckout(f, idt, &wasWritten);
+        rc = fsl__vfile_to_ckout(f, idt, &wasWritten);
         if(rc) goto end;
       }
     }else if( idt==0 && idv>0 ){
@@ -7790,16 +7784,16 @@ int fsl_ckout_update(fsl_cx * f, fsl_ckup_opt const *cuOpt){
     rc = fsl_vfile_unload_except(f, tid);
   }
   if(!rc){
-    rc = fsl_ckout_version_write(f, tid, 0);
+    rc = fsl__ckout_version_write(f, tid, 0);
   }
   
   end:
   /* clang bug? If we declare rc2 here, it says "expression expected".
      Moving the decl to the top resolves it. Wha? */
-  if(rec.tgtDir) fsl_cx_scratchpad_yield(f, rec.tgtDir);
-  if(bFullPath) fsl_cx_scratchpad_yield(f, bFullPath);
-  if(bFullNewPath) fsl_cx_scratchpad_yield(f, bFullNewPath);
-  if(bFileUuid) fsl_cx_scratchpad_yield(f, bFileUuid);
+  if(rec.tgtDir) fsl__cx_scratchpad_yield(f, rec.tgtDir);
+  if(bFullPath) fsl__cx_scratchpad_yield(f, bFullPath);
+  if(bFullNewPath) fsl__cx_scratchpad_yield(f, bFullNewPath);
+  if(bFileUuid) fsl__cx_scratchpad_yield(f, bFileUuid);
   for(int i = 0; i < MergeBufCount; ++i){
     fsl_buffer_clear(&bufMerge[i]);
   }
@@ -7872,7 +7866,7 @@ int fsl_ckout_calc_update_version(fsl_cx * f, fsl_id_t * outRid){
   if(rc) goto end;
   else if( fsl_leaves_computed_count(f)>1 ){
     AmbiguousLeavesOutput alo = AmbiguousLeavesOutput_empty;
-    alo.buffer = fsl_cx_scratchpad(f);
+    alo.buffer = fsl__cx_scratchpad(f);
     rc = fsl_buffer_append(alo.buffer,
                            "Multiple viable descendants found: ", -1);
     if(!rc){
@@ -7887,7 +7881,7 @@ int fsl_ckout_calc_update_version(fsl_cx * f, fsl_id_t * outRid){
     if(!rc){
       rc = fsl_cx_err_set(f, FSL_RC_AMBIGUOUS, "%b", alo.buffer);
     }
-    fsl_cx_scratchpad_yield(f, alo.buffer);
+    fsl__cx_scratchpad_yield(f, alo.buffer);
   }
   end:
   if(!rc){
@@ -7949,7 +7943,7 @@ int fsl_ckout_manifest_write(fsl_cx *f, int manifest, int manifestUuid,
   }
   int W = 0;
   int rc = 0;
-  fsl_buffer * b = fsl_cx_scratchpad(f);
+  fsl_buffer * b = fsl__cx_scratchpad(f);
   fsl_buffer * content = &f->fileContent;
   char * str = 0;
   fsl_time_t const mtime = f->ckout.mtime>0
@@ -8066,7 +8060,7 @@ int fsl_ckout_manifest_write(fsl_cx *f, int manifest, int manifestUuid,
 
   end:
   if(wrote) *wrote = W;
-  fsl_cx_scratchpad_yield(f, b);
+  fsl__cx_scratchpad_yield(f, b);
   fsl_buffer_reuse(content);
   return rc;
 }
@@ -8106,7 +8100,7 @@ int fsl_ckout_nondir_file_check(fsl_cx *f, char const * zFilename,
   if(!fsl_needs_ckout(f)) return FSL_RC_NOT_A_CKOUT;
   int rc = 0;
   int frc;
-  fsl_buffer * const fn = fsl_cx_scratchpad(f);
+  fsl_buffer * const fn = fsl__cx_scratchpad(f);
   if(!fsl_is_rooted_in_ckout(f, zFilename)){
     assert(!"Misuse of this API. This condition should never fail.");
     rc = fsl_cx_err_set(f, FSL_RC_MISUSE, "Path is not rooted at the "
@@ -8139,14 +8133,14 @@ int fsl_ckout_nondir_file_check(fsl_cx *f, char const * zFilename,
     i = j;
   }
   end:
-  fsl_cx_scratchpad_yield(f, fn);
+  fsl__cx_scratchpad_yield(f, fn);
   return rc;
 }
 
-int fsl_ckout_safe_file_check(fsl_cx *f, char const * zFilename){
+int fsl__ckout_safe_file_check(fsl_cx * const f, char const * zFilename){
   if(!fsl_needs_ckout(f)) return FSL_RC_NOT_A_CKOUT;
   int rc = 0;
-  fsl_buffer * const fn = fsl_cx_scratchpad(f);
+  fsl_buffer * const fn = fsl__cx_scratchpad(f);
   if(!fsl_is_absolute_path(zFilename)){
     rc = fsl_file_canonical_name2(f->ckout.dir, zFilename, fn, false);
     if(rc) goto end;
@@ -8166,7 +8160,7 @@ int fsl_ckout_safe_file_check(fsl_cx *f, char const * zFilename){
                         (int)errLen, zFilename);
   }
   end:
-  fsl_cx_scratchpad_yield(f, fn);
+  fsl__cx_scratchpad_yield(f, fn);
   return rc;
 }
 
@@ -8189,11 +8183,11 @@ int fsl_is_rooted_in_ckout2(fsl_cx *f, char const *zAbsPath){
   return rc;
 }
 
-int fsl_ckout_symlink_create(fsl_cx * f, char const *zTgtFile,
+int fsl__ckout_symlink_create(fsl_cx * const f, char const *zTgtFile,
                              char const * zLinkFile){
   if(!fsl_needs_ckout(f)) return FSL_RC_NOT_A_CKOUT;
   int rc = 0;
-  fsl_buffer * const fn = fsl_cx_scratchpad(f);
+  fsl_buffer * const fn = fsl__cx_scratchpad(f);
   if(!fsl_is_absolute_path(zLinkFile)){
     rc = fsl_file_canonical_name2(f->ckout.dir, zLinkFile, fn, false);
     if(rc) goto end;
@@ -8201,14 +8195,14 @@ int fsl_ckout_symlink_create(fsl_cx * f, char const *zTgtFile,
   }else if(0!=(rc = fsl_is_rooted_in_ckout2(f, zLinkFile))){
     goto end;
   }
-  fsl_buffer * const b = fsl_cx_scratchpad(f);
+  fsl_buffer * const b = fsl__cx_scratchpad(f);
   rc = fsl_buffer_append(b, zTgtFile, -1);
   if(!rc){
     rc = fsl_buffer_to_filename(b, fsl_buffer_cstr(fn));
   }
-  fsl_cx_scratchpad_yield(f, b);
+  fsl__cx_scratchpad_yield(f, b);
   end:
-  fsl_cx_scratchpad_yield(f, fn);
+  fsl__cx_scratchpad_yield(f, fn);
   return rc;
 }
 
@@ -8247,7 +8241,7 @@ static int fsl_revert_rmdir_queue(fsl_cx * f, fsl_db * db, fsl_stmt * st,
 static int fsl_revert_rmdir_fini(fsl_cx * f, fsl_db * db){
   int rc;
   fsl_stmt st = fsl_stmt_empty;
-  fsl_buffer * const b = fsl_cx_scratchpad(f);
+  fsl_buffer * const b = fsl__cx_scratchpad(f);
   rc = fsl_db_prepare(db, &st,
                       "SELECT fsl_ckout_dir()||n "
                       "FROM fx_revert_rmdir "
@@ -8263,7 +8257,7 @@ static int fsl_revert_rmdir_fini(fsl_cx * f, fsl_db * db){
     fsl_ckout_rm_empty_dirs(f, b);
   }
   end:
-  fsl_cx_scratchpad_yield(f, b);
+  fsl__cx_scratchpad_yield(f, b);
   fsl_stmt_finalize(&st);
   return rc;
   dberr:
@@ -8271,7 +8265,8 @@ static int fsl_revert_rmdir_fini(fsl_cx * f, fsl_db * db){
   goto end;
 }
 
-int fsl_ckout_revert( fsl_cx * f, fsl_ckout_revert_opt const * opt ){
+int fsl_ckout_revert( fsl_cx * const f,
+                      fsl_ckout_revert_opt const * opt ){
   /**
      Reminder to whoever works on this code: the initial
      implementation was done almost entirely without the benefit of
@@ -8293,11 +8288,11 @@ int fsl_ckout_revert( fsl_cx * f, fsl_ckout_revert_opt const * opt ){
   if(!db) return FSL_RC_NOT_A_CKOUT;
   assert(vid>=0);
   if(!opt->vfileIds && opt->filename && *opt->filename){
-    fname = fsl_cx_scratchpad(f);
+    fname = fsl__cx_scratchpad(f);
     rc = fsl_ckout_filename_check(f, opt->relativeToCwd,
                                   opt->filename, fname);
     if(rc){
-      fsl_cx_scratchpad_yield(f, fname);
+      fsl__cx_scratchpad_yield(f, fname);
       return rc;
     }
     zNorm = fsl_buffer_cstr(fname);
@@ -8317,7 +8312,7 @@ int fsl_ckout_revert( fsl_cx * f, fsl_ckout_revert_opt const * opt ){
     rc = fsl_vfile_changes_scan(f, 0, 0);
     if(rc) goto end;
   }
-  sql = fsl_cx_scratchpad(f);
+  sql = fsl__cx_scratchpad(f);
   rc = fsl_buffer_appendf(sql, 
                           "SELECT id, rid, deleted, "
                           "fsl_ckout_dir()||pathname, "
@@ -8351,11 +8346,11 @@ int fsl_ckout_revert( fsl_cx * f, fsl_ckout_revert_opt const * opt ){
   }
   assert(!rc);
   rc = fsl_db_prepare(db, &q, "%b /* %s() */", sql, __func__);
-  fsl_cx_scratchpad_yield(f, sql);
+  fsl__cx_scratchpad_yield(f, sql);
   sql = 0;
   if(rc) goto dberr;
   if((!zNorm || !*zNorm) && !opt->vfileIds){
-    rc = fsl_ckout_clear_merge_state(f);
+    rc = fsl__ckout_clear_merge_state(f);
     if(rc) goto end;
   }
   while((FSL_RC_STEP_ROW==fsl_stmt_step(&q))){
@@ -8381,7 +8376,7 @@ int fsl_ckout_revert( fsl_cx * f, fsl_ckout_revert_opt const * opt ){
           break;
         }
         /* Move, if possible, the new name back over the original
-           name. This will possibly allow fsl_vfile_to_ckout() to
+           name. This will possibly allow fsl__vfile_to_ckout() to
            avoid having to load that file's contents and overwrite
            it. */
         int mvCheck = fsl_stat(zName, NULL, false);
@@ -8407,10 +8402,10 @@ int fsl_ckout_revert( fsl_cx * f, fsl_ckout_revert_opt const * opt ){
         if(rc) goto dberr;
       }
       rc = fsl_stmt_bind_step(&vfUpdate, "R", id)
-        /* Has to be done before fsl_vfile_to_ckout() because that
+        /* Has to be done before fsl__vfile_to_ckout() because that
            function writes to vfile.pathname. */;
       if(rc) goto dberr;
-      rc = fsl_vfile_to_ckout(f, id, &wasWritten);
+      rc = fsl__vfile_to_ckout(f, id, &wasWritten);
       if(rc) break;
       if(opt->callback){
         if(renamed){
@@ -8432,8 +8427,8 @@ int fsl_ckout_revert( fsl_cx * f, fsl_ckout_revert_opt const * opt ){
     }
   }/*step() loop*/
   end:
-  if(fname) fsl_cx_scratchpad_yield(f, fname);
-  if(sql) fsl_cx_scratchpad_yield(f, sql);
+  if(fname) fsl__cx_scratchpad_yield(f, fname);
+  if(sql) fsl__cx_scratchpad_yield(f, sql);
   fsl_stmt_finalize(&q);
   fsl_stmt_finalize(&vfUpdate);
   if(qRmdir.stmt){
@@ -8458,11 +8453,11 @@ int fsl_ckout_revert( fsl_cx * f, fsl_ckout_revert_opt const * opt ){
   goto end;
 }
 
-int fsl_ckout_vfile_ids( fsl_cx * f, fsl_id_t vid,
-                         fsl_id_bag * dest, char const * zName,
+int fsl_ckout_vfile_ids( fsl_cx * const f, fsl_id_t vid,
+                         fsl_id_bag * const dest, char const * zName,
                          bool relativeToCwd, bool changedOnly ) {
   if(!fsl_needs_ckout(f)) return FSL_RC_NOT_A_CKOUT;
-  fsl_buffer * const canon = fsl_cx_scratchpad(f);
+  fsl_buffer * const canon = fsl__cx_scratchpad(f);
   int rc = fsl_ckout_filename_check(f, relativeToCwd, zName, canon);
   if(!rc){
     fsl_buffer_strip_slashes(canon);
@@ -8470,7 +8465,7 @@ int fsl_ckout_vfile_ids( fsl_cx * f, fsl_id_t vid,
                                    fsl_buffer_cstr(canon),
                                    changedOnly);
   }
-  fsl_cx_scratchpad_yield(f, canon);
+  fsl__cx_scratchpad_yield(f, canon);
   return rc;
 }
 
@@ -8479,7 +8474,7 @@ int fsl_ckout_file_content(fsl_cx * const f, bool relativeToCwd, char const * zN
   int rc;
   fsl_buffer * fname;
   if(!fsl_needs_ckout(f)) return FSL_RC_NOT_A_CKOUT;
-  fname = fsl_cx_scratchpad(f);
+  fname = fsl__cx_scratchpad(f);
   rc = fsl_file_canonical_name2( relativeToCwd
                                  ? NULL
                                  : fsl_cx_ckout_dir_name(f, NULL),
@@ -8509,7 +8504,7 @@ int fsl_ckout_file_content(fsl_cx * const f, bool relativeToCwd, char const * zN
       }
     }
   }
-  fsl_cx_scratchpad_yield(f, fname);
+  fsl__cx_scratchpad_yield(f, fname);
   return rc;
 }
 
@@ -8686,7 +8681,7 @@ static int fcli_open(void){
        We don't really need/want to update the repo db on each
        open of the checkout db, do we? Or do we?
      */
-    fsl_repo_record_filename(f) /* ignore rc - not critical */;
+    fsl__repo_record_filename(f) /* ignore rc - not critical */;
 #endif
   }
   return rc;
@@ -9202,7 +9197,7 @@ static fsl_allocator fslAllocOrig;
 static void * fsl_realloc_f_failing(void * state, void * mem, fsl_size_t n){
   void * rv = fslAllocOrig.f(fslAllocOrig.state, mem, n);
   if(n && !rv){
-    fsl_fatal(FSL_RC_OOM, NULL)/*does not return*/;
+    fsl__fatal(FSL_RC_OOM, NULL)/*does not return*/;
   }
   return rv;
 }
@@ -9298,7 +9293,7 @@ static int fcli_setup_common2(void){
     if(userName){
       fsl_cx_user_set(f, userName);
     }else if(!fsl_cx_user_get(f)){
-      char * u = fsl_guess_user_name();
+      char * u = fsl_user_name_guess();
       fsl_cx_user_set(f, u);
       fsl_free(u);
     }
@@ -9913,7 +9908,7 @@ bool fsl_content_is_available(fsl_cx * f, fsl_id_t rid){
   if(0==rc){
     /* This "cannot happen" (never has historically, and would be
        indicative of what amounts to corruption in the repo). */
-    fsl_fatal(FSL_RC_RANGE,"delta-loop in repository");
+    fsl__fatal(FSL_RC_RANGE,"delta-loop in repository");
   }
   return false;
 }
@@ -10001,7 +9996,7 @@ int fsl_content_get( fsl_cx * const f, fsl_id_t rid,
     int rc;
     bool gotIt = 0;
     fsl_id_t nextRid;
-    fsl_acache * const ac = &f->cache.arty;
+    fsl__acache * const ac = &f->cache.arty;
     fsl_buffer_reuse(tgt);
     if(fsl_id_bag_contains(&ac->missing, rid)){
       /* Early out if we know the content is not available */
@@ -10011,7 +10006,7 @@ int fsl_content_get( fsl_cx * const f, fsl_id_t rid,
     /* Look for the artifact in the cache first */
     if( fsl_id_bag_contains(&ac->inCache, rid) ){
       fsl_size_t i;
-      fsl_acache_line * line;
+      fsl__acache_line * line;
       for(i=0; i<ac->used; ++i){
         line = &ac->list[i];
         if( line->rid==rid ){
@@ -10120,7 +10115,7 @@ int fsl_content_get( fsl_cx * const f, fsl_id_t rid,
         //MARKER(("nAlloc=%d\n", (int)nAlloc));
         if( (mx-n)%8==0 ){
           //MARKER(("Caching artifact %d\n", (int)a[n+1]));
-          rc = fsl_acache_insert( ac, a[n+1], tgt );
+          rc = fsl__acache_insert( ac, a[n+1], tgt );
           if(rc){
             fsl_buffer_clear(&next);
             goto end_delta;
@@ -10208,11 +10203,11 @@ static int fsl_content_mark_available(fsl_cx * f, fsl_id_t rid){
 /**
    When a record is converted from a phantom to a real record, if that
    record has other records that are derived by delta, then call
-   fsl_deck_crosslink() on those other records.
+   fsl__deck_crosslink() on those other records.
 
    If the formerly phantom record or any of the other records derived
    by delta from the former phantom are a baseline manifest, then also
-   invoke fsl_deck_crosslink() on the delta-manifests associated with
+   invoke fsl__deck_crosslink() on the delta-manifests associated with
    that baseline.
 
    Tail recursion is used to minimize stack depth.
@@ -10242,7 +10237,7 @@ static int fsl_after_dephantomize(fsl_cx * f, fsl_id_t rid, bool doCrosslink){
       rc = fsl_deck_load_rid(f, &deck, rid, FSL_SATYPE_ANY);
       if(!rc){
         assert(aChild[i]==deck.rid);
-        rc = fsl_deck_crosslink(&deck);
+        rc = fsl__deck_crosslink(&deck);
       }
       fsl_deck_finalize(&deck);
       if(rc) break;
@@ -10268,7 +10263,7 @@ static int fsl_after_dephantomize(fsl_cx * f, fsl_id_t rid, bool doCrosslink){
       rc = fsl_deck_load_rid(f, &deck, aChild[i], FSL_SATYPE_ANY);
       if(!rc){
         assert(aChild[i]==deck.rid);
-        rc = fsl_deck_crosslink(&deck);
+        rc = fsl__deck_crosslink(&deck);
       }
       fsl_deck_finalize(&deck);
       if(rc) goto end;
@@ -10322,7 +10317,7 @@ static int fsl_after_dephantomize(fsl_cx * f, fsl_id_t rid, bool doCrosslink){
   return rc;
 }
 
-int fsl_content_put_ex( fsl_cx * const f,
+int fsl__content_put_ex( fsl_cx * const f,
                         fsl_buffer const * pBlob,
                         fsl_uuid_cstr zUuid,
                         fsl_id_t srcId,
@@ -10503,7 +10498,7 @@ int fsl_content_put_ex( fsl_cx * const f,
                        "WHERE rid=%"FSL_ID_T_PFMT, rid
                        /* FIXME? use cached statement? */);
       if( !rc && (srcId==0 ||
-                  0==fsl_acache_check_available(f, srcId)) ){
+                  0==fsl__acache_check_available(f, srcId)) ){
         isDephantomize = true;
         rc = fsl_content_mark_available(f, rid);
       }
@@ -10564,7 +10559,7 @@ int fsl_content_put_ex( fsl_cx * const f,
   }
   if( !isDephantomize
       && fsl_id_bag_contains(&f->cache.arty.missing, rid) && 
-      (srcId==0 || (0==fsl_acache_check_available(f,srcId)))){
+      (srcId==0 || (0==fsl__acache_check_available(f,srcId)))){
     /*
       TODO: document what this is for.
       TODO: figure out what that is.
@@ -10595,7 +10590,7 @@ int fsl_content_put_ex( fsl_cx * const f,
     if(rc) goto end;
   }
   
-  rc = fsl_repo_verify_before_commit(f, rid);
+  rc = fsl__repo_verify_before_commit(f, rid);
   if(rc) goto end /* FSL_RC_OOM is basically the "only possible" failure
                      after this point. */;
   /* Code after end: relies on the following 2 lines: */
@@ -10616,8 +10611,8 @@ int fsl_content_put_ex( fsl_cx * const f,
   return rc;
 }
 
-int fsl_content_put( fsl_cx * const f, fsl_buffer const * pBlob, fsl_id_t * newRid){
-  return fsl_content_put_ex(f, pBlob, NULL, 0, 0, 0, newRid);
+int fsl__content_put( fsl_cx * const f, fsl_buffer const * pBlob, fsl_id_t * newRid){
+  return fsl__content_put_ex(f, pBlob, NULL, 0, 0, 0, newRid);
 }
 
 int fsl_uuid_is_shunned(fsl_cx * const f, fsl_uuid_cstr zUuid){
@@ -10633,7 +10628,7 @@ int fsl_uuid_is_shunned(fsl_cx * const f, fsl_uuid_cstr zUuid){
                             zUuid);
 }
 
-int fsl_content_new( fsl_cx * f, fsl_uuid_cstr uuid, bool isPrivate,
+int fsl__content_new( fsl_cx * f, fsl_uuid_cstr uuid, bool isPrivate,
                      fsl_id_t * newId ){
   fsl_id_t rid = 0;
   int rc;
@@ -10711,7 +10706,7 @@ int fsl_content_new( fsl_cx * f, fsl_uuid_cstr uuid, bool isPrivate,
   return rc;
 }
 
-int fsl_content_undeltify(fsl_cx * const f, fsl_id_t rid){
+int fsl__content_undeltify(fsl_cx * const f, fsl_id_t rid){
   int rc;
   fsl_db * db = f ? fsl_cx_db_repo(f) : NULL;
   fsl_id_t srcid = 0;
@@ -10767,7 +10762,7 @@ int fsl_content_undeltify(fsl_cx * const f, fsl_id_t rid){
     enables the R-card and this check, and any similarly superfluous
     ones.
   */
-  if(!rc) fsl_repo_verify_before_commit(f, rid);
+  if(!rc) fsl__repo_verify_before_commit(f, rid);
 #endif
   end:
   fsl_buffer_clear(&x);
@@ -10781,7 +10776,7 @@ int fsl_content_undeltify(fsl_cx * const f, fsl_id_t rid){
   goto end;
 }
 
-int fsl_content_deltify(fsl_cx * f, fsl_id_t rid,
+int fsl__content_deltify(fsl_cx * f, fsl_id_t rid,
                         fsl_id_t srcid, bool force){
   fsl_id_t s;
   fsl_buffer data = fsl_buffer_empty;
@@ -10829,7 +10824,7 @@ int fsl_content_deltify(fsl_cx * f, fsl_id_t rid,
   while( (0==(rc=fsl_delta_src_id(f, s, &s)))
          && (s>0) ){
     if( s==rid ){
-      rc = fsl_content_undeltify(f, srcid);
+      rc = fsl__content_undeltify(f, srcid);
       break;
     }
   }
@@ -10877,7 +10872,7 @@ int fsl_content_deltify(fsl_cx * f, fsl_id_t rid,
     }
     fsl_stmt_cached_yield(s1);
     fsl_stmt_cached_yield(s2);
-    if(!rc) fsl_repo_verify_before_commit(f, rid);
+    if(!rc) fsl__repo_verify_before_commit(f, rid);
   }
   end:
   if(rc && db->error.code && !f->error.code){
@@ -10893,7 +10888,7 @@ int fsl_content_deltify(fsl_cx * f, fsl_id_t rid,
     Removes all entries from the repo's blob table which are listed in
     the shun table.
  */
-int fsl_repo_shun_artifacts(fsl_cx * f){
+int fsl__repo_shun_artifacts(fsl_cx * const f){
   fsl_stmt q = fsl_stmt_empty;
   int rc;
   fsl_db * db = f ? fsl_cx_db_repo(f) : NULL;
@@ -10917,7 +10912,7 @@ int fsl_repo_shun_artifacts(fsl_cx * f){
   if(rc) goto end;
   while( !rc && (FSL_RC_STEP_ROW==fsl_stmt_step(&q)) ){
     fsl_id_t const srcid = fsl_stmt_g_id(&q, 0);
-    rc = fsl_content_undeltify(f, srcid);
+    rc = fsl__content_undeltify(f, srcid);
   }
   fsl_stmt_finalize(&q);
   if(!rc){
@@ -11138,8 +11133,8 @@ int fsl_import_file( fsl_cx * f, char relativeToCwd,
   if(!zName || !*zName) return FSL_RC_MISUSE;
   else if(!f->ckout.dir) return FSL_RC_NOT_A_CKOUT;
   else if(!db) return FSL_RC_NOT_A_REPO;
-  canon = fsl_cx_scratchpad(f);
-  nbuf = fsl_cx_scratchpad(f);
+  canon = fsl__cx_scratchpad(f);
+  nbuf = fsl__cx_scratchpad(f);
 
   assert(!fbuf->used && "Misuse of f->fileContent");
   assert(f->ckout.dir);
@@ -11157,7 +11152,7 @@ int fsl_import_file( fsl_cx * f, char relativeToCwd,
   if(rc) goto end;
   inTrans = 1;
 
-  rc = fsl_repo_filename_fnid2(f, fn, &fnid, 1);
+  rc = fsl__repo_filename_fnid2(f, fn, &fnid, 1);
   if(rc) goto end;
 
   /* Import the file... */
@@ -11172,12 +11167,12 @@ int fsl_import_file( fsl_cx * f, char relativeToCwd,
     goto end;
   }
   fn = NULL;
-  rc = fsl_content_put( f, fbuf, &rcRid );
+  rc = fsl__content_put( f, fbuf, &rcRid );
   if(!rc){
     assert(rcRid > 0);
     if(parentRid>0){
       /* Make parent version a delta of this one, if possible... */
-      rc = fsl_content_deltify(f, parentRid, rcRid, 0);
+      rc = fsl__content_deltify(f, parentRid, rcRid, 0);
     }
     if(!rc){
       if(rid) *rid = rcRid;
@@ -11196,10 +11191,10 @@ int fsl_import_file( fsl_cx * f, char relativeToCwd,
   }
 
   end:
-  fsl_cx_content_buffer_yield(f);
+  fsl__cx_content_buffer_yield(f);
   assert(0==fbuf->used);
-  fsl_cx_scratchpad_yield(f, canon);
-  fsl_cx_scratchpad_yield(f, nbuf);
+  fsl__cx_scratchpad_yield(f, canon);
+  fsl__cx_scratchpad_yield(f, nbuf);
   if(inTrans) fsl_db_transaction_rollback(db);
   return rc;
 }
@@ -11270,7 +11265,7 @@ int fsl__shunned_remove(fsl_cx * const f){
      "SELECT rid FROM delta WHERE srcid IN toshun"
   );
   while( 0==rc && FSL_RC_STEP_ROW==fsl_stmt_step(&q) ){
-    rc = fsl_content_undeltify(f, fsl_stmt_g_id(&q, 0));
+    rc = fsl__content_undeltify(f, fsl_stmt_g_id(&q, 0));
   }
   fsl_stmt_finalize(&q);
   if(rc) goto end;
@@ -11322,6 +11317,15 @@ int fsl__shunned_remove(fsl_cx * const f){
    only be cached once. The 2nd %s must be __FILE__.
 */
 #define SELECT_FROM_CONFIG "SELECT value FROM %s WHERE name=?/*%s*/"
+
+static int fsl__confdb_to_role(fsl_confdb_e m){
+  switch(m){
+    case FSL_CONFDB_REPO: return FSL_DBROLE_REPO;
+    case FSL_CONFDB_CKOUT: return FSL_DBROLE_CKOUT;
+    case FSL_CONFDB_GLOBAL: return FSL_DBROLE_CONFIG;
+    default: return FSL_DBROLE_NONE;
+  }
+}
 
 char const * fsl_config_table_for_role(fsl_confdb_e mode){
   switch(mode){
@@ -11391,6 +11395,7 @@ int32_t fsl_config_get_int32( fsl_cx * f, fsl_confdb_e mode,
         fsl_db_prepare_cached(db, &st, SELECT_FROM_CONFIG,
                               table, __FILE__);
         if(st){
+          st->role = fsl__confdb_to_role(mode);
           fsl_stmt_bind_text(st, 1, key, -1, 0);
           if(FSL_RC_STEP_ROW==fsl_stmt_step(st)){
             rv = fsl_stmt_g_int32(st, 0);
@@ -11425,6 +11430,7 @@ int64_t fsl_config_get_int64( fsl_cx * f, fsl_confdb_e mode,
         fsl_db_prepare_cached(db, &st, SELECT_FROM_CONFIG,
                               table, __FILE__);
         if(st){
+          st->role = fsl__confdb_to_role(mode);
           fsl_stmt_bind_text(st, 1, key, -1, 0);
           if(FSL_RC_STEP_ROW==fsl_stmt_step(st)){
             rv = fsl_stmt_g_int64(st, 0);
@@ -11466,6 +11472,7 @@ double fsl_config_get_double( fsl_cx * f, fsl_confdb_e mode,
       fsl_db_prepare_cached(db, &st, SELECT_FROM_CONFIG,
                             table, __FILE__);
       if(st){
+        st->role = fsl__confdb_to_role(mode);
         fsl_stmt_bind_text(st, 1, key, -1, 0);
         if(FSL_RC_STEP_ROW==fsl_stmt_step(st)){
           rv = fsl_stmt_g_double(st, 0);
@@ -11502,7 +11509,7 @@ int fsl_config_get_buffer( fsl_cx * f, fsl_confdb_e mode,
         rc = FSL_RC_NOT_A_CKOUT;
         break;
       }
-      fsl_buffer * fname = fsl_cx_scratchpad(f);
+      fsl_buffer * fname = fsl__cx_scratchpad(f);
       rc = fsl_config_versionable_filename(f, key, fname);
       if(!rc){
         char const * zFile = fsl_buffer_cstr(fname);
@@ -11514,7 +11521,7 @@ int fsl_config_get_buffer( fsl_cx * f, fsl_confdb_e mode,
           rc = fsl_buffer_fill_from_filename(b, zFile);
         }
       }
-      fsl_cx_scratchpad_yield(f,fname);
+      fsl__cx_scratchpad_yield(f,fname);
       break;
     }
     default: {
@@ -11529,6 +11536,7 @@ int fsl_config_get_buffer( fsl_cx * f, fsl_confdb_e mode,
         rc = fsl_cx_uplift_db_error2(f, db, rc);
         break;
       }
+      st->role = fsl__confdb_to_role(mode);
       fsl_stmt_bind_text(st, 1, key, -1, 0);
       if(FSL_RC_STEP_ROW==fsl_stmt_step(st)){
         fsl_size_t len = 0;
@@ -11568,6 +11576,7 @@ bool fsl_config_get_bool( fsl_cx * f, fsl_confdb_e mode,
       rc = fsl_db_prepare_cached(db, &st, SELECT_FROM_CONFIG,
                                  table, __FILE__);
       if(!rc){
+        st->role = fsl__confdb_to_role(mode);
         fsl_stmt_bind_text(st, 1, key, -1, 0);
         if(FSL_RC_STEP_ROW==fsl_stmt_step(st)){
           char const * col = fsl_stmt_g_text(st, 0, NULL);
@@ -11598,10 +11607,13 @@ static int fsl_config_set_prepare( fsl_cx * f, fsl_stmt **st,
   else if(!*key) return FSL_RC_RANGE;
   else{
     const char * sql = FSL_CONFDB_REPO==mode
-      ? "REPLACE INTO %s(name,value,mtime) VALUES(?,?,now())/*%s()*/"
-      : "REPLACE INTO %s(name,value) VALUES(?,?)/*%s()*/";
+      ? "REPLACE INTO %!Q(name,value,mtime) VALUES(?,?,now())/*%s()*/"
+      : "REPLACE INTO %!Q(name,value) VALUES(?,?)/*%s()*/";
     int rc = fsl_db_prepare_cached(db, st, sql,  table, __func__);
-    if(!rc) rc = fsl_stmt_bind_text(*st, 1, key, -1, 1);
+    if(!rc){
+      (*st)->role = fsl__confdb_to_role(mode);
+      rc = fsl_stmt_bind_text(*st, 1, key, -1, 1);
+    }
     if(rc && !f->error.code){
       fsl_cx_uplift_db_error(f, db);
     }
@@ -11627,7 +11639,7 @@ static int fsl_config_set_versionable( fsl_cx * f, char const * key,
   if(!fsl_needs_ckout(f)){
     return FSL_RC_NOT_A_CKOUT;
   }
-  fsl_buffer * fName = fsl_cx_scratchpad(f);
+  fsl_buffer * fName = fsl__cx_scratchpad(f);
   int rc = fsl_config_versionable_filename(f, key, fName);
   if(!rc){
     fsl_buffer fake = fsl_buffer_empty;
@@ -11635,7 +11647,7 @@ static int fsl_config_set_versionable( fsl_cx * f, char const * key,
     fake.capacity = fake.used = valLen;
     rc = fsl_buffer_to_filename(&fake, fsl_buffer_cstr(fName));
   }
-  fsl_cx_scratchpad_yield(f, fName);
+  fsl__cx_scratchpad_yield(f, fName);
   return rc;
 }
 
@@ -11843,7 +11855,7 @@ int fsl_config_transaction_begin(fsl_cx * f, fsl_confdb_e mode){
   }
 }
 
-int fsl_config_transaction_end(fsl_cx * f, fsl_confdb_e mode, char rollback){
+int fsl_config_transaction_end(fsl_cx * f, fsl_confdb_e mode, bool rollback){
   fsl_db * db = fsl_config_for_role(f,mode);
   if(!db) return FSL_RC_MISUSE;
   else{
@@ -12006,7 +12018,7 @@ static struct {
    configuration that matches iMatch. The returned string must
    eventually be fsl_free()'d.
 */
-char *fsl_config_inop_rhs(int iMask){
+char *fsl__config_inop_rhs(int iMask){
   fsl_buffer x = fsl_buffer_empty;
   const char *zSep = "";
   const int n = (int)ARRAYLEN(fslConfigXfer);
@@ -12233,10 +12245,10 @@ bool fsl_config_has_versionable( fsl_cx * f, char const * key ){
   if(!f || !key || !*key || !f->ckout.dir) return 0;
   else if(!fsl_config_key_is_fossil(key)) return 0;
   else{
-    fsl_buffer * fn = fsl_cx_scratchpad(f);
+    fsl_buffer * fn = fsl__cx_scratchpad(f);
     int rc = fsl_config_versionable_filename(f, key, fn);
     if(!rc) rc = fsl_stat(fsl_buffer_cstr(fn), NULL, 0);
-    fsl_cx_scratchpad_yield(f, fn);
+    fsl__cx_scratchpad_yield(f, fn);
     return 0==rc;
   }
 }
@@ -12417,12 +12429,12 @@ int fsl_cx_init( fsl_cx ** tgt, fsl_cx_init_opt const * param ){
 
 static void fsl_cx_mcache_clear(fsl_cx *f){
   const unsigned cacheLen =
-    (unsigned)(sizeof(fsl_mcache_empty.aAge)
-               /sizeof(fsl_mcache_empty.aAge[0]));
+    (unsigned)(sizeof(fsl__mcache_empty.aAge)
+               /sizeof(fsl__mcache_empty.aAge[0]));
   for(unsigned i = 0; i < cacheLen; ++i){
     fsl_deck_finalize(&f->cache.mcache.decks[i]);
   }
-  f->cache.mcache = fsl_mcache_empty;
+  f->cache.mcache = fsl__mcache_empty;
 }
 
 static void fsl_cx_reset(fsl_cx * const f, bool closeDatabases){
@@ -12435,32 +12447,31 @@ static void fsl_cx_reset(fsl_cx * const f, bool closeDatabases){
       not public state. We could arguably close and reopen it here,
       but then we introduce a potenital error case (OOM) where we
       currently have none (thus the void return).
+
+      2021-11-09: it turns out we've had an error case all along
+      here: if any cached statements are opened for one of the dbs,
+      that can prohibit its detachement.
     */
     SFREE(f->ckout.dir);
     f->ckout.dirLen = 0;
     /* assert(NULL==f->dbMain); */
-    assert(!f->repo.db.dbh);
-    assert(!f->ckout.db.dbh);
-    assert(!f->config.db.dbh);
-    assert(!f->repo.db.filename);
-    assert(!f->ckout.db.filename);
-    assert(!f->config.db.filename);
   }
   SFREE(f->repo.user);
   SFREE(f->ckout.uuid);
   SFREE(f->cache.projectCode);
 #undef SFREE
   fsl_error_clear(&f->error);
-  fsl_card_J_list_free(&f->ticket.customFields, 1);
+  fsl__card_J_list_free(&f->ticket.customFields, 1);
   fsl_buffer_clear(&f->fileContent);
   for(int i = 0; i < FSL_CX_NSCRATCH; ++i){
     fsl_buffer_clear(&f->scratchpads.buf[i]);
     f->scratchpads.used[i] = false;
   }
-  fsl_acache_clear(&f->cache.arty);
+  fsl__acache_clear(&f->cache.arty);
   fsl_id_bag_clear(&f->cache.leafCheck);
   fsl_id_bag_clear(&f->cache.toVerify);
-  fsl_cx_clear_mf_seen(f);
+  fsl__cx_clear_mf_seen(f, true);
+  assert(NULL==f->cache.mfSeen.list);
   if(f->xlinkers.list){
     fsl_free(f->xlinkers.list);
     f->xlinkers = fsl_xlinker_list_empty;
@@ -12476,11 +12487,12 @@ static void fsl_cx_reset(fsl_cx * const f, bool closeDatabases){
   f->cache = fsl_cx_empty.cache;
 }
 
-void fsl_cx_clear_mf_seen(fsl_cx * f){
-  fsl_id_bag_clear(&f->cache.mfSeen);
+void fsl__cx_clear_mf_seen(fsl_cx * const f, bool freeMemory){
+  if(freeMemory) fsl_id_bag_clear(&f->cache.mfSeen);
+  else fsl_id_bag_reset(&f->cache.mfSeen);
 }
 
-void fsl_cx_finalize( fsl_cx * f ){
+void fsl_cx_finalize( fsl_cx * const f ){
   void const * allocStamp = f ? f->allocStamp : NULL;
   if(!f) return;
 
@@ -12593,7 +12605,6 @@ int fsl_cx_err_report( fsl_cx * const f, bool addNewline ){
 
 int fsl_cx_uplift_db_error( fsl_cx * const f, fsl_db * db ){
   assert(f);
-  if(!f) return FSL_RC_MISUSE;
   if(!db){
     db = f->dbMain;
     assert(db && "misuse: no DB handle to uplift error from!");
@@ -12604,25 +12615,26 @@ int fsl_cx_uplift_db_error( fsl_cx * const f, fsl_db * db ){
 }
 
 int fsl_cx_uplift_db_error2(fsl_cx * const f, fsl_db * db, int rc){
-  if(!db) db = f->dbMain;
-  assert(db);
-  if(rc && FSL_RC_OOM!=rc && !f->error.code && db->error.code){
-    rc = fsl_cx_uplift_db_error(f, db);
+  assert(f);
+  if(!f->error.code && rc && rc!=FSL_RC_OOM){
+    if(!db) db = f->dbMain;
+    assert(db && "misuse: no DB handle to uplift error from!");
+    if(db->error.code) rc = fsl_cx_uplift_db_error(f, db);
   }
   return rc;
 }
 
 fsl_db * fsl_cx_db_config( fsl_cx * const f ){
   if(!f) return NULL;
-  else if(f->config.db.dbh) return &f->config.db;
   else if(f->dbMain && (FSL_DBROLE_CONFIG & f->dbMain->role)) return f->dbMain;
+  else if(f->config.db.dbh) return &f->config.db;
   else return NULL;
 }
 
 fsl_db * fsl_cx_db_repo( fsl_cx * const f ){
   if(!f) return NULL;
-  else if(f->repo.db.dbh) return &f->repo.db;
   else if(f->dbMain && (FSL_DBROLE_REPO & f->dbMain->role)) return f->dbMain;
+  else if(f->repo.db.dbh) return &f->repo.db;
   else return NULL;
 }
 
@@ -12646,8 +12658,8 @@ fsl_db * fsl_needs_ckout(fsl_cx * const f){
 
 fsl_db * fsl_cx_db_ckout( fsl_cx * const f ){
   if(!f) return NULL;
-  else if(f->ckout.db.dbh) return &f->ckout.db;
   else if(f->dbMain && (FSL_DBROLE_CKOUT & f->dbMain->role)) return f->dbMain;
+  else if(f->ckout.db.dbh) return &f->ckout.db;
   else return NULL;
 }
 
@@ -12688,25 +12700,32 @@ fsl_db * fsl_cx_db_for_role(fsl_cx * const f, fsl_dbrole_e r){
     Detaches the given db role from f->dbMain and removes the role
     from f->dbMain->role.
 */
-static int fsl_cx_detach_role(fsl_cx * f, fsl_dbrole_e r){
-  if(!f || !f->dbMain) return FSL_RC_MISUSE;
+static int fsl_cx_detach_role(fsl_cx * const f, fsl_dbrole_e r){
+  if(NULL==f->dbMain) return FSL_RC_MISUSE;
   else if(!(r & f->dbMain->role)){
     assert(!"Misuse: cannot detach unattached role.");
     return FSL_RC_NOT_FOUND;
   }
   else{
-    fsl_db * db = fsl_cx_db_for_role(f,r);
+    fsl_db * const db = fsl_cx_db_for_role(f,r);
     int rc;
-    if(!db) return FSL_RC_RANGE;
+    assert(db && "Internal API misuse.");
     assert(f->dbMain != db);
     f->dbMain->role &= ~r;
-    rc = fsl_db_detach( f->dbMain, fsl_db_role_label(r) );
-    //MARKER(("rc=%s %s %s\n", fsl_rc_cstr(rc), fsl_db_role_label(r),
-    //        fsl_buffer_cstr(&f->dbMain->error.msg)));
-    fsl_free(db->filename);
-    fsl_free(db->name);
-    db->filename = NULL;
-    db->name = NULL;
+    rc = fsl__db_cached_clear_role(f->dbMain, r)
+      /* Make sure that we destroy any cached statements which are
+         known to be tied to this db role. This is primarily a kludge
+         for the global config db to avoid that closing it fails due
+         to a lock held by those statements. This is a special case
+         for the global db (as opposed to the repo/ckout dbs) because
+         exactly when that db is opened and close is not as tightly
+         controlled/funneled as the other dbs. */;    
+    if(0==rc){
+      rc = fsl_db_detach( f->dbMain, fsl_db_role_label(r) );
+      //MARKER(("rc=%s %s %s\n", fsl_rc_cstr(rc), fsl_db_role_label(r),
+      //        fsl_buffer_cstr(&f->dbMain->error.msg)));
+    }
+    fsl__db_clear_strings(db, true);
     return rc;
   }
 }
@@ -12720,11 +12739,11 @@ static int fsl_cx_detach_role(fsl_cx * f, fsl_dbrole_e r){
 int fsl_cx_attach_role(fsl_cx * const f, const char *zDbName,
                        fsl_dbrole_e r){
   char const * label = fsl_db_role_label(r);
-  fsl_db * db = fsl_cx_db_for_role(f, r);
+  fsl_db * const db = fsl_cx_db_for_role(f, r);
   char ** nameDest = NULL;
   int rc;
   if(!f->dbMain){
-    fsl_fatal(FSL_RC_MISUSE,"Internal API misuse: f->dbMain has "
+    fsl__fatal(FSL_RC_MISUSE,"Internal API misuse: f->dbMain has "
               "not been set, so cannot attach role.");
     return FSL_RC_MISUSE;
   }
@@ -12786,27 +12805,23 @@ int fsl_cx_attach_role(fsl_cx * const f, const char *zDbName,
 }
 
 int fsl_config_close( fsl_cx * const f ){
-  if(!f) return FSL_RC_MISUSE;
-  else{
-    int rc;
-    fsl_db * const db = &f->config.db;
-    if(f->dbMain && (FSL_DBROLE_CONFIG & f->dbMain->role)){
-      /* Config db is ATTACHed. */
-      rc = fsl_cx_detach_role(f, FSL_DBROLE_CONFIG);
-    }
-    else rc = FSL_RC_NOT_FOUND;
-    assert(!db->dbh);
-    fsl_db_clear_strings(db, 1);
-    return rc;
+  int rc = 0;
+  fsl_db * const db = &f->config.db;
+  if(f->dbMain && (FSL_DBROLE_CONFIG & f->dbMain->role)){
+    /* Config db is ATTACHed. */
+    rc = fsl_cx_detach_role(f, FSL_DBROLE_CONFIG);
+  }else{
+    fsl_db_close(db);
   }
+  return rc;
 }
 
 int fsl_repo_close( fsl_cx * const f ){
   if(fsl_cx_transaction_level(f)){
     return fsl_cx_err_set(f, FSL_RC_MISUSE,
-                          "Cannot close repo with opened transaction.");
+                          "Cannot close repo with an opened transaction.");
   }else{
-    int rc;
+    int rc = 0;
     fsl_db * const db = &f->repo.db;
     if(f->dbMain && (FSL_DBROLE_REPO & f->dbMain->role)){
       /* Repo db is ATTACHed. */
@@ -12818,10 +12833,10 @@ int fsl_repo_close( fsl_cx * const f ){
         assert(f->dbMain!=db);
         rc = fsl_cx_detach_role(f, FSL_DBROLE_REPO);
       }
+    }else{
+      fsl_db_close(db);
     }
-    else rc = FSL_RC_NOT_FOUND;
     assert(!db->dbh);
-    fsl_db_clear_strings(db, true);
     return rc;
   }
 }
@@ -12831,28 +12846,25 @@ int fsl_ckout_close( fsl_cx * const f ){
     return fsl_cx_err_set(f, FSL_RC_MISUSE,
                           "Cannot close checkout with opened transaction.");
   }else{
-    int rc;
+    int rc = 0;
     fsl_db * const db = &f->ckout.db;
     if(f->dbMain && (FSL_DBROLE_CKOUT & f->dbMain->role)){
       /* Checkout db is ATTACHed. */
       rc = fsl_cx_detach_role(f, FSL_DBROLE_CKOUT);
-      fsl_repo_close(f) /*
-                          Because the repo is implicitly opened, we
-                          "should" implicitly close it. This is
-                          debatable but "probably almost always"
-                          desired. i can't currently envisage a
-                          reasonable use-case which requires closing
-                          the checkout but keeping the repo opened.
-                          The repo can always be re-opened by itself.
-                        */;
+      fsl_repo_close(f)
+        /* Because the repo is implicitly opened, we "should"
+           implicitly close it. This is debatable but "probably almost
+           always" desired. i can't currently envisage a reasonable
+           use-case which requires closing the checkout but keeping
+           the repo opened.  The repo can always be re-opened by
+           itself. */;
     }else{
-      rc = FSL_RC_NOT_FOUND;
+      fsl_db_close(db);
     }
     fsl_free(f->ckout.uuid);
     f->ckout.uuid = NULL;
     f->ckout.rid = 0;
     assert(!db->dbh);
-    fsl_db_clear_strings(db, true);
     return rc;
   }
 }
@@ -12937,7 +12949,7 @@ int fsl_cx_prepare( fsl_cx * const f, fsl_stmt * const tgt, char const * sql,
     FIXME: this was broken by the addition of "cfg." prefix on the
     schema's tables.
  */
-static int fsl_config_file_reset(fsl_cx * f, char const * dbName){
+static int fsl_config_file_reset(fsl_cx * const f, char const * dbName){
   fsl_db DB = fsl_db_empty;
   fsl_db * db = &DB;
   int rc = 0;
@@ -13037,9 +13049,9 @@ int fsl_config_open( fsl_cx * const f, char const * openDbName ){
   int rc = 0;
   const char * zDbName = 0;
   char * zPrefName = 0;
-  if(!f) return FSL_RC_MISUSE;
-  else if(f->config.db.dbh){
-    fsl_config_close(f);
+  if(fsl_cx_db_config(f)){
+    if(NULL==openDbName || 0==*openDbName) return 0/*nothing to do*/;
+    else fsl_config_close(f);
   }
   if(openDbName && *openDbName){
     zDbName = openDbName;
@@ -13067,6 +13079,7 @@ int fsl_config_open( fsl_cx * const f, char const * openDbName ){
     goto end;
   }
 #endif
+  assert(NULL==fsl_cx_db_config(f));
   rc = fsl_cx_attach_role(f, zDbName, FSL_DBROLE_CONFIG);
   end:
   fsl_free(zPrefName);
@@ -13140,7 +13153,7 @@ fsl_glob_category_e fsl_glob_name_to_category(char const * str){
    checkout and/or repo.
 */
 static int fsl_cx_after_open(fsl_cx * f){
-  int rc = fsl_ckout_version_fetch(f);
+  int rc = fsl__ckout_version_fetch(f);
   if(!rc) rc = fsl_cx_load_glob_lists(f);
   return rc;
 }
@@ -13256,7 +13269,7 @@ static void fsl_ckout_mtime_set(fsl_cx * const f){
     : 0.0;
 }
 
-int fsl_ckout_version_fetch( fsl_cx *f ){
+int fsl__ckout_version_fetch( fsl_cx * const f ){
   fsl_id_t rid = 0;
   int rc = 0;
   fsl_db * dbC = fsl_cx_db_ckout(f);
@@ -13311,7 +13324,7 @@ int fsl_ckout_version_fetch( fsl_cx *f ){
     Returns 0 on success, FSL_RC_OOM if copying uuid fails, or some
     error from fsl_rid_to_uuid() if that fails.
 
-    Does not write the changes to disk. Use fsl_ckout_version_write()
+    Does not write the changes to disk. Use fsl__ckout_version_write()
     for that. That routine also calls this one, so there's no need to
     call both.
 */
@@ -13330,13 +13343,13 @@ static int fsl_cx_ckout_version_set(fsl_cx *f, fsl_id_t rid,
   return 0;
 }
 
-int fsl_ckout_version_write( fsl_cx *f, fsl_id_t vid,
+int fsl__ckout_version_write( fsl_cx * const f, fsl_id_t vid,
                              fsl_uuid_cstr hash ){
   int rc = 0;
   if(!fsl_needs_ckout(f)) return FSL_RC_NOT_A_CKOUT;
   else if(vid<0){
     return fsl_cx_err_set(f, FSL_RC_MISUSE,
-                          "Invalid vid for fsl_ckout_version_write()");
+                          "Invalid vid for fsl__ckout_version_write()");
   }
   if(f->ckout.rid!=vid){
     rc = fsl_cx_ckout_version_set(f, vid, hash);
@@ -13351,7 +13364,7 @@ int fsl_ckout_version_write( fsl_cx *f, fsl_id_t vid,
   }
   if(!rc){
     char * zFingerprint = 0;
-    rc = fsl_repo_fingerprint_search(f, 0, &zFingerprint);
+    rc = fsl__repo_fingerprint_search(f, 0, &zFingerprint);
     if(!rc){
       rc = fsl_config_set_text(f, FSL_CONFDB_CKOUT,
                                "fingerprint", zFingerprint);
@@ -13602,11 +13615,11 @@ char const * fsl_cx_ckout_dir_name(fsl_cx const * f,
   return rc;
 }
 
-int fsl_cx_flags_get( fsl_cx * f ){
+int fsl_cx_flags_get( fsl_cx const * const f ){
   return f->flags;
 }
 
-int fsl_cx_flag_set( fsl_cx * f, int flags, bool enable ){
+int fsl_cx_flag_set( fsl_cx * const f, int flags, bool enable ){
   int const oldFlags = f->flags;
   if(enable) f->flags |= flags;
   else f->flags &= ~flags;
@@ -13653,7 +13666,7 @@ int fsl_xlink_listener( fsl_cx * const f, char const * name,
   return 0;
 }
 
-int fsl_cx_user_set( fsl_cx * f, char const * userName ){
+int fsl_cx_user_set( fsl_cx * const f, char const * userName ){
   if(!f) return FSL_RC_MISUSE;
   else if(!userName || !*userName){
     fsl_free(f->repo.user);
@@ -13670,8 +13683,21 @@ int fsl_cx_user_set( fsl_cx * f, char const * userName ){
   }
 }
 
-char const * fsl_cx_user_get( fsl_cx const * f ){
-  return f ? f->repo.user : NULL;
+char const * fsl_cx_user_guess(fsl_cx * const f){
+  if(!f->repo.user){
+    char * u = fsl_user_name_guess();
+    if(u){
+      fsl_free(f->repo.user);
+      f->repo.user = u;
+      // don't use fsl_cx_user_set(f, u), to avoid another strdup()
+    }
+  }
+  return f->repo.user;
+}
+  
+
+char const * fsl_cx_user_get( fsl_cx const * const f ){
+  return f->repo.user;
 }
 
 int fsl_cx_schema_ticket(fsl_cx * f, fsl_buffer * pOut){
@@ -13702,8 +13728,8 @@ int fsl_cx_stat2( fsl_cx * const f, bool relativeToCwd,
   assert(f);
   if(!zName || !*zName) return FSL_RC_MISUSE;
   else if(!fsl_needs_ckout(f)) return FSL_RC_NOT_A_CKOUT;
-  b = fsl_cx_scratchpad(f);
-  bufRel = fsl_cx_scratchpad(f);
+  b = fsl__cx_scratchpad(f);
+  bufRel = fsl__cx_scratchpad(f);
 #if 1
   rc = fsl_ckout_filename_check(f, relativeToCwd, zName, bufRel);
   if(rc) goto end;
@@ -13742,8 +13768,8 @@ int fsl_cx_stat2( fsl_cx * const f, bool relativeToCwd,
     }
   }
   end:
-  fsl_cx_scratchpad_yield(f, b);
-  fsl_cx_scratchpad_yield(f, bufRel);
+  fsl__cx_scratchpad_yield(f, b);
+  fsl__cx_scratchpad_yield(f, bufRel);
   return rc;
 }
 
@@ -13766,7 +13792,7 @@ char const * fsl_cx_filename_collation(fsl_cx const * f){
 }
 
 
-void fsl_cx_content_buffer_yield(fsl_cx * const f){
+void fsl__cx_content_buffer_yield(fsl_cx * const f){
   enum { MaxSize = 1024 * 1024 * 2 };
   assert(f);
   if(f->fileContent.capacity>MaxSize){
@@ -13782,11 +13808,15 @@ fsl_error const * fsl_cx_err_get_e(fsl_cx const * f){
 
 int fsl_cx_close_dbs( fsl_cx * const f ){
   if(fsl_cx_transaction_level(f)){
+    /* Is this really necessary? */
     return fsl_cx_err_set(f, FSL_RC_MISUSE,
                           "Cannot close the databases when a "
                           "transaction is pending.");
   }
+  if(NULL==f->dbMain) return 0;
   int rc = 0, rc1;
+  rc = fsl__db_cached_clear_role(f->dbMain, 0);
+  if(rc) return fsl_cx_uplift_db_error(f, f->dbMain);
   rc1 = fsl_ckout_close(f);
   if(rc1) rc = rc1;
   rc1 = fsl_repo_close(f);
@@ -13796,6 +13826,9 @@ int fsl_cx_close_dbs( fsl_cx * const f ){
   assert(!f->repo.db.dbh);
   assert(!f->ckout.db.dbh);
   assert(!f->config.db.dbh);
+  assert(!f->repo.db.filename);
+  assert(!f->ckout.db.filename);
+  assert(!f->config.db.filename);
   return rc;
 }
 
@@ -13944,14 +13977,14 @@ int fsl_cx_confirm(fsl_cx *f, fsl_confirm_detail const * detail,
       break;
     default:
       assert(!"Unhandled fsl_confirm_event_e value");
-      fsl_fatal(FSL_RC_UNSUPPORTED,
+      fsl__fatal(FSL_RC_UNSUPPORTED,
                 "Unhandled fsl_confirm_event_e value: %d",
                 detail->eventId)/*does not return*/;
   }
   return 0;
 }
 
-int fsl_cx_update_seen_delta_mf(fsl_cx *f){
+int fsl__cx_update_seen_delta_deck(fsl_cx * const f){
   int rc = 0;
   fsl_db * const d = fsl_cx_db_repo(f);
   if(d && f->cache.seenDeltaManifest <= 0){
@@ -13975,14 +14008,14 @@ int fsl_reserved_fn_check(fsl_cx *f, const char *zPath,
                         (int)nPath, zPath);
   }
   if(!(f->flags & FSL_CX_F_ALLOW_WINDOWS_RESERVED_NAMES)
-     && fsl_is_reserved_fn_windows(zPath, nPath)){
+     && fsl__is_reserved_fn_windows(zPath, nPath)){
     return fsl_cx_err_set(f, errRc,
                           "Filename is a Windows reserved name: %.*s",
                           (int)nPath, zPath);
   }
   if((z1 = fsl_cx_db_file_for_role(f, FSL_DBROLE_REPO, NULL))){
-    fsl_buffer * c1 = fsl_cx_scratchpad(f);
-    fsl_buffer * c2 = fsl_cx_scratchpad(f);
+    fsl_buffer * c1 = fsl__cx_scratchpad(f);
+    fsl_buffer * c2 = fsl__cx_scratchpad(f);
     rc = fsl_file_canonical_name2(relativeToCwd ? NULL : f->ckout.dir/*NULL is okay*/,
                                   z1, c1, false);
     if(!rc) rc = fsl_file_canonical_name2(relativeToCwd ? NULL : f->ckout.dir,
@@ -13994,8 +14027,8 @@ int fsl_reserved_fn_check(fsl_cx *f, const char *zPath,
       rc = fsl_cx_err_set(f, errRc, "File is the repository database: %.*s",
                           (int)nPath, zPath);
     }
-    fsl_cx_scratchpad_yield(f, c1);
-    fsl_cx_scratchpad_yield(f, c2);
+    fsl__cx_scratchpad_yield(f, c1);
+    fsl__cx_scratchpad_yield(f, c2);
     if(rc) return rc;
   }
   assert(!rc);
@@ -14013,7 +14046,7 @@ int fsl_reserved_fn_check(fsl_cx *f, const char *zPath,
     {FSL_MANIFEST_TAGS, "manifest.tags"},
     {0,0}
     };
-    fsl_buffer * c1 = fsl_cx_scratchpad(f);
+    fsl_buffer * c1 = fsl__cx_scratchpad(f);
     if(f->ckout.dir){
       rc = fsl_ckout_filename_check(f, relativeToCwd, zPath, c1);
     }else{
@@ -14034,13 +14067,13 @@ int fsl_reserved_fn_check(fsl_cx *f, const char *zPath,
       }
     }
     yield:
-    fsl_cx_scratchpad_yield(f, c1);
+    fsl__cx_scratchpad_yield(f, c1);
     break;
   }
   return rc;
 }
 
-fsl_buffer * fsl_cx_scratchpad(fsl_cx *f){
+fsl_buffer * fsl__cx_scratchpad(fsl_cx * const f){
   fsl_buffer * rc = 0;
   int i = (f->scratchpads.next<FSL_CX_NSCRATCH)
     ? f->scratchpads.next : 0;
@@ -14056,19 +14089,19 @@ fsl_buffer * fsl_cx_scratchpad(fsl_cx *f){
   }
   if(!rc){
     assert(!"Fatal fsl_cx::scratchpads misuse.");
-    fsl_fatal(FSL_RC_MISUSE,
+    fsl__fatal(FSL_RC_MISUSE,
               "Fatal internal fsl_cx::scratchpads misuse: "
               "too many unyielded buffer requests.");
   }else if(0!=rc->used){
     assert(!"Fatal fsl_cx::scratchpads misuse.");
-    fsl_fatal(FSL_RC_MISUSE,
+    fsl__fatal(FSL_RC_MISUSE,
               "Fatal internal fsl_cx::scratchpads misuse: "
               "used buffer after yielding it.");
   }
   return rc;
 }
 
-void fsl_cx_scratchpad_yield(fsl_cx *f, fsl_buffer * b){
+void fsl__cx_scratchpad_yield(fsl_cx * const f, fsl_buffer * const b){
   int i;
   assert(b);
   for(i = 0; i < FSL_CX_NSCRATCH; ++i){
@@ -14083,7 +14116,7 @@ void fsl_cx_scratchpad_yield(fsl_cx *f, fsl_buffer * b){
       return;
     }
   }
-  fsl_fatal(FSL_RC_MISUSE,
+  fsl__fatal(FSL_RC_MISUSE,
             "Fatal internal fsl_cx::scratchpads misuse: "
             "passed a non-scratchpad buffer.");
 }
@@ -14143,7 +14176,7 @@ static unsigned fsl_rm_empty_dirs(char const *coRoot, fsl_int_t rootLen,
   return rc;
 }
 
-unsigned int fsl_ckout_rm_empty_dirs(fsl_cx * f, fsl_buffer * tgtDir){
+unsigned int fsl_ckout_rm_empty_dirs(fsl_cx * const f, fsl_buffer * const tgtDir){
   int rc = f->ckout.dir ? 0 : FSL_RC_NOT_A_CKOUT;
   if(!rc){
     rc = fsl_rm_empty_dirs(f->ckout.dir, f->ckout.dirLen, tgtDir);
@@ -14151,16 +14184,16 @@ unsigned int fsl_ckout_rm_empty_dirs(fsl_cx * f, fsl_buffer * tgtDir){
   return rc;
 }
 
-int fsl_ckout_rm_empty_dirs_for_file(fsl_cx * f, char const *zAbsPath){
+int fsl_ckout_rm_empty_dirs_for_file(fsl_cx * const f, char const *zAbsPath){
   if(!fsl_is_rooted_in_ckout(f, zAbsPath)){
     assert(!"Internal API misuse!");
     return FSL_RC_MISUSE;
   }else{
-    fsl_buffer * const p = fsl_cx_scratchpad(f);
+    fsl_buffer * const p = fsl__cx_scratchpad(f);
     fsl_int_t const nAbs = (fsl_int_t)fsl_strlen(zAbsPath);
     int const rc = fsl_file_dirpart(zAbsPath, nAbs, p, false);
     if(!rc) fsl_rm_empty_dirs(f->ckout.dir, f->ckout.dirLen, p);
-    fsl_cx_scratchpad_yield(f,p);
+    fsl__cx_scratchpad_yield(f,p);
     return rc;
   }
 }
@@ -14177,7 +14210,7 @@ int fsl_ckout_fingerprint_check(fsl_cx * f){
   char const * zCkout = 0;
   char * zRepo = 0;
   fsl_id_t rcvCkout = 0;
-  fsl_buffer * const buf = fsl_cx_scratchpad(f);
+  fsl_buffer * const buf = fsl__cx_scratchpad(f);
   rc = fsl_config_get_buffer(f, FSL_CONFDB_CKOUT, "fingerprint", buf);
   if(FSL_RC_NOT_FOUND==rc){
     /* Older checkout with no fingerprint. Assume it's okay. */
@@ -14192,7 +14225,7 @@ int fsl_ckout_fingerprint_check(fsl_cx * f){
   buf->mem[6] = 'x';
 #endif
   rcvCkout = (fsl_id_t)atoi(zCkout);
-  rc = fsl_repo_fingerprint_search(f, rcvCkout, &zRepo);
+  rc = fsl__repo_fingerprint_search(f, rcvCkout, &zRepo);
   switch(rc){
     case FSL_RC_NOT_FOUND: goto mismatch;
     case 0:
@@ -14205,7 +14238,7 @@ int fsl_ckout_fingerprint_check(fsl_cx * f){
       break;
   }
   end:
-  fsl_cx_scratchpad_yield(f, buf);
+  fsl__cx_scratchpad_yield(f, buf);
   fsl_free(zRepo);
   return rc;
   mismatch:
@@ -14287,7 +14320,7 @@ static int fsl_list_v_fsl_stmt_finalize(void * obj, void * visitorState ){
 }
 #endif
 
-void fsl_db_clear_strings(fsl_db * const db, bool alsoErrorState ){
+void fsl__db_clear_strings(fsl_db * const db, bool alsoErrorState ){
   fsl_free(db->filename);
   db->filename = NULL;
   fsl_free(db->name);
@@ -14399,7 +14432,7 @@ void fsl_db_close( fsl_db * const db ){
     /* ignoring results in the style of "destructors may not
        throw". */
   }
-  fsl_db_clear_strings(db, 1);
+  fsl__db_clear_strings(db, true);
   fsl_db_cleanup_beforeCommit(db);
   fsl_buffer_clear(&db->cachePrepBuf);
   *db = fsl_db_empty;
@@ -14508,7 +14541,7 @@ char * fsl_db_unix_to_iso8601( fsl_db * const db, fsl_time_t t, bool localTime )
 
 enum fsl_stmt_flags_e {
 /**
-    fsl_stmt::flags bit indicating that fsl_db_preparev_cache() has
+    fsl_stmt::flags bit indicating that fsl_db_preparev_cached() has
     doled out this statement, effectively locking it until
     fsl_stmt_cached_yield() is called to release it.
  */
@@ -14672,6 +14705,9 @@ int fsl_db_preparev_cached( fsl_db * const db, fsl_stmt ** rv,
   }else{
     st->sql.cursor = buf->cursor/*hash value!*/;
     st->next = db->cacheHead;
+    st->role = db->role
+      /* Pessimistic assumption for purposes of invalidating
+         fsl__db_cached_clear_role(). */;
     db->cacheHead = st;
     st->flags = FSL_STMT_F_CACHE_HELD;
     *rv = st;
@@ -14776,6 +14812,41 @@ int fsl_stmt_finalize( fsl_stmt * const stmt ){
     }
     return 0;
   }
+}
+
+int fsl__db_cached_clear_role(fsl_db * const db, int role){
+  int rc = 0;
+  fsl_stmt * s;
+  fsl_stmt * prev = 0;
+  fsl_stmt * next = 0;
+  for( s = db->cacheHead; s; s = next ){
+    next = s->next;
+    if(0!=role && 0==(s->role & role)){
+      prev = s;
+      continue;
+    }
+    else if(FSL_STMT_F_CACHE_HELD & s->flags){
+      rc = fsl_error_set(&db->error, FSL_RC_MISUSE,
+                         "Cannot clear cached SQL statement "
+                         "for role #%d because it is currently "
+                         "being held by a call to "
+                         "fsl_db_preparev_cached(). SQL=%B",
+                         &s->sql);
+      break;
+    }
+    //MARKER(("Closing cached stmt: %s\n", fsl_buffer_cstr(&s->sql)));
+    if(prev){
+      prev->next = next;
+    }else if(s==db->cacheHead){
+      db->cacheHead = next;
+    }
+    s->next = 0;
+    s->flags = 0;
+    s->role = FSL_DBROLE_NONE;
+    fsl_stmt_finalize(s);
+    break;
+  }
+  return rc;
 }
 
 int fsl_stmt_step( fsl_stmt * const stmt ){
@@ -15590,7 +15661,7 @@ static void fsl_db_match_vfile_or_dir(
     sqlite3_result_int(context, 1);
     return;
   }
-  b = fsl_cx_scratchpad(f);
+  b = fsl__cx_scratchpad(f);
   rc = fsl_buffer_appendf(b, "%s/", p2);
   if(rc) goto oom;
   else if(cmp(p1, fsl_buffer_cstr(b))>0){
@@ -15601,7 +15672,7 @@ static void fsl_db_match_vfile_or_dir(
   assert(0==rc || 2==rc);
   sqlite3_result_int(context, rc);
   end:
-  fsl_cx_scratchpad_yield(f, b);
+  fsl__cx_scratchpad_yield(f, b);
   return;
   oom:
   sqlite3_result_error_nomem(context);
@@ -15687,7 +15758,7 @@ static char fsl_db_repo_schema_is_outofdate(fsl_db *db){
    it appears to have an out of date schema, and -1 if it appears to
    not be a repository.
 */
-int fsl_db_repo_verify_schema(fsl_db * db){
+int fsl__db_repo_verify_schema(fsl_db * db){
   if(fsl_db_repo_schema_is_outofdate(db)) return 1;
   else return fsl_db_exists(db,
                             "SELECT 1 FROM config "
@@ -15712,7 +15783,7 @@ static int fsl_db_verify_begin_was_not_called(void * db_fsl){
   assert(db && "What else could it be?");
   assert(db->dbh && "Else we can't have been called by sqlite3, could we have?");
   if(db->beginCount>0){
-    fsl_fatal(FSL_RC_MISUSE,"SQL: COMMIT was called from "
+    fsl__fatal(FSL_RC_MISUSE,"SQL: COMMIT was called from "
               "outside of fsl_db_transaction_end() while a "
               "fsl_db_transaction_begin()-started transaction "
               "is pending.");
@@ -15795,7 +15866,7 @@ int fsl_db_open( fsl_db * db, char const * dbFile,
     db->dbh = dbh;
     if(FSL_OPEN_F_SCHEMA_VALIDATE & openFlags){
       int check;
-      check = fsl_db_repo_verify_schema(db);
+      check = fsl__db_repo_verify_schema(db);
       if(0 != check){
         rc = (check<0)
           ? fsl_error_set(&db->error, FSL_RC_NOT_A_REPO,
@@ -16082,9 +16153,9 @@ int fsl_db_transaction_end(fsl_db * const db, bool doRollback){
          all relevant calls to fsl_db_transaction_begin()/end() with
          those routines before we can consider moving this there.
       */
-      rc = fsl_repo_leaf_do_pending_checks(db->f);
+      rc = fsl__repo_leafdo_pending_checks(db->f);
       if(!rc && db->f->cache.toVerify.used){
-        rc = fsl_repo_verify_at_commit(db->f);
+        rc = fsl__repo_verify_at_commit(db->f);
       }else{
         fsl_repo_verify_cancel(db->f);
       }
@@ -16771,10 +16842,10 @@ int fsl_stmt_each_f_dump( fsl_stmt * const stmt, void * state ){
   } while(0)
 
 typedef int StaticAssertMCacheArraySizes[
- ((sizeof(fsl_mcache_empty.aAge)
-  /sizeof(fsl_mcache_empty.aAge[0]))
- == (sizeof(fsl_mcache_empty.decks)
-     /sizeof(fsl_mcache_empty.decks[0])))
+ ((sizeof(fsl__mcache_empty.aAge)
+  /sizeof(fsl__mcache_empty.aAge[0]))
+ == (sizeof(fsl__mcache_empty.decks)
+     /sizeof(fsl__mcache_empty.decks[0])))
  ? 1 : -1
 ];
 
@@ -16796,9 +16867,9 @@ static void fsl_cx_mcache_insert(fsl_cx *f, fsl_deck * d){
     return;
   }
   static const unsigned cacheLen =
-    (unsigned)(sizeof(fsl_mcache_empty.aAge)
-               /sizeof(fsl_mcache_empty.aAge[0]));
-  fsl_mcache * const mc = &f->cache.mcache;
+    (unsigned)(sizeof(fsl__mcache_empty.aAge)
+               /sizeof(fsl__mcache_empty.aAge[0]));
+  fsl__mcache * const mc = &f->cache.mcache;
   while( d ){
     unsigned i;
     fsl_deck *pBaseline = d->B.baseline;
@@ -16842,15 +16913,16 @@ static void fsl_cx_mcache_insert(fsl_cx *f, fsl_deck * d){
    If manifest caching is disabled for f, false is immediately
    returned without causing side effects.
 */
-static bool fsl_cx_mcache_search(fsl_cx * f, fsl_id_t rid, fsl_deck * tgt){
+static bool fsl_cx_mcache_search(fsl_cx * const f, fsl_id_t rid,
+                                 fsl_deck * const tgt){
   if(!(f->flags & FSL_CX_F_MANIFEST_CACHE)) return false;
   static const unsigned cacheLen =
-    (int)(sizeof(fsl_mcache_empty.aAge)
-          /sizeof(fsl_mcache_empty.aAge[0]));
+    (int)(sizeof(fsl__mcache_empty.aAge)
+          /sizeof(fsl__mcache_empty.aAge[0]));
   unsigned i;
   assert(cacheLen ==
-         (unsigned)(sizeof(fsl_mcache_empty.decks)
-                    /sizeof(fsl_mcache_empty.decks[0])));
+         (unsigned)(sizeof(fsl__mcache_empty.decks)
+                    /sizeof(fsl__mcache_empty.decks[0])));
   for(i=0; i<cacheLen; ++i){
     if( f->cache.mcache.decks[i].rid==rid ){
       *tgt = f->cache.mcache.decks[i];
@@ -16862,6 +16934,41 @@ static bool fsl_cx_mcache_search(fsl_cx * f, fsl_id_t rid, fsl_deck * tgt){
   ++f->cache.mcache.misses;
   return false;
 }
+
+/**
+   Code duplication reducer for fsl_deck_parse2() and
+   fsl_deck_load_rid(). Checks fsl_cx_mcache_search() for rid.  If
+   found, overwrites tgt with its contents and returns true.  If not
+   found, returns false. If an entry is found and type!=FSL_SATYPE_ANY
+   and the found deck->type differs from type then false is returned,
+   FSL_RC_TYPE is returned via *rc, and f's error state is updated
+   with a description of the problem. In all other case *rc is set to
+   0.
+ */
+static bool fsl_cx_mcache_search2(fsl_cx * const f, fsl_id_t rid,
+                                  fsl_deck * const tgt,
+                                  fsl_satype_e type,
+                                  int * const rc){
+  *rc = 0;
+  if(fsl_cx_mcache_search(f, rid, tgt)){
+    assert(f == tgt->f);
+    if(type!=FSL_SATYPE_ANY && type!=tgt->type){
+      *rc = fsl_cx_err_set(f, FSL_RC_TYPE,
+                           "Unexpected match of RID #%" FSL_ID_T_PFMT " "
+                           "to a different artifact type (%d) "
+                           "than requested (%d).",
+                           tgt->type, type);
+      fsl_cx_mcache_insert(f, tgt);
+      assert(!tgt->f);
+      return false;
+    }else{
+      //MARKER(("Got cached deck: rid=%d\n", (int)d->rid));
+      return true;
+    }
+  }
+  return false;
+}
+
 
 /**
    If mem is NULL or inside d->content.mem then this function does
@@ -17081,7 +17188,7 @@ fsl_deck * fsl_deck_malloc(){
   return rc;
 }
 
-void fsl_deck_init( fsl_cx * f, fsl_deck * cards, fsl_satype_e type ){
+void fsl_deck_init( fsl_cx * const f, fsl_deck * const cards, fsl_satype_e type ){
   void const * allocStamp = cards->allocStamp;
   *cards = fsl_deck_empty;
   cards->allocStamp = allocStamp;
@@ -17089,7 +17196,7 @@ void fsl_deck_init( fsl_cx * f, fsl_deck * cards, fsl_satype_e type ){
   cards->type = type;
 }
 
-void fsl_card_J_list_free(fsl_list * li, bool alsoListMem){
+void fsl__card_J_list_free(fsl_list * li, bool alsoListMem){
   if(li->used) fsl_list_visit(li, 0, fsl_list_v_card_J_free, NULL);
   if(alsoListMem) fsl_list_reserve(li, 0);
   else li->used = 0;
@@ -17142,7 +17249,7 @@ static void fsl_deck_clean_I(fsl_deck * const m){
   fsl_deck_clean_string(m, &m->I);
 }
 static void fsl_deck_clean_J(fsl_deck * const m, bool alsoListMem){
-  fsl_card_J_list_free(&m->J, alsoListMem);
+  fsl__card_J_list_free(&m->J, alsoListMem);
 }
 static void fsl_deck_clean_K(fsl_deck * const m){
   fsl_deck_clean_string(m, &m->K);
@@ -17863,7 +17970,7 @@ int fsl_deck_R_calc2(fsl_deck * const mf, char ** tgt){
       fsl_md5_digest_to_base16(digest, hex);
     }
     end:
-    fsl_cx_content_buffer_yield(f);
+    fsl__cx_content_buffer_yield(f);
     assert(0==buf->used);
     if(rc) return rc;
     fsl_deck_F_rewind(mf);
@@ -18177,7 +18284,7 @@ struct fsl_deck_out_state {
 
   /**
       Scratch buffer for fossilizing bytes and other temporary work.
-      This value comes from fsl_cx_scratchpad().
+      This value comes from fsl__cx_scratchpad().
   */
   fsl_buffer * scratch;
 };
@@ -18486,7 +18593,7 @@ static int fsl_deck_out_F( fsl_deck_out_state * os ){
     instances in a lexical manner based on their names.  The order is
     important for card ordering in generated manifests.
  */
-int fsl_qsort_cmp_J_cards( void const * lhs, void const * rhs ){
+int fsl__qsort_cmp_J_cards( void const * lhs, void const * rhs ){
   fsl_card_J const * l = *((fsl_card_J const **)lhs);
   fsl_card_J const * r = *((fsl_card_J const **)rhs);
   /* Compare NULL as larger so that NULLs move to the right. That said,
@@ -19092,7 +19199,7 @@ int fsl_deck_unshuffle( fsl_deck * d, bool calculateRCard ){
   if(!d || !d->f) return FSL_RC_MISUSE;
   fsl_cx_err_reset(d->f);
 #define SORT(CARD,CMP) li = &d->CARD; fsl_list_sort(li, CMP)
-  SORT(J,fsl_qsort_cmp_J_cards);
+  SORT(J,fsl__qsort_cmp_J_cards);
   SORT(M,qsort_cmp_strings);
   SORT(Q,qsort_cmp_Q_cards);
   SORT(T,fsl_card_T_cmp);
@@ -19165,7 +19272,7 @@ int fsl_deck_output( fsl_deck * d, fsl_output_f out, void * outputState ){
   os->d = d;
   os->out = out;
   os->outState = outputState;
-  os->scratch = fsl_cx_scratchpad(f);
+  os->scratch = fsl__cx_scratchpad(f);
   switch(d->type){
     case FSL_SATYPE_CLUSTER:
       rc = fsl_deck_output_cluster(os);
@@ -19205,7 +19312,7 @@ int fsl_deck_output( fsl_deck * d, fsl_output_f out, void * outputState ){
     rc = fsl_deck_out_Z( os );
   }
   end:
-  fsl_cx_scratchpad_yield(f, os->scratch);
+  fsl__cx_scratchpad_yield(f, os->scratch);
   if(os->rc && os->error.code){
     fsl_error_move(&os->error, &f->error);
   }
@@ -19229,7 +19336,7 @@ int fsl_deck_output( fsl_deck * d, fsl_output_f out, void * outputState ){
    when crosslinking is completed. Returns 0 on success, non-0 for
    db error.
 */
-static int fsl_deck_crosslink_add_pending(fsl_cx * f, char cType, fsl_uuid_cstr uuid){
+static int fsl__deck_crosslink_add_pending(fsl_cx * f, char cType, fsl_uuid_cstr uuid){
   int rc = 0;
   assert(f->cache.isCrosslinking);
   rc = fsl_db_exec(f->dbMain,
@@ -19284,16 +19391,16 @@ int fsl_mlink_add_one( fsl_cx * f,
   assert(db->beginCount>0);
   //MARKER(("%s() pmid=%d mid=%d\n", __func__, (int)pmid, (int)mid));
 
-  rc = fsl_repo_filename_fnid2(f, zFilename, &fnid, 1);
+  rc = fsl__repo_filename_fnid2(f, zFilename, &fnid, 1);
   if(rc) return rc;
   if( zPrior && *zPrior ){
-    rc = fsl_repo_filename_fnid2(f, zPrior, &pfnid, 1);
+    rc = fsl__repo_filename_fnid2(f, zPrior, &pfnid, 1);
     if(rc) return rc;
   }else{
     pfnid = 0;
   }
   if( zFromUuid && *zFromUuid ){
-    pid = fsl_uuid_to_rid2(f, zFromUuid, FSL_PHANTOM_PUBLIC);
+    pid = fsl__uuid_to_rid2(f, zFromUuid, FSL_PHANTOM_PUBLIC);
     if(pid<0){
       assert(f->error.code);
       return f->error.code;
@@ -19304,7 +19411,7 @@ int fsl_mlink_add_one( fsl_cx * f,
   }
 
   if( zToUuid && *zToUuid ){
-    fid = fsl_uuid_to_rid2(f, zToUuid, FSL_PHANTOM_PUBLIC);
+    fid = fsl__uuid_to_rid2(f, zToUuid, FSL_PHANTOM_PUBLIC);
     if(fid<0){
       assert(f->error.code);
       return f->error.code;
@@ -19365,7 +19472,7 @@ int fsl_mlink_add_one( fsl_cx * f,
   if(!rc && pid>0 && fid){
     /* Reminder to self: this costs almost 1ms per checkin in very
        basic tests with 2003 checkins on my NUC unit. */
-    rc = fsl_content_deltify(f, pid, fid, 0);
+    rc = fsl__content_deltify(f, pid, fid, 0);
   }
   end:
   return rc;  
@@ -19402,7 +19509,7 @@ int fsl_mlink_add_one( fsl_cx * f,
     the closest-match option. It's a trivial code change but currently
     looks like YAGNI.
 */
-static fsl_card_F * fsl_deck_F_seek_base(fsl_deck * d,
+static fsl_card_F * fsl__deck_F_seek_base(fsl_deck * d,
                                          char const * zName,
                                          uint32_t * atNdx ){
   /* Maintenance reminder: this algo relies on the various
@@ -19451,13 +19558,13 @@ static fsl_card_F * fsl_deck_F_seek_base(fsl_deck * d,
 #undef FCARD
 }
 
-fsl_card_F * fsl_deck_F_seek(fsl_deck * const d, const char *zName){
+fsl_card_F * fsl__deck_F_seek(fsl_deck * const d, const char *zName){
   fsl_card_F *pFile;
   assert(d);
   assert(zName && *zName);
   if(!d || (FSL_SATYPE_CHECKIN!=d->type) || !zName || !*zName
      || !d->F.used) return NULL;
-  pFile = fsl_deck_F_seek_base(d, zName, NULL);
+  pFile = fsl__deck_F_seek_base(d, zName, NULL);
   if( !pFile &&
       (d->B.baseline /* we have a baseline or... */
        || (d->f && d->B.uuid) /* we can load the baseline */
@@ -19477,7 +19584,7 @@ fsl_card_F * fsl_deck_F_seek(fsl_deck * const d, const char *zName){
       assert(d->B.baseline->f && "How can this happen?");
       assert((d->B.baseline->f == d->f) &&
              "Universal laws are out of balance.");
-      pFile = fsl_deck_F_seek_base(d->B.baseline, zName, NULL);
+      pFile = fsl__deck_F_seek_base(d->B.baseline, zName, NULL);
       if(pFile){
         assert(pFile->uuid &&
                "Per fossil-dev thread with DRH on 20140422, "
@@ -19490,7 +19597,7 @@ fsl_card_F * fsl_deck_F_seek(fsl_deck * const d, const char *zName){
 
 fsl_card_F const * fsl_deck_F_search(fsl_deck *d, const char *zName){
   assert(d);
-  return fsl_deck_F_seek(d, zName);
+  return fsl__deck_F_seek(d, zName);
 }
 
 int fsl_deck_F_set( fsl_deck * d, char const * zName,
@@ -19506,7 +19613,7 @@ int fsl_deck_F_set( fsl_deck * d, char const * zName,
   }else if(!fsl_deck_check_type(d, 'F')){
     return d->f->error.code;
   }
-  fc = fsl_deck_F_seek_base(d, zName, &fcNdx);
+  fc = fsl__deck_F_seek_base(d, zName, &fcNdx);
   if(!uuid){
     if(fc){
       fsl_card_F_list_remove(&d->F, fcNdx);
@@ -19571,9 +19678,9 @@ int fsl_deck_F_set_content( fsl_deck * d, char const * zName,
     fsl_card_F const * fc;
     /* This is new content. Save it, then see if we have a previous version
        to delta against this one. */
-    rc = fsl_content_put_ex(d->f, src, zHash, 0, 0, false, &rid);
+    rc = fsl__content_put_ex(d->f, src, zHash, 0, 0, false, &rid);
     if(rc) goto end;
-    fc = fsl_deck_F_seek(d, zName);
+    fc = fsl__deck_F_seek(d, zName);
     if(fc){
       prevRid = fsl_uuid_to_rid(d->f, fc->uuid);
       if(prevRid<0) goto end;
@@ -19584,7 +19691,7 @@ int fsl_deck_F_set_content( fsl_deck * d, char const * zName,
                             fc->name, fc->uuid);
         goto end;
       }
-      rc = fsl_content_deltify(d->f, prevRid, rid, false);
+      rc = fsl__content_deltify(d->f, prevRid, rid, false);
       if(rc) goto end;
     }
   }
@@ -19594,7 +19701,7 @@ int fsl_deck_F_set_content( fsl_deck * d, char const * zName,
   return rc;
 }
 
-void fsl_deck_clean_cards(fsl_deck * d, char const * letters){
+void fsl__deck_clean_cards(fsl_deck * const d, char const * letters){
   char const * c = letters
     ? letters
     : "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -19646,7 +19753,7 @@ int fsl_deck_derive(fsl_deck * const d){
     if(rc) return rc;
   }
   d->rid = 0;
-  fsl_deck_clean_cards(d, "ACDEGHIJKLMNQRTUW");
+  fsl__deck_clean_cards(d, "ACDEGHIJKLMNQRTUW");
   while(d->B.uuid){
     /* This is a delta manifest. Convert this deck into a baseline by
        build a new, complete F-card list. */
@@ -19851,9 +19958,9 @@ static int fsl_mlink_add( fsl_cx * const f,
        previous baseline a delta from the current baseline.
     */
     if( (pParent->B.uuid==0)==(pChild->B.uuid==0) ){
-      rc = fsl_content_deltify(f, pmid, cid, 0);
+      rc = fsl__content_deltify(f, pmid, cid, 0);
     }else if( pChild->B.uuid==NULL && pParent->B.uuid!=NULL ){
-      rc = fsl_content_deltify(f, pParent->B.baseline->rid, cid, 0);
+      rc = fsl__content_deltify(f, pParent->B.baseline->rid, cid, 0);
     }
     if(rc) goto end;
   }
@@ -19885,7 +19992,7 @@ static int fsl_mlink_add( fsl_cx * const f,
     fsl_fileperm_e const mperm = pChildFile->perm;
     if( pChildFile->priorName ){
       pParentFile = pmid
-        ? fsl_deck_F_seek(pParent, pChildFile->priorName)
+        ? fsl__deck_F_seek(pParent, pChildFile->priorName)
         : 0;
       if( pParentFile ){
         /* File with name change */
@@ -19912,7 +20019,7 @@ F src/org/fossil_scm/libfossil/Checkout.java 6e58a47089d3f4911c9386c25bac36c8e98
                                isPublic, isPrimary, mperm);
       }
     }else if(pmid){
-      pParentFile = fsl_deck_F_seek(pParent, pChildFile->name);
+      pParentFile = fsl__deck_F_seek(pParent, pChildFile->name);
       if(!pParentFile || !pParentFile->uuid){
         /* Parent does not have it or it was removed in parent. */
         if( pChildFile->uuid ){
@@ -19942,12 +20049,12 @@ F src/org/fossil_scm/libfossil/Checkout.java 6e58a47089d3f4911c9386c25bac36c8e98
         i<pParent->F.used;
         ++i, pParentFile = FCARD(pParent,i)){
       if( pParentFile->uuid ){
-        pChildFile = fsl_deck_F_seek_base(pChild, pParentFile->name, NULL);
+        pChildFile = fsl__deck_F_seek_base(pChild, pParentFile->name, NULL);
         if( !pChildFile || !pChildFile->uuid){
           /* The child file reverts to baseline or is deleted.
              Show this as a change. */
           if(!pChildFile){
-            pChildFile = fsl_deck_F_seek(pChild, pParentFile->name);
+            pChildFile = fsl__deck_F_seek(pChild, pParentFile->name);
           }
           if( pChildFile && pChildFile->uuid ){
             rc = fsl_mlink_add_one(f, pmid, pParentFile->uuid, cid,
@@ -19958,7 +20065,7 @@ F src/org/fossil_scm/libfossil/Checkout.java 6e58a47089d3f4911c9386c25bac36c8e98
         }
       }else{
         /* Was deleted in the parent. */
-        pChildFile = fsl_deck_F_seek(pChild, pParentFile->name);
+        pChildFile = fsl__deck_F_seek(pChild, pParentFile->name);
         if( pChildFile && pChildFile->uuid ){
           /* File resurrected in the child after having been deleted in
              the parent.  Show this as an added file. */
@@ -19978,7 +20085,7 @@ F src/org/fossil_scm/libfossil/Checkout.java 6e58a47089d3f4911c9386c25bac36c8e98
     fsl_deck_F_rewind(pParent);
     while( (0==(rc=fsl_deck_F_next(pParent,&cfc))) && cfc){
       pParentFile = cfc;
-      pChildFile = fsl_deck_F_seek(pChild, pParentFile->name);
+      pChildFile = fsl__deck_F_seek(pChild, pParentFile->name);
       if( (!pChildFile || !pChildFile->uuid) && pParentFile->uuid ){
         rc = fsl_mlink_add_one(f, pmid, pParentFile->uuid, cid, 0,
                                pParentFile->name, 0, isPublic,
@@ -20024,7 +20131,7 @@ F src/org/fossil_scm/libfossil/Checkout.java 6e58a47089d3f4911c9386c25bac36c8e98
    Returns 0 on success. Potential TODO: if parentId<=0 and
    d->P.used>0 then use d->P.list[0] in place of parentId.
 */
-static int fsl_deck_crosslink_apply_tags(fsl_cx * f, fsl_deck *d,
+static int fsl__deck_crosslink_apply_tags(fsl_cx * f, fsl_deck *d,
                                          fsl_db * db, fsl_id_t rid,
                                          fsl_id_t parentId){
   int rc = 0;
@@ -20057,12 +20164,12 @@ static int fsl_deck_crosslink_apply_tags(fsl_cx * f, fsl_deck *d,
                           tag->uuid);
       break;
     }
-    rc = fsl_tag_insert(f, tag->type,
+    rc = fsl__tag_insert(f, tag->type,
                         tag->name, tag->value,
                         rid, tagTime, tid, NULL);
   }
   if( !rc && (parentId>0) ){
-    rc = fsl_tag_propagate_all(f, parentId);
+    rc = fsl__tag_propagate_all(f, parentId);
   }
   end:
   return rc;
@@ -20106,7 +20213,7 @@ static int fsl_deck_add_checkin_linkages(fsl_deck *d, fsl_id_t * parentId){
   *parentId = 0;
   for(i=0; i<d->P.used; ++i){
     char const * parentUuid = (char const *)d->P.list[i];
-    fsl_id_t const pid = fsl_uuid_to_rid2(f, parentUuid, FSL_PHANTOM_PUBLIC);
+    fsl_id_t const pid = fsl__uuid_to_rid2(f, parentUuid, FSL_PHANTOM_PUBLIC);
     if(pid<0){
       assert(f->error.code);
       rc = f->error.code;
@@ -20179,7 +20286,7 @@ static int fsl_deck_add_checkin_linkages(fsl_deck *d, fsl_id_t * parentId){
 /**
    Applies the value of a "parent" tag (reparent) to the given
    artifact id. zTagVal must be the value of a parent tag (a list of
-   full UUIDs). This is only to be run as part of fsl_crosslink_end().
+   full UUIDs). This is only to be run as part of fsl__crosslink_end().
 
    Returns 0 on success.
 
@@ -20269,7 +20376,7 @@ static int fsl_crosslink_reparent(fsl_cx * f, fsl_id_t rid, char const *zTagVal)
    propagates any tags for that parent. This is a no-op if
    the deck has no parents.
 */
-static int fsl_deck_crosslink_fwt_plink(fsl_deck * d){
+static int fsl__deck_crosslink_fwt_plink(fsl_deck * d){
   int i;
   fsl_id_t parentId = 0;
   fsl_db * db;
@@ -20281,10 +20388,10 @@ static int fsl_deck_crosslink_fwt_plink(fsl_deck * d){
   assert(d->rid>0);
   if(!d->P.used) return rc;
   db = fsl_cx_db_repo(d->f);
-  fsl_phantom_e const fantomMode = fsl_content_is_private(d->f, d->rid)
+  fsl__phantom_e const fantomMode = fsl_content_is_private(d->f, d->rid)
     ? FSL_PHANTOM_PRIVATE : FSL_PHANTOM_PUBLIC;
   for(i=0; 0==rc && i<(int)d->P.used; ++i){
-    fsl_id_t const pid = fsl_uuid_to_rid2(d->f, (char const *)d->P.list[i],
+    fsl_id_t const pid = fsl__uuid_to_rid2(d->f, (char const *)d->P.list[i],
                                           fantomMode);
     if(0==i) parentId = pid;
     rc = fsl_db_exec_multi(db,
@@ -20295,7 +20402,7 @@ static int fsl_deck_crosslink_fwt_plink(fsl_deck * d){
                            pid, d->rid, i==0, d->D);
   }
   if(!rc && parentId){
-    rc = fsl_tag_propagate_all(d->f, parentId);
+    rc = fsl__tag_propagate_all(d->f, parentId);
   }
   return rc;
 }
@@ -20305,10 +20412,10 @@ static int fsl_deck_crosslink_fwt_plink(fsl_deck * d){
    Overrideable crosslink listener which updates the timeline for
    attachment records.
 */
-static int fsl_deck_xlink_f_attachment(fsl_deck * d, void * state){
+static int fsl_deck_xlink_f_attachment(fsl_deck * const d, void * state){
   if(FSL_SATYPE_ATTACHMENT!=d->type) return 0;
   int rc;
-  fsl_db * db;
+  fsl_db * const db = fsl_cx_db_repo(d->f);
   fsl_buffer comment = fsl_buffer_empty;
   const char isAdd = (d->A.src && *d->A.src) ? 1 : 0;
   char attachToType = 'w'
@@ -20317,7 +20424,6 @@ static int fsl_deck_xlink_f_attachment(fsl_deck * d, void * state){
        we are unable to know, for certain, what the target is.
        That only affects the timeline (event table), though, not
        the crosslinking of the attachment itself. */;
-  db = fsl_cx_db_repo(d->f);
   assert(db);
   if(fsl_is_uuid(d->A.tgt)){
     if( fsl_db_exists(db, "SELECT 1 FROM tag WHERE tagname='tkt-%q'",
@@ -20384,7 +20490,7 @@ static int fsl_deck_xlink_f_attachment(fsl_deck * d, void * state){
    Overrideable crosslink listener which updates the timeline for
    checkin records.
 */
-static int fsl_deck_xlink_f_checkin(fsl_deck * d, void * state){
+static int fsl_deck_xlink_f_checkin(fsl_deck * const d, void * state){
   if(FSL_SATYPE_CHECKIN!=d->type) return 0;
   int rc;
   fsl_db * db;
@@ -20432,7 +20538,7 @@ static int fsl_deck_xlink_f_checkin(fsl_deck * d, void * state){
   return fsl_cx_uplift_db_error2(d->f, db, rc);
 }
 
-static int fsl_deck_xlink_f_control(fsl_deck * d, void * state){
+static int fsl_deck_xlink_f_control(fsl_deck * const d, void * state){
   if(FSL_SATYPE_CONTROL!=d->type) return 0;
   /*
     Create timeline event entry for all tags in this control
@@ -20579,7 +20685,7 @@ static int fsl_deck_xlink_f_control(fsl_deck * d, void * state){
 
 }
 
-static int fsl_deck_xlink_f_forum(fsl_deck * d, void * state){
+static int fsl_deck_xlink_f_forum(fsl_deck * const d, void * state){
   if(FSL_SATYPE_FORUMPOST!=d->type) return 0;
   int rc = 0;
   fsl_db * const db = fsl_cx_db_repo(d->f);
@@ -20665,7 +20771,7 @@ static int fsl_deck_xlink_f_forum(fsl_deck * d, void * state){
 }
 
 
-static int fsl_deck_xlink_f_technote(fsl_deck * d, void * state){
+static int fsl_deck_xlink_f_technote(fsl_deck * const d, void * state){
   if(FSL_SATYPE_TECHNOTE!=d->type) return 0;
   char buf[FSL_STRLEN_K256 + 7 /* event-UUID\0 */] = {0};
   fsl_id_t tagid;
@@ -20714,7 +20820,7 @@ static int fsl_deck_xlink_f_technote(fsl_deck * d, void * state){
   return rc;
 }
 
-static int fsl_deck_xlink_f_wiki(fsl_deck * d, void * state){
+static int fsl_deck_xlink_f_wiki(fsl_deck * const d, void * state){
   if(FSL_SATYPE_WIKI!=d->type) return 0;
   int rc;
   char const * zWiki;
@@ -20767,7 +20873,7 @@ static int fsl_deck_xlink_f_wiki(fsl_deck * d, void * state){
     Installs the core overridable crosslink listeners. "The plan" is
     to do all updates to the event (timeline) table via these
     crosslinkers and perform the core, UI-agnostic, crosslinking bits
-    in the internal fsl_deck_crosslink_XXX() functions. That should
+    in the internal fsl__deck_crosslink_XXX() functions. That should
     allow clients to override how the timeline is updated without
     requiring them to understand the rest of the required schema
     updates.
@@ -20792,7 +20898,7 @@ int fsl_cx_install_timeline_crosslinkers(fsl_cx * const f){
 }
 
 
-static int fsl_deck_crosslink_checkin(fsl_deck * const d,
+static int fsl__deck_crosslink_checkin(fsl_deck * const d,
                                       fsl_id_t *parentid ){
   int rc = 0;
   fsl_cx * const f = d->f;
@@ -20821,13 +20927,13 @@ static int fsl_deck_crosslink_checkin(fsl_deck * const d,
     if(rc) goto end;
     /* FSL-MISSING:
        assert( manifest_event_triggers_are_enabled ); */
-    rc = fsl_search_doc_touch(f, d->type, d->rid, 0);
+    rc = fsl__search_doc_touch(f, d->type, d->rid, 0);
     if(rc) goto end;
     /* If this is a delta-manifest, record the fact that this repository
        contains delta manifests, to free the "commit" logic to generate
        new delta manifests. */
     if(d->B.uuid){
-      rc = fsl_cx_update_seen_delta_mf(f);
+      rc = fsl__cx_update_seen_delta_deck(f);
       if(rc) goto end;
     }
     assert(!rc);
@@ -20839,7 +20945,7 @@ static int fsl_deck_crosslink_checkin(fsl_deck * const d,
   return rc;
 }
 
-static int fsl_deck_crosslink_wiki(fsl_deck *d){
+static int fsl__deck_crosslink_wiki(fsl_deck *d){
   char zLength[40] = {0};
   fsl_id_t prior = 0;
   char const * zWiki;
@@ -20864,33 +20970,33 @@ static int fsl_deck_crosslink_wiki(fsl_deck *d){
     */;
   fsl_snprintf(zLength, sizeof(zLength), "%"FSL_SIZE_T_PFMT,
                (fsl_size_t)nWiki);
-  rc = fsl_tag_insert(f, FSL_TAGTYPE_ADD, zTag, zLength,
+  rc = fsl__tag_insert(f, FSL_TAGTYPE_ADD, zTag, zLength,
                       d->rid, d->D, d->rid, NULL );
   if(rc) goto end;
   if(d->P.used){
     prior = fsl_uuid_to_rid(f, (const char *)d->P.list[0]);
   }
   if(prior>0){
-    rc = fsl_content_deltify(f, prior, d->rid, 0);
+    rc = fsl__content_deltify(f, prior, d->rid, 0);
     if(rc) goto end;
   }
-  rc = fsl_search_doc_touch(f, d->type, d->rid, d->L);
+  rc = fsl__search_doc_touch(f, d->type, d->rid, d->L);
   if(rc) goto end;
   if( f->cache.isCrosslinking ){
-    rc = fsl_deck_crosslink_add_pending(f, 'w',d->L);
+    rc = fsl__deck_crosslink_add_pending(f, 'w',d->L);
     if(rc) goto end;
   }else{
     /* FSL-MISSING:
        backlink_wiki_refresh(d->L); */
   }
   assert(0==rc);
-  rc = fsl_deck_crosslink_fwt_plink(d);
+  rc = fsl__deck_crosslink_fwt_plink(d);
   end:
   fsl_free(zTag);
   return rc;
 }
 
-static int fsl_deck_crosslink_attachment(fsl_deck * const d){
+static int fsl__deck_crosslink_attachment(fsl_deck * const d){
   int rc;
   fsl_cx * const f = d->f;
   fsl_db * const db = fsl_cx_db_repo(f);
@@ -20919,7 +21025,7 @@ static int fsl_deck_crosslink_attachment(fsl_deck * const d){
   return rc;  
 }
 
-static int fsl_deck_crosslink_cluster(fsl_deck * const d){
+static int fsl__deck_crosslink_cluster(fsl_deck * const d){
   /* Clean up the unclustered table... */
   fsl_size_t i;
   fsl_stmt * st = NULL;
@@ -20950,11 +21056,11 @@ static int fsl_deck_crosslink_cluster(fsl_deck * const d){
 }
 
 #if 0
-static int fsl_deck_crosslink_control(fsl_deck *const d){
+static int fsl__deck_crosslink_control(fsl_deck *const d){
 }
 #endif
 
-static int fsl_deck_crosslink_forum(fsl_deck * const d){
+static int fsl__deck_crosslink_forum(fsl_deck * const d){
   int rc = 0;
   fsl_cx * const f = d->f;
   rc = fsl_repo_install_schema_forum(f);
@@ -20973,15 +21079,15 @@ static int fsl_deck_crosslink_forum(fsl_deck * const d){
   );
   rc = fsl_cx_uplift_db_error2(f, db, rc);
   if(!rc){
-    rc = fsl_search_doc_touch(f, d->type, d->rid, 0);
+    rc = fsl__search_doc_touch(f, d->type, d->rid, 0);
   }
   if(!rc){
-    rc = fsl_deck_crosslink_fwt_plink(d);
+    rc = fsl__deck_crosslink_fwt_plink(d);
   }
   return rc;
 }
 
-static int fsl_deck_crosslink_technote(fsl_deck * const d){
+static int fsl__deck_crosslink_technote(fsl_deck * const d){
   char buf[FSL_STRLEN_K256 + 7 /* event-UUID\0 */] = {0};
   char zLength[40] = {0};
   fsl_id_t tagid;
@@ -21011,7 +21117,7 @@ static int fsl_deck_crosslink_technote(fsl_deck * const d){
   nWiki = fsl_strlen(zWiki);
   fsl_snprintf( zLength, sizeof(zLength), "%"FSL_SIZE_T_PFMT,
                 (fsl_size_t)nWiki);
-  rc = fsl_tag_insert(f, FSL_TAGTYPE_ADD, zTag, zLength,
+  rc = fsl__tag_insert(f, FSL_TAGTYPE_ADD, zTag, zLength,
                       d->rid, d->D, d->rid, NULL );
   if(rc) goto end;
   if(d->P.used){
@@ -21037,7 +21143,7 @@ static int fsl_deck_crosslink_technote(fsl_deck * const d){
     goto end;
   }
   else if( prior > 0 ){
-    rc = fsl_content_deltify(f, prior, d->rid, 0);
+    rc = fsl__content_deltify(f, prior, d->rid, 0);
     if( !rc && !subsequent ){
       rc = fsl_db_exec(db,
                        "DELETE FROM event"
@@ -21051,22 +21157,22 @@ static int fsl_deck_crosslink_technote(fsl_deck * const d){
   }
   if(rc) goto end;
   if( subsequent>0 ){
-    rc = fsl_content_deltify(f, d->rid, subsequent, 0);
+    rc = fsl__content_deltify(f, d->rid, subsequent, 0);
   }else{
     /* timeline update is deferred to another crosslink
        handler */
-    rc = fsl_search_doc_touch(f, d->type, d->rid, 0);
+    rc = fsl__search_doc_touch(f, d->type, d->rid, 0);
     /* FSL-MISSING:
        assert( manifest_event_triggers_are_enabled ); */
   }
   if(!rc){
-    rc = fsl_deck_crosslink_fwt_plink(d);
+    rc = fsl__deck_crosslink_fwt_plink(d);
   }
   end:
   return rc;
 }
 
-static int fsl_deck_crosslink_ticket(fsl_deck * const d){
+static int fsl__deck_crosslink_ticket(fsl_deck * const d){
   int rc;
   fsl_cx * const f = d->f;
 #if 0
@@ -21091,24 +21197,19 @@ static int fsl_deck_crosslink_ticket(fsl_deck * const d){
   return rc;
 }
 
-int fsl_deck_crosslink_one( fsl_deck * const d ){
+int fsl__deck_crosslink_one( fsl_deck * const d ){
   int rc;
   if(!d->f) return FSL_RC_MISUSE;
-  rc = fsl_crosslink_begin(d->f);
+  rc = fsl__crosslink_begin(d->f);
   if(rc) return rc;
-  rc = fsl_deck_crosslink(d);
-  if(rc){
-    fsl_db_transaction_rollback(fsl_cx_db_repo(d->f))
-      /* Ignore result - keep existing error state */;
-    d->f->cache.isCrosslinking = false;
-  }else{
-    assert(fsl_db_transaction_level(fsl_cx_db_repo(d->f)));
-    rc = fsl_crosslink_end(d->f);
-  }
+  rc = fsl__deck_crosslink(d);
+  assert(0!=fsl_db_transaction_level(fsl_cx_db_repo(d->f))
+         && "Expecting transaction level from fsl__crosslink_begin()");
+  rc = fsl__crosslink_end(d->f, rc);
   return rc;
 }
 
-int fsl_deck_crosslink( fsl_deck /* const */ * const d ){
+int fsl__deck_crosslink( fsl_deck /* const */ * const d ){
   int rc = 0;
   fsl_cx * f = d->f;
   fsl_db * db = f ? fsl_needs_repo(f) : NULL;
@@ -21140,10 +21241,10 @@ int fsl_deck_crosslink( fsl_deck /* const */ * const d ){
   }
   switch(d->type){
     case FSL_SATYPE_CHECKIN:
-      rc = fsl_deck_crosslink_checkin(d, &parentid);
+      rc = fsl__deck_crosslink_checkin(d, &parentid);
       break;
     case FSL_SATYPE_CLUSTER:
-      rc = fsl_deck_crosslink_cluster(d);
+      rc = fsl__deck_crosslink_cluster(d);
       break;
     default:
       break;
@@ -21153,7 +21254,7 @@ int fsl_deck_crosslink( fsl_deck /* const */ * const d ){
     case FSL_SATYPE_CONTROL:
     case FSL_SATYPE_CHECKIN:
     case FSL_SATYPE_TECHNOTE:
-      rc = fsl_deck_crosslink_apply_tags(f, d, db, rid, parentid);
+      rc = fsl__deck_crosslink_apply_tags(f, d, db, rid, parentid);
       break;
     default:
       break;
@@ -21161,19 +21262,19 @@ int fsl_deck_crosslink( fsl_deck /* const */ * const d ){
   if(rc) goto end;
   switch(d->type){
     case FSL_SATYPE_WIKI:
-      rc = fsl_deck_crosslink_wiki(d);
+      rc = fsl__deck_crosslink_wiki(d);
       break;
     case FSL_SATYPE_FORUMPOST:
-      rc = fsl_deck_crosslink_forum(d);
+      rc = fsl__deck_crosslink_forum(d);
       break;
     case FSL_SATYPE_TECHNOTE:
-      rc = fsl_deck_crosslink_technote(d);
+      rc = fsl__deck_crosslink_technote(d);
       break;
     case FSL_SATYPE_TICKET:
-      rc = fsl_deck_crosslink_ticket(d);
+      rc = fsl__deck_crosslink_ticket(d);
       break;
     case FSL_SATYPE_ATTACHMENT:
-      rc = fsl_deck_crosslink_attachment(d);
+      rc = fsl__deck_crosslink_attachment(d);
       break;
     /* FSL_SATYPE_CONTROL is handled above except for the timeline
        update, which is handled by a callback below */
@@ -21193,11 +21294,15 @@ int fsl_deck_crosslink( fsl_deck /* const */ * const d ){
     if(rc){
       assert(xl);
       if(!f->error.code){
-        fsl_cx_err_set(f, rc, "Crosslink callback handler "
-                       "'%s' failed with code %d (%s) for "
-                       "artifact RID #%" FSL_ID_T_PFMT ".",
-                       xl->name, rc, fsl_rc_cstr(rc),
-                       d->rid);
+        if(f->dbMain->error.code){
+          fsl_cx_uplift_db_error(f, f->dbMain);
+        }else{
+          fsl_cx_err_set(f, rc, "Crosslink callback handler "
+                         "'%s' failed with code %d (%s) for "
+                         "artifact RID #%" FSL_ID_T_PFMT ".",
+                         xl->name, rc, fsl_rc_cstr(rc),
+                         d->rid);
+        }
       }
     }
   }/*end crosslink callbacks*/
@@ -21211,7 +21316,7 @@ int fsl_deck_crosslink( fsl_deck /* const */ * const d ){
     fsl_db_transaction_end(db, true);
   }
   return rc;
-}/*end fsl_deck_crosslink()*/
+}/*end fsl__deck_crosslink()*/
 
 
 
@@ -21259,7 +21364,24 @@ static int fsl_deck_verify_Z_card(unsigned char const * ca, fsl_size_t n){
   }
 }
 
-void fsl_remove_pgp_signature(unsigned char const **pz, fsl_size_t *pn){
+
+/** @internal
+
+    Remove the PGP signature from a raw artifact, if there is one.
+
+    Expects *pz to point to *pn bytes of string memory which might
+    or might not be prefixed by a PGP signature.  If the string is
+    enveloped in a signature, then upon returning *pz will point to
+    the first byte after the end of the PGP header and *pn will
+    contain the length of the content up to, but not including, the
+    PGP footer.
+
+    If *pz does not look like a PGP header then this is a no-op.
+
+    Neither pointer may be NULL and *pz must point to *pn bytes of
+    valid memory. If *pn is initially less than 59, this is a no-op.
+*/
+static void fsl__remove_pgp_signature(unsigned char const **pz, fsl_size_t *pn){
   unsigned char const *z = *pz;
   fsl_int_t n = (fsl_int_t)*pn;
   fsl_int_t i;
@@ -21396,7 +21518,7 @@ bool fsl_might_be_artifact(fsl_buffer const * src){
   unsigned const char * z = src->mem;
   fsl_size_t n = src->used;
   if(n<36) return 0;
-  fsl_remove_pgp_signature(&z, &n);
+  fsl__remove_pgp_signature(&z, &n);
   if(n<36) return 0;
   else if(z[0]<'A' || z[0]>'Z' || z[1]!=' '
           || z[n-35]!='Z'
@@ -21437,13 +21559,25 @@ int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_id_t rid){
     have parsed without having to inspect the card contents. Each
     index records a count of how many of that card we've seen.
   */
-  int lettersSeen[27] = {0,0,0,0,0,0,0,0,0,0,
-                              0,0,0,0,0,0,0,0,0,0,
-                              0,0,0,0,0,0,0};
+  int lettersSeen[27] = {0/*A*/,0,0,0,0,0,0,0,0,0,0,0,0,
+                         0,0,0,0,0,0,0,0,0,0,0,0,0/*Z*/,
+                         0 /* sentinel element for reasons lost to
+                             history but removing it breaks stuff. */};
   if(!d->f || !z) return FSL_RC_MISUSE;
   /* Every control artifact ends with a '\n' character.  Exit early
      if that is not the case for this artifact. */
   f = d->f;
+
+  if(rid>0){
+    d->rid = rid;
+#if 1
+    if(fsl_cx_mcache_search2(f, rid, d, FSL_SATYPE_ANY, &rc) || rc){
+      if(0==rc) fsl_buffer_clear(src);
+      return rc;
+    }
+#endif
+  }
+
   err = &f->error;
   if(!*z || !n || ( '\n' != z[n-1]) ){
     return fsl_error_set(err, FSL_RC_SYNTAX, "%s.",
@@ -21486,7 +21620,7 @@ int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_id_t rid){
   */
   {
     unsigned char const * zz = z;
-    fsl_remove_pgp_signature(&zz, &n);
+    fsl__remove_pgp_signature(&zz, &n);
     z = (unsigned char *)zz;
   }
 
@@ -21712,8 +21846,7 @@ int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_id_t rid){
             case 'l': perm = FSL_FILE_PERM_LINK; break;
             default:
               /*MARKER(("Unmatched perms string character: %d / %c !", (int)*perms, *perms));*/
-              assert(!"Unmatched perms string character!");
-              ERROR(FSL_RC_ERROR,"Internal error: unmatched perms string character");
+              ERROR(FSL_RC_SYNTAX,"Invalid perms string character");
           }
           TOKEN(0);
           if(token) priorName = (char *)token;
@@ -22195,10 +22328,14 @@ int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_id_t rid){
   assert(!d->content.mem);
   if(stealBuf>0){
     /* We stashed something which points to src->mem, so we need to
-       steal that memory.
-    */
+       steal that memory. */
     d->content = *src;
     *src = fsl_buffer_empty;
+  }else{
+    /* Clearing the source buffer if we don't take it over
+       provides more consistency in the public API than _sometimes_
+       requiring the client to clear it. */
+    fsl_buffer_clear(src);
   }
   d->rid = rid;
   d->F.flags &= ~FSL_CARD_F_LIST_NEEDS_SORT/*we know all cards were read in order*/;
@@ -22241,21 +22378,9 @@ int fsl_deck_load_rid( fsl_cx * const f, fsl_deck * const d,
   }
   fsl_deck_clean(d);
   d->f = f;
-  if(fsl_cx_mcache_search(f, rid, d)){
-    assert(d->f);
-    if(type!=FSL_SATYPE_ANY && type!=d->type){
-      rc = fsl_cx_err_set(f, FSL_RC_TYPE,
-                          "Unexpected match of RID #%" FSL_ID_T_PFMT " "
-                          "to a different artifact type (%d) "
-                          "than requested (%d).",
-                          d->type, type);
-      fsl_cx_mcache_insert(f, d);
-      assert(!d->f);
-    }else{
-      //MARKER(("Got cached deck: %s\n", d->uuid));
-    }
+  if(fsl_cx_mcache_search2(f, rid, d, type, &rc) || rc){
     return rc;
-  }  
+  }
   rc = fsl_content_get(f, rid, &buf);
   if(rc) goto end;
 #if 0
@@ -22284,7 +22409,7 @@ int fsl_deck_load_rid( fsl_cx * const f, fsl_deck * const d,
                           fsl_satype_cstr(d->type),
                           fsl_satype_cstr(type));
     }else if(d->B.uuid ){
-      rc = fsl_cx_update_seen_delta_mf(f);
+      rc = fsl__cx_update_seen_delta_deck(f);
     }
   }
   end:
@@ -22511,7 +22636,7 @@ int fsl_deck_save( fsl_deck * const d, bool isPrivate ){
 
   f->cache.markPrivate = isPrivate;
   {
-    rc = fsl_content_put_ex(f, buf, NULL, 0,
+    rc = fsl__content_put_ex(f, buf, NULL, 0,
                             0U, isPrivate, &newRid);
     if(rc) goto end;
     assert(newRid>0);
@@ -22533,7 +22658,7 @@ int fsl_deck_save( fsl_deck * const d, bool isPrivate ){
     assert(FSL_SATYPE_CHECKIN == d->type);
     pid = fsl_uuid_to_rid(f, (char const *)d->P.list[0]);
     if(pid>0){
-      rc = fsl_content_deltify(f, pid, d->rid, 0);
+      rc = fsl__content_deltify(f, pid, d->rid, 0);
       if(rc) goto end;
     }
   }
@@ -22561,7 +22686,7 @@ int fsl_deck_save( fsl_deck * const d, bool isPrivate ){
         }
         goto end;
       }
-      rc = fsl_content_deltify(f, pid, d->rid, 0);
+      rc = fsl__content_deltify(f, pid, d->rid, 0);
       if(rc) goto end;
     }
     rc = fsl_db_exec_multi(db,
@@ -22577,8 +22702,8 @@ int fsl_deck_save( fsl_deck * const d, bool isPrivate ){
   }
 
   rc = f->cache.isCrosslinking
-    ? fsl_deck_crosslink(d)
-    : fsl_deck_crosslink_one(d);
+    ? fsl__deck_crosslink(d)
+    : fsl__deck_crosslink_one(d);
 
   end:
   f->cache.markPrivate = oldPrivate;
@@ -22594,24 +22719,37 @@ int fsl_deck_save( fsl_deck * const d, bool isPrivate ){
   return rc;
 }
 
-int fsl_crosslink_end(fsl_cx * f){
+int fsl__crosslink_end(fsl_cx * const f, int resultCode){
   int rc = 0;
-  fsl_db * db = fsl_cx_db_repo(f);
+  fsl_db * const db = fsl_cx_db_repo(f);
   fsl_stmt q = fsl_stmt_empty;
   fsl_stmt u = fsl_stmt_empty;
   int i;
   assert(f);
   assert(db);
-  assert(f->cache.isCrosslinking);
+  assert(f->cache.isCrosslinking && "Internal API misuse.");
   if(!f->cache.isCrosslinking){
+    fsl__fatal(FSL_RC_MISUSE,
+              "Internal API misuse: %s() called while "
+              "f->cache.isCrosslinking is false.", __func__);
     return fsl_cx_err_set(f, FSL_RC_MISUSE,
                           "Crosslink is not running.");
   }
   f->cache.isCrosslinking = false;
+  if(resultCode){
+    assert(0!=fsl_cx_transaction_level(f)
+           && "Expecting a transaction level from fsl__crosslink_begin()");
+    fsl_db_transaction_end(db, true)
+      /* pop transaction started from fsl__crosslink_begin().  We use
+         fsl_db_transaction_end() instead of fsl_cx_transaction_end()
+         so that any db-level error which is set during a failed
+         rollback does not trump any pending f->error.code. */;
+    return resultCode;
+  }
   assert(db->beginCount > 0);
 
   /* Handle any reparenting via tags... */
-  rc = fsl_db_prepare(db, &q,
+  rc = fsl_cx_prepare(f, &q,
                      "SELECT rid, value FROM tagxref"
                       " WHERE tagid=%d AND tagtype=%d",
                       (int)FSL_TAGID_PARENT, (int)FSL_TAGTYPE_ADD);
@@ -22626,7 +22764,7 @@ int fsl_crosslink_end(fsl_cx * f){
   if(rc) goto end;
 
   /* Process entries from pending_xlink temp table... */
-  rc = fsl_db_prepare(db, &q, "SELECT id FROM pending_xlink");
+  rc = fsl_cx_prepare(f, &q, "SELECT id FROM pending_xlink");
   if(rc) goto end;
   while( FSL_RC_STEP_ROW==fsl_stmt_step(&q) ){
     const char *zId = fsl_stmt_g_text(&q, 0, NULL);
@@ -22645,20 +22783,20 @@ int fsl_crosslink_end(fsl_cx * f){
     }
   }
   fsl_stmt_finalize(&q);
-  rc = fsl_db_exec(db, "DROP TABLE pending_xlink");
+  rc = fsl_cx_exec(f, "DROP TABLE pending_xlink");
   if(rc) goto end;
   /* If multiple check-ins happen close together in time, adjust their
      times by a few milliseconds to make sure they appear in chronological
      order.
   */
-  rc = fsl_db_prepare(db, &q,
+  rc = fsl_cx_prepare(f, &q,
                       "UPDATE time_fudge SET m1=m2-:incr "
                       "WHERE m1>=m2 AND m1<m2+:window"
   );
   if(rc) goto end;
   fsl_stmt_bind_double_name(&q, ":incr", AGE_ADJUST_INCREMENT);
   fsl_stmt_bind_double_name(&q, ":window", AGE_FUDGE_WINDOW);
-  rc = fsl_db_prepare(db, &u,
+  rc = fsl_cx_prepare(f, &u,
                       "UPDATE time_fudge SET m2="
                       "(SELECT x.m1 FROM time_fudge AS x"
                       " WHERE x.mid=time_fudge.cid)");
@@ -22676,37 +22814,32 @@ int fsl_crosslink_end(fsl_cx * f){
   fsl_stmt_finalize(&q);
   fsl_stmt_finalize(&u);
   if(!rc && fsl_db_exists(db,"SELECT 1 FROM time_fudge")){
-    rc = fsl_db_exec(db, "UPDATE event SET"
+    rc = fsl_cx_exec(f, "UPDATE event SET"
                      " mtime=(SELECT m1 FROM time_fudge WHERE mid=objid)"
                      " WHERE objid IN (SELECT mid FROM time_fudge)"
                      " AND (mtime=omtime OR omtime IS NULL)"
                      );
   }
   end:
-  rc = fsl_cx_uplift_db_error2(f, db, rc)
-    /* Do before drop time_fudge to ensure we don't
-       clear the error state by accident. */;
   if(!rc){
-    fsl_db_exec(db, "DROP TABLE time_fudge");
+    fsl_cx_exec(f, "DROP TABLE time_fudge");
   }
-  if(rc) fsl_db_transaction_rollback(db);
-  else rc = fsl_db_transaction_commit(db);
-  return fsl_cx_uplift_db_error2(f, db, rc);
+  if(rc) fsl_cx_transaction_end(f, true);
+  else rc = fsl_cx_transaction_end(f, false);
+  return rc;
 }
 
-int fsl_crosslink_begin(fsl_cx * f){
+int fsl__crosslink_begin(fsl_cx * const f){
   int rc;
-  fsl_db * db = fsl_cx_db_repo(f);
   assert(f);
-  assert(db);
   assert(0==f->cache.isCrosslinking);
   if(f->cache.isCrosslinking){
     return fsl_cx_err_set(f, FSL_RC_MISUSE,
                           "Crosslink is already running.");
   }
-  rc = fsl_db_transaction_begin(db);
-  if(rc) return fsl_cx_uplift_db_error(f, db);
-  rc = fsl_db_exec_multi(db,
+  rc = fsl_cx_transaction_begin(f);
+  if(rc) return rc;
+  rc = fsl_cx_exec_multi(f,
      "CREATE TEMP TABLE pending_xlink(id TEXT PRIMARY KEY)WITHOUT ROWID;"
      "CREATE TEMP TABLE time_fudge("
      "  mid INTEGER PRIMARY KEY,"    /* The rid of a manifest */
@@ -22714,14 +22847,12 @@ int fsl_crosslink_begin(fsl_cx * f){
      "  cid INTEGER,"                /* A child or mid */
      "  m2 REAL"                     /* Timestamp on the child */
      ");");
-  if(!rc){
-    f->cache.isCrosslinking = 1;
-    return 0;
+  if(0==rc){
+    f->cache.isCrosslinking = true;
   }else{
-    rc = fsl_cx_uplift_db_error2(f, db, rc);
-    fsl_db_transaction_rollback(db);
-    return rc;
+    fsl_cx_transaction_end(f, true);
   }
+  return rc;
 }
 
 #undef MARKER
@@ -23654,7 +23785,7 @@ static int minInt(int a, int b){ return a<b ? a : b; }
     input string length.
 */
 static void fsl__diff_optimal_lcs(
-  fsl_diff_cx * const p,     /* Two files being compared */
+  fsl__diff_cx * const p,     /* Two files being compared */
   int iS1, int iE1,          /* Range of lines in p->aFrom[] */
   int iS2, int iE2,          /* Range of lines in p->aTo[] */
   int *piSX, int *piEX,      /* Write p->aFrom[] common segment here */
@@ -23708,7 +23839,7 @@ static void fsl__diff_optimal_lcs(
     calling fsl__diff_optimal_lcs().
 */
 static void fsl__diff_lcs(
-  fsl_diff_cx * const p,     /* Two files being compared */
+  fsl__diff_cx * const p,     /* Two files being compared */
   int iS1, int iE1,          /* Range of lines in p->aFrom[] */
   int iS2, int iE2,          /* Range of lines in p->aTo[] */
   int *piSX, int *piEX,      /* Write p->aFrom[] common segment here */
@@ -23808,7 +23939,7 @@ static void fsl__diff_lcs(
 }
 
 
-void fsl__dump_triples(fsl_diff_cx const * const p,
+void fsl__dump_triples(fsl__diff_cx const * const p,
                        char const * zFile, int ln ){
   // Compare this with (fossil xdiff --raw) on the same inputs
   fprintf(stderr,"%s:%d: Compare this with (fossil xdiff --raw) on the same inputs:\n",
@@ -23822,7 +23953,7 @@ void fsl__dump_triples(fsl_diff_cx const * const p,
 /** @internal
     Expand the size of p->aEdit array to hold at least nEdit elements.
  */
-static int fsl__diff_expand_edit(fsl_diff_cx * const p, int nEdit){
+static int fsl__diff_expand_edit(fsl__diff_cx * const p, int nEdit){
   void * re = fsl_realloc(p->aEdit, nEdit*sizeof(int));
   if(!re) return FSL_RC_OOM;
   else{
@@ -23837,7 +23968,7 @@ static int fsl__diff_expand_edit(fsl_diff_cx * const p, int nEdit){
    
     Returns 0 on success, FSL_RC_OOM on OOM.
  */
-static int appendTriple(fsl_diff_cx *p, int nCopy, int nDel, int nIns){
+static int appendTriple(fsl__diff_cx *p, int nCopy, int nDel, int nIns){
   /* printf("APPEND %d/%d/%d\n", nCopy, nDel, nIns); */
   if( p->nEdit>=3 ){
     if( p->aEdit[p->nEdit-1]==0 ){
@@ -23881,7 +24012,7 @@ static int appendTriple(fsl_diff_cx *p, int nCopy, int nDel, int nIns){
     Special cases apply if either input segment is empty or if the two
     segments have no text in common.
  */
-static int diff_step(fsl_diff_cx *p, int iS1, int iE1, int iS2, int iE2){
+static int diff_step(fsl__diff_cx *p, int iS1, int iE1, int iS2, int iE2){
   int iSX, iEX, iSY, iEY;
   int rc = 0;
   if( iE1<=iS1 ){
@@ -23916,7 +24047,7 @@ static int diff_step(fsl_diff_cx *p, int iS1, int iE1, int iS2, int iE2){
   return rc;
 }
 
-int fsl__diff_all(fsl_diff_cx * const p){
+int fsl__diff_all(fsl__diff_cx * const p){
   int mnE, iS, iE1, iE2;
   int rc = 0;
   /* Carve off the common header and footer */
@@ -23986,7 +24117,7 @@ int fsl__diff_all(fsl_diff_cx * const p){
            return x/5;                    return x/5;
         }                              }
 */
-void fsl__diff_optimize(fsl_diff_cx * const p){
+void fsl__diff_optimize(fsl__diff_cx * const p){
   int r;       /* Index of current triple */
   int lnFrom;  /* Line number in p->aFrom */
   int lnTo;    /* Line number in p->aTo */
@@ -24065,7 +24196,7 @@ void fsl__diff_optimize(fsl_diff_cx * const p){
    in, compute a context diff into pOut.
 */
 static int contextDiff(
-  fsl_diff_cx *p,      /* The difference */
+  fsl__diff_cx *p,      /* The difference */
   DiffOutState *pOut,       /* Output a context diff to here */
   ReCompiled *pRe,  /* Only show changes that match this regex */
   u64 diffFlags     /* Flags controlling the diff format */
@@ -24947,7 +25078,7 @@ static int smallGap(int *R){
    in, compute a side-by-side diff into pOut.
 */
 static int sbsDiff(
-  fsl_diff_cx *p,       /* The computed diff */
+  fsl__diff_cx *p,       /* The computed diff */
   DiffOutState *pOut,        /* Write the results here */
   ReCompiled *pRe,   /* Only show changes that match this regex */
   u64 diffFlags      /* Flags controlling the diff */
@@ -25274,16 +25405,16 @@ static int fsl_diff_text_impl(
   int ** outRaw
 ){
   int rc;
-  fsl_diff_cx c = fsl_diff_cx_empty;
+  fsl__diff_cx c = fsl__diff_cx_empty;
   uint64_t diffFlags = fsl_diff_flags_convert(diffFlags_)
     | DIFF_CONTEXT_EX /* to shoehorn newer 0-handling semantics into
                          older (ported-in) code. */;
   if(!pA || !pB || (out && outRaw) || (!out && !outRaw)) return FSL_RC_MISUSE;
   else if(contextLines<0) contextLines = 5;
-  else if(contextLines & ~FSL_LINE_LENGTH_MASK){
-    contextLines = (int)FSL_LINE_LENGTH_MASK;
+  else if(contextLines & ~FSL__LINE_LENGTH_MASK){
+    contextLines = (int)FSL__LINE_LENGTH_MASK;
   }
-  diffFlags |= (FSL_LINE_LENGTH_MASK & contextLines);
+  diffFlags |= (FSL__LINE_LENGTH_MASK & contextLines);
   /* Encode SBS width... */
   if(sbsWidth<0
      || ((DIFF_SIDEBYSIDE & diffFlags) && !sbsWidth) ) sbsWidth = 80;
@@ -25354,7 +25485,7 @@ static int fsl_diff_text_impl(
   return rc;
 }
 
-int fsl_diff_text_raw(fsl_buffer const *p1, fsl_buffer const *p2,
+int fsl__diff_text_raw(fsl_buffer const *p1, fsl_buffer const *p2,
                       int diffFlags, int ** outRaw){
   return fsl_diff_text_impl(p1, p2, NULL, NULL, 0, 0, diffFlags, outRaw);
 }
@@ -25463,15 +25594,15 @@ const fsl_diff_opt fsl_diff_opt_empty = fsl_diff_opt_empty_m;
 const fsl_diff_builder fsl_diff_builder_empty = fsl_diff_builder_empty_m;
 const fsl_dline fsl_dline_empty = fsl_dline_empty_m;
 const fsl_dline_change fsl_dline_change_empty = fsl_dline_change_empty_m;
-const fsl_diff_cx fsl_diff_cx_empty = fsl_diff_cx_empty_m;
+const fsl__diff_cx fsl__diff_cx_empty = fsl__diff_cx_empty_m;
 
-void fsl__diff_cx_clean(fsl_diff_cx * const cx){
+void fsl__diff_cx_clean(fsl__diff_cx * const cx){
   fsl_free(cx->aFrom);
   fsl_free(cx->aTo);
   fsl_free(cx->aEdit);
   cx->aFrom = cx->aTo = NULL;
   cx->aEdit = NULL;
-  *cx = fsl_diff_cx_empty;
+  *cx = fsl__diff_cx_empty;
 }
 
 /**
@@ -25537,7 +25668,7 @@ int fsl_break_into_dlines(const char *z, fsl_int_t n,
     zNL = strchr(z,'\n');
     if( zNL==0 ) zNL = z+n;
     nn = (uint32_t)(zNL - z);
-    if( nn>FSL_LINE_LENGTH_MASK ){
+    if( nn>FSL__LINE_LENGTH_MASK ){
       fsl_free(a);
       *pOut = 0;
       *pnLine = 0;
@@ -25578,7 +25709,7 @@ int fsl_break_into_dlines(const char *z, fsl_int_t n,
       h ^= m;
     }
     a[i].indent = s;
-    a[i].h = h = ((h%281474976710597LL)<<FSL_LINE_LENGTH_MASK_SZ) | (k-s);
+    a[i].h = h = ((h%281474976710597LL)<<FSL__LINE_LENGTH_MASK_SZ) | (k-s);
     h2 = h % nLine;
     a[i].iNext = a[h2].iHash;
     a[h2].iHash = i+1;
@@ -25595,7 +25726,7 @@ int fsl_break_into_dlines(const char *z, fsl_int_t n,
 int fsl_dline_cmp(const fsl_dline * const pA,
                   const fsl_dline * const pB){
   if( pA->h!=pB->h ) return 1;
-  return memcmp(pA->z,pB->z, pA->h&FSL_LINE_LENGTH_MASK);
+  return memcmp(pA->z,pB->z, pA->h&FSL__LINE_LENGTH_MASK);
 }
 
 int fsl_dline_cmp_ignore_ws(const fsl_dline * const pA,
@@ -26232,7 +26363,7 @@ static int diffBlockAlignment(
 ** Format a diff using a fsl_diff_builder object
 */
 static int fdb__format(
-  fsl_diff_cx * const cx,
+  fsl__diff_cx * const cx,
   fsl_diff_builder * const pBuilder
 ){
   const fsl_dline *A;        /* Left side of the diff */
@@ -26524,7 +26655,7 @@ static int fsl_diff2_text_impl(fsl_buffer const *pA,
                                fsl_diff_opt const * const opt_,
                                int ** outRaw){
   int rc = 0;
-  fsl_diff_cx c = fsl_diff_cx_empty;
+  fsl__diff_cx c = fsl__diff_cx_empty;
   bool ignoreWs = false;
   int ansiOptCount = 0;
   fsl_diff_opt opt = *opt_
@@ -28990,7 +29121,7 @@ int fsl_pathfinder_search(fsl_pathfinder * const pf,
   return 0;
 }
 
-char * fsl_file_without_drive_letter(char * zIn){
+char * fsl__file_without_drive_letter(char * zIn){
 #ifdef _WIN32
   if( zIn && fsl_isalpha(zIn[0]) && zIn[1]==':' ) zIn += 2;
 #endif
@@ -29659,7 +29790,7 @@ bool fsl_rid_is_version(fsl_cx * const f, fsl_id_t rid){
                            " AND type='ci'", rid);
 }
 
-int fsl_repo_leaf_check(fsl_cx * f, fsl_id_t rid){
+int fsl__repo_leafcheck(fsl_cx * f, fsl_id_t rid){
   fsl_db * const db = f ? fsl_cx_db_repo(f) : NULL;
   if(!db || !db->dbh) return FSL_RC_MISUSE;
   else if(rid<=0) return FSL_RC_RANGE;
@@ -29690,7 +29821,7 @@ int fsl_repo_leaf_check(fsl_cx * f, fsl_id_t rid){
   }
 }
 
-int fsl_repo_leaf_eventually_check( fsl_cx * f, fsl_id_t rid){
+int fsl__repo_leafeventually_check( fsl_cx * f, fsl_id_t rid){
   fsl_db * db = f ? fsl_cx_db_repo(f) : NULL;
   if(!f) return FSL_RC_MISUSE;
   else if(rid<=0) return FSL_RC_RANGE;
@@ -29716,12 +29847,12 @@ int fsl_repo_leaf_eventually_check( fsl_cx * f, fsl_id_t rid){
 }
 
 
-int fsl_repo_leaf_do_pending_checks(fsl_cx *f){
+int fsl__repo_leafdo_pending_checks(fsl_cx *f){
   fsl_id_t rid;
   int rc = 0;
   for(rid=fsl_id_bag_first(&f->cache.leafCheck);
       !rc && rid; rid=fsl_id_bag_next(&f->cache.leafCheck,rid)){
-    rc = fsl_repo_leaf_check(f, rid);
+    rc = fsl__repo_leafcheck(f, rid);
   }
   fsl_id_bag_clear(&f->cache.leafCheck);
   return rc;
@@ -30176,7 +30307,7 @@ int fsl_looks_like_utf8(fsl_buffer const * const b, int stopFlags){
       }else{
         flags |= FSL_LOOKSLIKE_LONE_LF;
       }
-      if( j>FSL_LINE_LENGTH_MASK ){
+      if( j>FSL__LINE_LENGTH_MASK ){
         flags |= FSL_LOOKSLIKE_LONG;  /* Very long line -> binary */
       }
       j = 0;
@@ -30190,7 +30321,7 @@ int fsl_looks_like_utf8(fsl_buffer const * const b, int stopFlags){
   if( n ){
     flags |= FSL_LOOKSLIKE_SHORT;  /* The whole blob was not examined */
   }
-  if( j>FSL_LINE_LENGTH_MASK ){
+  if( j>FSL__LINE_LENGTH_MASK ){
     flags |= FSL_LOOKSLIKE_LONG;  /* Very long line -> binary */
   }
   return flags;
@@ -30978,8 +31109,8 @@ int fsl_buffer_merge3(fsl_buffer * const pPivot,
   ** pivot, and the third integer is the number of lines of text that are
   ** inserted.  The edit array ends with a triple of 0,0,0.
   */
-  rc = fsl_diff_text_raw(pPivot, pV1, 0, &aC1);
-  if(!rc) rc = fsl_diff_text_raw(pPivot, pV2, 0, &aC2);
+  rc = fsl__diff_text_raw(pPivot, pV1, 0, &aC1);
+  if(!rc) rc = fsl__diff_text_raw(pPivot, pV2, 0, &aC2);
   RC;
   assert(aC1 && aC2);
 
@@ -31409,19 +31540,19 @@ void fsl_pclose2(int fdIn, FILE *pOut, int childPid){
 #include <assert.h>
 
 
-void fsl_pq_clear(fsl_pq *p){
+void fsl__pq_clear(fsl__pq *p){
   fsl_free(p->list);
-  *p = fsl_pq_empty;
+  *p = fsl__pq_empty;
 }
 
 /*
    Change the size of the queue so that it contains N slots
 */
-static int fsl_pq_resize(fsl_pq *p, fsl_size_t N){
-  void * re = fsl_realloc(p->list, sizeof(fsl_pq_entry)*N);
+static int fsl__pq_resize(fsl__pq *p, fsl_size_t N){
+  void * re = fsl_realloc(p->list, sizeof(fsl__pq_entry)*N);
   if(!re) return FSL_RC_OOM;
   else{
-    p->list = (fsl_pq_entry*)re;
+    p->list = (fsl__pq_entry*)re;
     p->capacity = N;
     return 0;
   }
@@ -31430,11 +31561,11 @@ static int fsl_pq_resize(fsl_pq *p, fsl_size_t N){
 /**
    Insert element e into the queue.
 */
-int fsl_pq_insert(fsl_pq *p, fsl_id_t e,
+int fsl__pq_insert(fsl__pq *p, fsl_id_t e,
                   double v, void *pData){
   fsl_size_t i, j;
   if( p->used+1>p->capacity ){
-    int const rc = fsl_pq_resize(p, p->used+5);
+    int const rc = fsl__pq_resize(p, p->used+5);
     if(rc) return rc;
   }
   for(i=0; i<p->used; ++i){
@@ -31452,7 +31583,7 @@ int fsl_pq_insert(fsl_pq *p, fsl_id_t e,
   return 0;
 }
 
-fsl_id_t fsl_pq_extract(fsl_pq *p, void **pp){
+fsl_id_t fsl__pq_extract(fsl__pq *p, void **pp){
   fsl_id_t e, i;
   if( p->used==0 ){
     if( pp ) *pp = 0;
@@ -31909,19 +32040,19 @@ int fsl_sym_to_rid( fsl_cx * const f, char const * sym,
   return rc;
 }
 
-fsl_id_t fsl_uuid_to_rid2( fsl_cx * f, fsl_uuid_cstr uuid,
-                           fsl_phantom_e mode ){
+fsl_id_t fsl__uuid_to_rid2( fsl_cx * const f, fsl_uuid_cstr uuid,
+                           fsl__phantom_e mode ){
     if(!f) return -1;
     else if(!fsl_is_uuid(uuid)){
       fsl_cx_err_set(f, FSL_RC_MISUSE,
-                     "fsl_uuid_to_rid2() requires a "
+                     "fsl__uuid_to_rid2() requires a "
                      "full UUID. Got: %s", uuid);
       return -2;
     }else{
       fsl_id_t rv;
       rv = fsl_uuid_to_rid(f, uuid);
       if((0==rv) && (FSL_PHANTOM_NONE!=mode)
-         && 0!=fsl_content_new(f, uuid,
+         && 0!=fsl__content_new(f, uuid,
                                (FSL_PHANTOM_PRIVATE==mode),
                                &rv)){
         assert(f->error.code);
@@ -32057,11 +32188,11 @@ fsl_id_t fsl_uuid_to_rid( fsl_cx * const f, char const * uuid ){
 
 fsl_id_t fsl_repo_filename_fnid( fsl_cx * f, char const * fn ){
   fsl_id_t rv = 0;
-  int const rc = fsl_repo_filename_fnid2(f, fn, &rv, false);
+  int const rc = fsl__repo_filename_fnid2(f, fn, &rv, false);
   return rv>=0 ? rv : (rc>0 ? -rc : rc);
 }
 
-int fsl_repo_filename_fnid2( fsl_cx * f, char const * fn, fsl_id_t * rv, bool createNew ){
+int fsl__repo_filename_fnid2( fsl_cx * f, char const * fn, fsl_id_t * rv, bool createNew ){
   fsl_db * db = fsl_cx_db_repo(f);
   fsl_id_t fnid = 0;
   fsl_stmt * qSel = NULL;
@@ -32154,7 +32285,7 @@ int fsl_delta_src_id( fsl_cx * const f, fsl_id_t deltaRid,
 
 
 
-int fsl_repo_verify_before_commit( fsl_cx * f, fsl_id_t rid ){
+int fsl__repo_verify_before_commit( fsl_cx * const f, fsl_id_t rid ){
   if(0){
     /*
        v1 adds a commit hook here on the first entry, but it only
@@ -32171,13 +32302,13 @@ int fsl_repo_verify_before_commit( fsl_cx * f, fsl_id_t rid ){
     : FSL_RC_RANGE;    
 }
 
-void fsl_repo_verify_cancel( fsl_cx * f ){
+void fsl_repo_verify_cancel( fsl_cx * const f ){
   fsl_id_bag_clear(&f->cache.toVerify);
 }
 
 int fsl_rid_to_uuid2(fsl_cx * const f, fsl_id_t rid, fsl_buffer *uuid){
   fsl_db * db = f ? fsl_cx_db_repo(f) : NULL;
-  if(!f || !db || (rid<=0)){
+  if(!db || (rid<=0)){
     return fsl_cx_err_set(f, FSL_RC_MISUSE,
                           "fsl_rid_to_uuid2() requires "
                           "an opened repository and a "
@@ -32333,7 +32464,7 @@ static int fsl_repo_verify_rid(fsl_cx * f, fsl_id_t rid){
 }
 
 
-int fsl_repo_verify_at_commit( fsl_cx * f ){
+int fsl__repo_verify_at_commit( fsl_cx * const f ){
   fsl_id_t rid;
   int rc = 0;
   fsl_id_bag * bag = &f->cache.toVerify;
@@ -32352,7 +32483,7 @@ int fsl_repo_verify_at_commit( fsl_cx * f ){
   f->cache.inFinalVerify = 0;
   if(rc && !f->error.code){
     fsl_cx_err_set(f, rc,
-                   "Error #%d (%s) in fsl_repo_verify_at_commit()",
+                   "Error #%d (%s) in fsl__repo_verify_at_commit()",
                    rc, fsl_rc_cstr(rc));
   }
   return rc;
@@ -32453,7 +32584,7 @@ int fsl_repo_create(fsl_cx * f, fsl_repo_create_opt const * opt ){
   }
   db = fsl_cx_db(f);
   if(!f->repo.user){
-    f->repo.user = fsl_guess_user_name()
+    f->repo.user = fsl_user_name_guess()
       /* Ignore OOM error here - we'll use 'root'
          by default (but if we're really OOM here then
          the next op will fail).
@@ -32577,7 +32708,7 @@ int fsl_repo_create(fsl_cx * f, fsl_repo_create_opt const * opt ){
   */
   if( opt->configRepo && *opt->configRepo ){
     bool inTrans2 = false;
-    char * inopConfig = fsl_config_inop_rhs(FSL_CONFIGSET_ALL);
+    char * inopConfig = fsl__config_inop_rhs(FSL_CONFIGSET_ALL);
     char * inopDb = inopConfig ? fsl_db_setting_inop_rhs() : NULL;
     if(!inopConfig || !inopDb){
       fsl_free(inopConfig);
@@ -32844,8 +32975,7 @@ char fsl_repo_is_readonly(fsl_cx const * f){
   }
 }
 
-int fsl_repo_record_filename(fsl_cx * f){
-  fsl_buffer full = fsl_buffer_empty;
+int fsl__repo_record_filename(fsl_cx * const f){
   fsl_db * dbR = fsl_needs_repo(f);
   fsl_db * dbC;
   fsl_db * dbConf;
@@ -32853,9 +32983,10 @@ int fsl_repo_record_filename(fsl_cx * f){
   char const * zName = dbR ? dbR->filename : NULL;
   int rc;
   if(!dbR) return FSL_RC_NOT_A_REPO;
+  fsl_buffer * const full = fsl__cx_scratchpad(f);
   assert(zName);
   assert(f);
-  rc = fsl_file_canonical_name(zName, &full, 0);
+  rc = fsl_file_canonical_name(zName, full, 0);
   if(rc){
     fsl_cx_err_set(f, rc, "Error %s canonicalizing filename: %s", zName);
     goto end;
@@ -32872,7 +33003,7 @@ int fsl_repo_record_filename(fsl_cx * f){
                      "INSERT OR IGNORE INTO %s.global_config(name,value) "
                      "VALUES('repo:%q',1)",
                      fsl_db_role_label(dbRole),
-                     fsl_buffer_cstr(&full));
+                     fsl_buffer_cstr(full));
     if(rc) goto end;
   }
 
@@ -32920,7 +33051,7 @@ int fsl_repo_record_filename(fsl_cx * f){
   if(rc && !f->error.code && f->dbMain->error.code){
     fsl_cx_uplift_db_error(f, f->dbMain);
   }
-  fsl_buffer_clear(&full);
+  fsl__cx_scratchpad_yield(f, full);
   return rc;
 
 }
@@ -33027,7 +33158,7 @@ int fsl_repo_extract( fsl_cx * f, fsl_repo_extract_opt const * opt_ ){
       }
     }/* for-each-F-card loop */
     end:
-    fsl_cx_content_buffer_yield(f);
+    fsl__cx_content_buffer_yield(f);
     fsl_deck_finalize(&mf);
     return rc;
   }
@@ -33047,7 +33178,7 @@ int fsl_repo_import_blob( fsl_cx * f, fsl_input_f in, void * inState,
                           "Error filling buffer from input source.");
     }else{
       fsl_id_t theRid = 0;
-      rc = fsl_content_put_ex( f, &buf, NULL, 0, 0, 0, &theRid);
+      rc = fsl__content_put_ex( f, &buf, NULL, 0, 0, 0, &theRid);
       if(!rc){
         if(rid) *rid = theRid;
         if(uuid){
@@ -33086,7 +33217,7 @@ int fsl_repo_blob_lookup( fsl_cx * f, fsl_buffer const * src, fsl_id_t * ridOut,
   fsl_buffer * hash;
   fsl_id_t rid = 0;
   if(!fsl_cx_db_repo(f)) return FSL_RC_NOT_A_REPO;
-  hash = hashOut ? &hash_ : fsl_cx_scratchpad(f);
+  hash = hashOut ? &hash_ : fsl__cx_scratchpad(f);
   /* First check the auxiliary hash to see if there is already an artifact
      that uses the auxiliary hash name */
   rc = fsl_cx_hash_buffer(f, true, src, hash);
@@ -33124,16 +33255,17 @@ int fsl_repo_blob_lookup( fsl_cx * f, fsl_buffer const * src, fsl_id_t * ridOut,
     fsl_buffer_clear(hash);
   }else{
     assert(!hash_.mem);
-    fsl_cx_scratchpad_yield(f, hash);
+    fsl__cx_scratchpad_yield(f, hash);
   }
   return rc;
 }
 
-int fsl_repo_fingerprint_search( fsl_cx *f, fsl_id_t rcvid, char ** zOut ){
+int fsl__repo_fingerprint_search( fsl_cx * const f, fsl_id_t rcvid,
+                                 char ** zOut ){
   int rc = 0;
   fsl_db * const db = fsl_needs_repo(f);
   if(!db) return FSL_RC_NOT_A_REPO; 
-  fsl_buffer * const sql = fsl_cx_scratchpad(f);
+  fsl_buffer * const sql = fsl__cx_scratchpad(f);
   fsl_stmt q = fsl_stmt_empty;
   int version = 1 /* Fingerprint version to check: 0 or 1 */;
   try_again:
@@ -33197,7 +33329,7 @@ int fsl_repo_fingerprint_search( fsl_cx *f, fsl_id_t rcvid, char ** zOut ){
       break;
   }
   end:
-  fsl_cx_scratchpad_yield(f, sql);
+  fsl__cx_scratchpad_yield(f, sql);
   fsl_stmt_finalize(&q);
   return rc;
 }
@@ -33235,7 +33367,7 @@ int fsl_repo_manifest_write(fsl_cx *f,
   }
   if(pHash){
     if(f->ckout.rid!=manifestRid){
-      bHash = fsl_cx_scratchpad(f);
+      bHash = fsl__cx_scratchpad(f);
       rc = fsl_rid_to_uuid2(f, manifestRid, bHash);
       if(rc) goto end;
       ridHash = (char *)bHash->mem;
@@ -33277,7 +33409,7 @@ int fsl_repo_manifest_write(fsl_cx *f,
   }
   end:
   if(bHash){
-    fsl_cx_scratchpad_yield(f, bHash);
+    fsl__cx_scratchpad_yield(f, bHash);
   }
   return rc;
 }
@@ -33413,7 +33545,7 @@ static char fsl_satype_letter(fsl_satype_e t){
   }
 }
 
-int fsl_search_doc_touch(fsl_cx * const f, fsl_satype_e saType,
+int fsl__search_doc_touch(fsl_cx * const f, fsl_satype_e saType,
                          fsl_id_t rid, const char * docName){
   if(!fsl_search_ndx_exists(f) || fsl_content_is_private(f, rid)) return 0;
   char zType[2] = {0,0};
@@ -33426,7 +33558,7 @@ int fsl_search_doc_touch(fsl_cx * const f, fsl_satype_e saType,
   /* Reminder: fossil(1) does some once-per-connection init here which
      installs UDFs used by the search process. Those will be significant
      for us if we add the search features to the library. */
-  assert(zType[0] && "Misuse of fsl_search_doc_touch()'s 2nd parameter.");
+  assert(zType[0] && "Misuse of fsl__search_doc_touch()'s 2nd parameter.");
   fsl_db * const db = fsl_cx_db_repo(f);
   int rc = fsl_db_exec(db,
        "DELETE FROM ftsidx WHERE docid IN"
@@ -36011,7 +36143,7 @@ int fsl_sha3sum_filename(const char *zFilename, fsl_buffer *pCksum){
  *
  * Arnold Robbins
  *
-   *****************************************************************************
+ *****************************************************************************
  * Bug reports, patches, comments, suggestions should be sent to:
  * (Note: this routine is provided as is, without support for those sites that
  *    do not have strftime in their library)
@@ -36019,7 +36151,7 @@ int fsl_sha3sum_filename(const char *zFilename, fsl_buffer *pCksum){
  *    Syd Weinstein, Elm Coordinator
  *    elm@DSI.COM            dsinc!elm
  *
-   *****************************************************************************
+ *****************************************************************************
  * $Log: strftime.c,v $
  * Revision 1.3  1993/10/09  19:38:51  smace
  * Update to elm 2.4 pl23 release version
@@ -36066,7 +36198,7 @@ int fsl_sha3sum_filename(const char *zFilename, fsl_buffer *pCksum){
  * Revision 5.1  1993/01/27  18:52:15  syd
  * Initial checkin of contributed public domain routine.
  * This routine is provided as is and not covered by Elm Copyright.
-   ****************************************************************************/
+ ****************************************************************************/
 
 /*
  * strftime.c
@@ -36113,7 +36245,7 @@ int fsl_sha3sum_filename(const char *zFilename, fsl_buffer *pCksum){
  * hard tabs with 4 spaces. Added #undefs for all file-private #defines
  * to safe-ify inclusion from/with other files.
  * 
-*/
+ */
 
 #include <time.h>
 /* #include <sys/time.h> */
@@ -36175,7 +36307,7 @@ static int iso8601wknum(const struct tm *timeptr);
 static inline int
 minimum(int a, int b)
 {
-    return (a < b ? a : b);
+  return (a < b ? a : b);
 }
 
 /* maximum --- return maximum of two numbers */
@@ -36183,7 +36315,7 @@ minimum(int a, int b)
 static inline int
 maximum(int a, int b)
 {
-    return (a > b ? a : b);
+  return (a > b ? a : b);
 }
 
 /* strftime --- produce formatted time */
@@ -36191,344 +36323,333 @@ maximum(int a, int b)
 fsl_size_t
 fsl_strftime(char *s, fsl_size_t maxsize, const char *format, const struct tm *timeptr)
 {
-    enum {TBufLen = 100U};
-    char *endp = s + maxsize;
-    char *start = s;
-    char tbuf[TBufLen];
-    int i;
-    static short first = 1;
+  enum {TBufLen = 100U};
+  char *endp = s + maxsize;
+  char *start = s;
+  char tbuf[TBufLen];
+  int i;
+  static short first = 1;
 #ifdef POSIX_SEMANTICS
-    static char *savetz = NULL;
-    static int savetzlen = 0;
-    char *tz;
+  enum {TZBufLen = 200U};
+  static char savetz[TZBufLen] = {0};
+  char *tz;
 #endif /* POSIX_SEMANTICS */
 
-    /* various tables, useful in North America */
-    static char *days_a[] = {
-        "Sun", "Mon", "Tue", "Wed",
-        "Thu", "Fri", "Sat",
-    };
-    static char *days_l[] = {
-        "Sunday", "Monday", "Tuesday", "Wednesday",
-        "Thursday", "Friday", "Saturday",
-    };
-    static char *months_a[] = {
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    };
-    static char *months_l[] = {
-        "January", "February", "March", "April",
-        "May", "June", "July", "August", "September",
-        "October", "November", "December",
-    };
-    static char *ampm[] = { "AM", "PM", };
+  /* various tables, useful in North America */
+  static char *days_a[] = {
+  "Sun", "Mon", "Tue", "Wed",
+  "Thu", "Fri", "Sat"
+  };
+  static char *days_l[] = {
+  "Sunday", "Monday", "Tuesday", "Wednesday",
+  "Thursday", "Friday", "Saturday"
+  };
+  static char *months_a[] = {
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+  };
+  static char *months_l[] = {
+  "January", "February", "March", "April",
+  "May", "June", "July", "August", "September",
+  "October", "November", "December"
+  };
+  static char *ampm[] = { "AM", "PM" };
 
-    if (s == NULL || format == NULL || timeptr == NULL || maxsize == 0)
-        return 0;
+  if (s == NULL || format == NULL || timeptr == NULL || maxsize == 0)
+    return 0;
 
-    if (strchr(format, '%') == NULL && strlen(format) + 1 >= maxsize)
-        return 0;
+  if (strchr(format, '%') == NULL && strlen(format) + 1 >= maxsize)
+    return 0;
 
 #ifndef POSIX_SEMANTICS
-    if (first) {
-        tzset();
-        first = 0;
-    }
+  if (first) {
+    tzset();
+    first = 0;
+  }
 #else    /* POSIX_SEMANTICS */
-    tz = getenv("TZ");
-    if (first) {
-        if (tz != NULL) {
-            int tzlen = strlen(tz);
-
-            savetz = (char *) malloc(tzlen + 1);
-            if (savetz != NULL) {
-                savetzlen = tzlen + 1;
-                strcpy(savetz, tz);
-            }
-        }
-        tzset();
-        first = 0;
+  tz = getenv("TZ");
+  if (first) {
+    if (tz != NULL) {
+      fsl_strlcpy(savetz, tz, TZBufLen);
     }
-    /* if we have a saved TZ, and it is different, recapture and reset */
-    if (tz && savetz && (tz[0] != savetz[0] || strcmp(tz, savetz) != 0)) {
-        i = strlen(tz) + 1;
-        if (i > savetzlen) {
-            savetz = (char *) realloc(savetz, i);
-            if (savetz) {
-                savetzlen = i;
-                strcpy(savetz, tz);
-            }
-        } else
-            strcpy(savetz, tz);
-        tzset();
+    tzset();
+    first = 0;
+  }
+  /* if we have a saved TZ, and it is different, recapture and reset */
+  if(tz && (tz[0] != savetz[0] || strcmp(tz, savetz) != 0)) {
+    i = strlen(tz) + 1;
+    if (i < TZBufLen) {
+      fsl_strlcpy(savetz, tz, TZBufLen);
     }
+    tzset();
+  }
 #endif    /* POSIX_SEMANTICS */
 
-    for (; *format && s < endp - 1; format++) {
-        tbuf[0] = '\0';
-        if (*format != '%') {
-            *s++ = *format;
-            continue;
-        }
+  for (; *format && s < endp - 1; format++) {
+    tbuf[0] = '\0';
+    if (*format != '%') {
+      *s++ = *format;
+      continue;
+    }
     again:
-        switch (*++format) {
-        case '\0':
-            *s++ = '%';
-            goto out;
+    switch (*++format) {
+      case '\0':
+        *s++ = '%';
+        goto out;
 
-        case '%':
-            *s++ = '%';
-            continue;
+      case '%':
+        *s++ = '%';
+        continue;
 
-        case 'a':    /* abbreviated weekday name */
-            if (timeptr->tm_wday < 0 || timeptr->tm_wday > 6)
-                strcpy(tbuf, "?");
-            else
-                strcpy(tbuf, days_a[timeptr->tm_wday]);
-            break;
+      case 'a':    /* abbreviated weekday name */
+        if (timeptr->tm_wday < 0 || timeptr->tm_wday > 6)
+          fsl_strlcpy(tbuf, "?", TBufLen);
+        else
+          fsl_strlcpy(tbuf, days_a[timeptr->tm_wday], TBufLen);
+        break;
 
-        case 'A':    /* full weekday name */
-            if (timeptr->tm_wday < 0 || timeptr->tm_wday > 6)
-                strcpy(tbuf, "?");
-            else
-                strcpy(tbuf, days_l[timeptr->tm_wday]);
-            break;
+      case 'A':    /* full weekday name */
+        if (timeptr->tm_wday < 0 || timeptr->tm_wday > 6)
+          fsl_strlcpy(tbuf, "?", TBufLen);
+        else
+          fsl_strlcpy(tbuf, days_l[timeptr->tm_wday], TBufLen);
+        break;
 
 #ifdef SYSV_EXT
-        case 'h':    /* abbreviated month name */
+      case 'h':    /* abbreviated month name */
 #endif
-        case 'b':    /* abbreviated month name */
-            if (timeptr->tm_mon < 0 || timeptr->tm_mon > 11)
-                strcpy(tbuf, "?");
-            else
-                strcpy(tbuf, months_a[timeptr->tm_mon]);
-            break;
+      case 'b':    /* abbreviated month name */
+        if (timeptr->tm_mon < 0 || timeptr->tm_mon > 11)
+          fsl_strlcpy(tbuf, "?", TBufLen);
+        else
+          fsl_strlcpy(tbuf, months_a[timeptr->tm_mon], TBufLen);
+        break;
 
-        case 'B':    /* full month name */
-            if (timeptr->tm_mon < 0 || timeptr->tm_mon > 11)
-                strcpy(tbuf, "?");
-            else
-                strcpy(tbuf, months_l[timeptr->tm_mon]);
-            break;
+      case 'B':    /* full month name */
+        if (timeptr->tm_mon < 0 || timeptr->tm_mon > 11)
+          fsl_strlcpy(tbuf, "?", TBufLen);
+        else
+          fsl_strlcpy(tbuf, months_l[timeptr->tm_mon], TBufLen);
+        break;
 
-        case 'c':    /* appropriate date and time representation */
-            snprintf(tbuf, TBufLen, "%s %s %2d %02d:%02d:%02d %d",
-                days_a[range(0, timeptr->tm_wday, 6)],
-                months_a[range(0, timeptr->tm_mon, 11)],
-                range(1, timeptr->tm_mday, 31),
-                range(0, timeptr->tm_hour, 23),
-                range(0, timeptr->tm_min, 59),
-                range(0, timeptr->tm_sec, 61),
-                timeptr->tm_year + 1900);
-            break;
+      case 'c':    /* appropriate date and time representation */
+        snprintf(tbuf, TBufLen, "%s %s %2d %02d:%02d:%02d %d",
+                 days_a[range(0, timeptr->tm_wday, 6)],
+                 months_a[range(0, timeptr->tm_mon, 11)],
+                 range(1, timeptr->tm_mday, 31),
+                 range(0, timeptr->tm_hour, 23),
+                 range(0, timeptr->tm_min, 59),
+                 range(0, timeptr->tm_sec, 61),
+                 timeptr->tm_year + 1900);
+        break;
 
-        case 'd':    /* day of the month, 01 - 31 */
-            i = range(1, timeptr->tm_mday, 31);
-            snprintf(tbuf, TBufLen, "%02d", i);
-            break;
+      case 'd':    /* day of the month, 01 - 31 */
+        i = range(1, timeptr->tm_mday, 31);
+        snprintf(tbuf, TBufLen, "%02d", i);
+        break;
 
-        case 'H':    /* hour, 24-hour clock, 00 - 23 */
-            i = range(0, timeptr->tm_hour, 23);
-            snprintf(tbuf, TBufLen, "%02d", i);
-            break;
+      case 'H':    /* hour, 24-hour clock, 00 - 23 */
+        i = range(0, timeptr->tm_hour, 23);
+        snprintf(tbuf, TBufLen, "%02d", i);
+        break;
 
-        case 'I':    /* hour, 12-hour clock, 01 - 12 */
-            i = range(0, timeptr->tm_hour, 23);
-            if (i == 0)
-                i = 12;
-            else if (i > 12)
-                i -= 12;
-            snprintf(tbuf, TBufLen, "%02d", i);
-            break;
+      case 'I':    /* hour, 12-hour clock, 01 - 12 */
+        i = range(0, timeptr->tm_hour, 23);
+        if (i == 0)
+          i = 12;
+        else if (i > 12)
+          i -= 12;
+        snprintf(tbuf, TBufLen, "%02d", i);
+        break;
 
-        case 'j':    /* day of the year, 001 - 366 */
-            snprintf(tbuf, TBufLen, "%03d", timeptr->tm_yday + 1);
-            break;
+      case 'j':    /* day of the year, 001 - 366 */
+        snprintf(tbuf, TBufLen, "%03d", timeptr->tm_yday + 1);
+        break;
 
-        case 'm':    /* month, 01 - 12 */
-            i = range(0, timeptr->tm_mon, 11);
-            snprintf(tbuf, TBufLen, "%02d", i + 1);
-            break;
+      case 'm':    /* month, 01 - 12 */
+        i = range(0, timeptr->tm_mon, 11);
+        snprintf(tbuf, TBufLen, "%02d", i + 1);
+        break;
 
-        case 'M':    /* minute, 00 - 59 */
-            i = range(0, timeptr->tm_min, 59);
-            snprintf(tbuf, TBufLen, "%02d", i);
-            break;
+      case 'M':    /* minute, 00 - 59 */
+        i = range(0, timeptr->tm_min, 59);
+        snprintf(tbuf, TBufLen, "%02d", i);
+        break;
 
-        case 'p':    /* am or pm based on 12-hour clock */
-            i = range(0, timeptr->tm_hour, 23);
-            if (i < 12)
-                strcpy(tbuf, ampm[0]);
-            else
-                strcpy(tbuf, ampm[1]);
-            break;
+      case 'p':    /* am or pm based on 12-hour clock */
+        i = range(0, timeptr->tm_hour, 23);
+        if (i < 12)
+          fsl_strlcpy(tbuf, ampm[0], TBufLen);
+        else
+          fsl_strlcpy(tbuf, ampm[1], TBufLen);
+        break;
 
-        case 'S':    /* second, 00 - 61 */
-            i = range(0, timeptr->tm_sec, 61);
-            snprintf(tbuf, TBufLen, "%02d", i);
-            break;
+      case 'S':    /* second, 00 - 61 */
+        i = range(0, timeptr->tm_sec, 61);
+        snprintf(tbuf, TBufLen, "%02d", i);
+        break;
 
-        case 'U':    /* week of year, Sunday is first day of week */
-            snprintf(tbuf, TBufLen, "%d", weeknumber(timeptr, 0));
-            break;
+      case 'U':    /* week of year, Sunday is first day of week */
+        snprintf(tbuf, TBufLen, "%d", weeknumber(timeptr, 0));
+        break;
 
-        case 'w':    /* weekday, Sunday == 0, 0 - 6 */
-            i = range(0, timeptr->tm_wday, 6);
-            snprintf(tbuf, TBufLen, "%d", i);
-            break;
+      case 'w':    /* weekday, Sunday == 0, 0 - 6 */
+        i = range(0, timeptr->tm_wday, 6);
+        snprintf(tbuf, TBufLen, "%d", i);
+        break;
 
-        case 'W':    /* week of year, Monday is first day of week */
-            snprintf(tbuf, TBufLen, "%d", weeknumber(timeptr, 1));
-            break;
+      case 'W':    /* week of year, Monday is first day of week */
+        snprintf(tbuf, TBufLen, "%d", weeknumber(timeptr, 1));
+        break;
 
-        case 'x':    /* appropriate date representation */
-            snprintf(tbuf, TBufLen, "%s %s %2d %d",
-                days_a[range(0, timeptr->tm_wday, 6)],
-                months_a[range(0, timeptr->tm_mon, 11)],
-                range(1, timeptr->tm_mday, 31),
-                timeptr->tm_year + 1900);
-            break;
+      case 'x':    /* appropriate date representation */
+        snprintf(tbuf, TBufLen, "%s %s %2d %d",
+                 days_a[range(0, timeptr->tm_wday, 6)],
+                 months_a[range(0, timeptr->tm_mon, 11)],
+                 range(1, timeptr->tm_mday, 31),
+                 timeptr->tm_year + 1900);
+        break;
 
-        case 'X':    /* appropriate time representation */
-            snprintf(tbuf, TBufLen, "%02d:%02d:%02d",
-                range(0, timeptr->tm_hour, 23),
-                range(0, timeptr->tm_min, 59),
-                range(0, timeptr->tm_sec, 61));
-            break;
+      case 'X':    /* appropriate time representation */
+        snprintf(tbuf, TBufLen, "%02d:%02d:%02d",
+                 range(0, timeptr->tm_hour, 23),
+                 range(0, timeptr->tm_min, 59),
+                 range(0, timeptr->tm_sec, 61));
+        break;
 
-        case 'y':    /* year without a century, 00 - 99 */
-            i = timeptr->tm_year % 100;
-            snprintf(tbuf, TBufLen, "%d", i);
-            break;
+      case 'y':    /* year without a century, 00 - 99 */
+        i = timeptr->tm_year % 100;
+        snprintf(tbuf, TBufLen, "%d", i);
+        break;
 
-        case 'Y':    /* year with century */
-            snprintf(tbuf, TBufLen, "%d", 1900 + timeptr->tm_year);
-            break;
+      case 'Y':    /* year with century */
+        snprintf(tbuf, TBufLen, "%d", 1900 + timeptr->tm_year);
+        break;
 
 #if HAVE_GET_TZ_NAME
-          case 'Z':    /* time zone name or abbrevation */
-            strcpy(tbuf, get_tz_name(timeptr));
-            break;
+      case 'Z':    /* time zone name or abbrevation */
+        fsl_strlcpy(tbuf, get_tz_name(timeptr), TBufLen);
+        break;
 #endif
             
 #ifdef SYSV_EXT
-        case 'n':    /* same as \n */
-            tbuf[0] = '\n';
-            tbuf[1] = '\0';
-            break;
+      case 'n':    /* same as \n */
+        tbuf[0] = '\n';
+        tbuf[1] = '\0';
+        break;
 
-        case 't':    /* same as \t */
-            tbuf[0] = '\t';
-            tbuf[1] = '\0';
-            break;
+      case 't':    /* same as \t */
+        tbuf[0] = '\t';
+        tbuf[1] = '\0';
+        break;
 
-        case 'D':    /* date as %m/%d/%y */
-            fsl_strftime(tbuf, sizeof tbuf, "%m/%d/%y", timeptr);
-            break;
+      case 'D':    /* date as %m/%d/%y */
+        fsl_strftime(tbuf, sizeof tbuf, "%m/%d/%y", timeptr);
+        break;
 
-        case 'e':    /* day of month, blank padded */
-            snprintf(tbuf, TBufLen, "%2d", range(1, timeptr->tm_mday, 31));
-            break;
+      case 'e':    /* day of month, blank padded */
+        snprintf(tbuf, TBufLen, "%2d", range(1, timeptr->tm_mday, 31));
+        break;
 
-        case 'r':    /* time as %I:%M:%S %p */
-            fsl_strftime(tbuf, sizeof tbuf, "%I:%M:%S %p", timeptr);
-            break;
+      case 'r':    /* time as %I:%M:%S %p */
+        fsl_strftime(tbuf, sizeof tbuf, "%I:%M:%S %p", timeptr);
+        break;
 
-        case 'R':    /* time as %H:%M */
-            fsl_strftime(tbuf, sizeof tbuf, "%H:%M", timeptr);
-            break;
+      case 'R':    /* time as %H:%M */
+        fsl_strftime(tbuf, sizeof tbuf, "%H:%M", timeptr);
+        break;
 
-        case 'T':    /* time as %H:%M:%S */
-            fsl_strftime(tbuf, sizeof tbuf, "%H:%M:%S", timeptr);
-            break;
+      case 'T':    /* time as %H:%M:%S */
+        fsl_strftime(tbuf, sizeof tbuf, "%H:%M:%S", timeptr);
+        break;
 #endif
 
 #ifdef SUNOS_EXT
-        case 'k':    /* hour, 24-hour clock, blank pad */
-            snprintf(tbuf, TBufLen, "%2d", range(0, timeptr->tm_hour, 23));
-            break;
+      case 'k':    /* hour, 24-hour clock, blank pad */
+        snprintf(tbuf, TBufLen, "%2d", range(0, timeptr->tm_hour, 23));
+        break;
 
-        case 'l':    /* hour, 12-hour clock, 1 - 12, blank pad */
-            i = range(0, timeptr->tm_hour, 23);
-            if (i == 0)
-                i = 12;
-            else if (i > 12)
-                i -= 12;
-            snprintf(tbuf, TBufLen, "%2d", i);
-            break;
+      case 'l':    /* hour, 12-hour clock, 1 - 12, blank pad */
+        i = range(0, timeptr->tm_hour, 23);
+        if (i == 0)
+          i = 12;
+        else if (i > 12)
+          i -= 12;
+        snprintf(tbuf, TBufLen, "%2d", i);
+        break;
 #endif
 
 
 #ifdef VMS_EXT
-        case 'v':    /* date as dd-bbb-YYYY */
-            snprintf(tbuf, TBufLen, "%2d-%3.3s-%4d",
-                range(1, timeptr->tm_mday, 31),
-                months_a[range(0, timeptr->tm_mon, 11)],
-                timeptr->tm_year + 1900);
-            for (i = 3; i < 6; i++)
-                if (islower((int)tbuf[i]))
-                    tbuf[i] = toupper((int)tbuf[i]);
-            break;
+      case 'v':    /* date as dd-bbb-YYYY */
+        snprintf(tbuf, TBufLen, "%2d-%3.3s-%4d",
+                 range(1, timeptr->tm_mday, 31),
+                 months_a[range(0, timeptr->tm_mon, 11)],
+                 timeptr->tm_year + 1900);
+        for (i = 3; i < 6; i++)
+          if (islower((int)tbuf[i]))
+            tbuf[i] = toupper((int)tbuf[i]);
+        break;
 #endif
 
 
 #ifdef POSIX2_DATE
-        case 'C':
-            snprintf(tbuf, TBufLen, "%02d", (timeptr->tm_year + 1900) / 100);
-            break;
+      case 'C':
+        snprintf(tbuf, TBufLen, "%02d", (timeptr->tm_year + 1900) / 100);
+        break;
 
 
-        case 'E':
-        case 'O':
-            /* POSIX locale extensions, ignored for now */
-            goto again;
+      case 'E':
+      case 'O':
+        /* POSIX locale extensions, ignored for now */
+        goto again;
 
-        case 'V':    /* week of year according ISO 8601 */
+      case 'V':    /* week of year according ISO 8601 */
 #if defined(GAWK) && defined(VMS_EXT)
         {
-            extern int do_lint;
-            extern void warning();
-            static int warned = 0;
+          extern int do_lint;
+          extern void warning();
+          static int warned = 0;
 
-            if (! warned && do_lint) {
-                warned = 1;
-                warning(
-    "conversion %%V added in P1003.2/11.3; for VMS style date, use %%v");
-            }
+          if (! warned && do_lint) {
+            warned = 1;
+            warning(
+                    "conversion %%V added in P1003.2/11.3; for VMS style date, use %%v");
+          }
         }
 #endif
-            snprintf(tbuf, TBufLen, "%d", iso8601wknum(timeptr));
-            break;
+        snprintf(tbuf, TBufLen, "%d", iso8601wknum(timeptr));
+        break;
 
-        case 'u':
+      case 'u':
         /* ISO 8601: Weekday as a decimal number [1 (Monday) - 7] */
-            snprintf(tbuf, TBufLen, "%d", timeptr->tm_wday == 0 ? 7 :
-                    timeptr->tm_wday);
-            break;
+        snprintf(tbuf, TBufLen, "%d", timeptr->tm_wday == 0 ? 7 :
+                 timeptr->tm_wday);
+        break;
 #endif    /* POSIX2_DATE */
-        default:
-            tbuf[0] = '%';
-            tbuf[1] = *format;
-            tbuf[2] = '\0';
-            break;
-        }
-        i = strlen(tbuf);
-        if (i){
-            if (s + i < endp - 1) {
-                strcpy(s, tbuf);
-                s += i;
-            } else return 0;
-            /* reminder: above IF originally had ambiguous else
-               placement (no braces).  This placement _appears_ to be
-               correct.*/
-        }
+      default:
+        tbuf[0] = '%';
+        tbuf[1] = *format;
+        tbuf[2] = '\0';
+        break;
     }
-out:
-    if (s < endp && *format == '\0') {
-        *s = '\0';
-        return (s - start);
-    } else
-        return 0;
+    i = strlen(tbuf);
+    if (i){
+      if (s + i < endp - 1) {
+        fsl_strlcpy(s, tbuf, TBufLen);
+        s += i;
+      } else return 0;
+      /* reminder: above IF originally had ambiguous else
+         placement (no braces).  This placement _appears_ to be
+         correct.*/
+    }
+  }
+  out:
+  if (s < endp && *format == '\0') {
+    *s = '\0';
+    return (s - start);
+  } else
+    return 0;
 }
 
 #ifdef POSIX2_DATE
@@ -36537,52 +36658,52 @@ out:
 static int
 iso8601wknum(const struct tm *timeptr)
 {
-    /*
-     * From 1003.2 D11.3:
-     *    If the week (Monday to Sunday) containing January 1
-     *    has four or more days in the new year, then it is week 1;
-     *    otherwise it is week 53 of the previous year, and the
-     *    next week is week 1.
-     *
-     * ADR: This means if Jan 1 was Monday through Thursday,
-     *    it was week 1, otherwise week 53.
-     */
+  /*
+   * From 1003.2 D11.3:
+   *    If the week (Monday to Sunday) containing January 1
+   *    has four or more days in the new year, then it is week 1;
+   *    otherwise it is week 53 of the previous year, and the
+   *    next week is week 1.
+   *
+   * ADR: This means if Jan 1 was Monday through Thursday,
+   *    it was week 1, otherwise week 53.
+   */
 
-    int simple_wknum, jan1day, diff, ret;
+  int simple_wknum, jan1day, diff, ret;
 
-    /* get week number, Monday as first day of the week */
-    simple_wknum = weeknumber(timeptr, 1) + 1;
+  /* get week number, Monday as first day of the week */
+  simple_wknum = weeknumber(timeptr, 1) + 1;
 
-    /*
-     * With thanks and tip of the hatlo to tml@tik.vtt.fi
-     *
-     * What day of the week does January 1 fall on?
-     * We know that
-     *    (timeptr->tm_yday - jan1.tm_yday) MOD 7 ==
-     *        (timeptr->tm_wday - jan1.tm_wday) MOD 7
-     * and that
-     *     jan1.tm_yday == 0
-     * and that
-     *     timeptr->tm_wday MOD 7 == timeptr->tm_wday
-     * from which it follows that. . .
-      */
-    jan1day = timeptr->tm_wday - (timeptr->tm_yday % 7);
-    if (jan1day < 0)
-        jan1day += 7;
+  /*
+   * With thanks and tip of the hatlo to tml@tik.vtt.fi
+   *
+   * What day of the week does January 1 fall on?
+   * We know that
+   *    (timeptr->tm_yday - jan1.tm_yday) MOD 7 ==
+   *        (timeptr->tm_wday - jan1.tm_wday) MOD 7
+   * and that
+   *     jan1.tm_yday == 0
+   * and that
+   *     timeptr->tm_wday MOD 7 == timeptr->tm_wday
+   * from which it follows that. . .
+   */
+  jan1day = timeptr->tm_wday - (timeptr->tm_yday % 7);
+  if (jan1day < 0)
+    jan1day += 7;
 
-    /*
-     * If Jan 1 was a Monday through Thursday, it was in
-     * week 1.  Otherwise it was last year's week 53, which is
-     * this year's week 0.
-     */
-    if (jan1day >= 1 && jan1day <= 4)
-        diff = 0;
-    else
-        diff = 1;
-    ret = simple_wknum - diff;
-    if (ret == 0)    /* we're in the first week of the year */
-        ret = 53;
-    return ret;
+  /*
+   * If Jan 1 was a Monday through Thursday, it was in
+   * week 1.  Otherwise it was last year's week 53, which is
+   * this year's week 0.
+   */
+  if (jan1day >= 1 && jan1day <= 4)
+    diff = 0;
+  else
+    diff = 1;
+  ret = simple_wknum - diff;
+  if (ret == 0)    /* we're in the first week of the year */
+    ret = 53;
+  return ret;
 }
 #endif
 
@@ -36593,10 +36714,10 @@ iso8601wknum(const struct tm *timeptr)
 static int
 weeknumber(const struct tm *timeptr, int firstweekday)
 {
-    if (firstweekday == 0)
-        return (timeptr->tm_yday + 7 - timeptr->tm_wday) / 7;
-    else
-        return (timeptr->tm_yday + 7 -
+  if (firstweekday == 0)
+    return (timeptr->tm_yday + 7 - timeptr->tm_wday) / 7;
+  else
+    return (timeptr->tm_yday + 7 -
             (timeptr->tm_wday ? (timeptr->tm_wday - 1) : 6)) / 7;
 }
 
@@ -36730,12 +36851,12 @@ fsl_id_t fsl_tag_id( fsl_cx * f, char const * tag, bool create ){
     
 }
 
-int fsl_tag_propagate(fsl_cx *f, fsl_tagtype_e tagType,
+int fsl__tag_propagate(fsl_cx * const f, fsl_tagtype_e tagType,
                       fsl_id_t pid, fsl_id_t tagid,
                       fsl_id_t origId, const char *zValue,
                       double mtime){
   int rc;
-  fsl_pq queue = fsl_pq_empty     /* Queue of artifacts to be tagged */;
+  fsl__pq queue = fsl__pq_empty     /* Queue of artifacts to be tagged */;
   fsl_stmt s = fsl_stmt_empty     /* Query the children of :pid to which to propagate */;
   fsl_stmt ins = fsl_stmt_empty   /* INSERT INTO tagxref */;
   fsl_stmt eventupdate = fsl_stmt_empty  /* UPDATE event */;
@@ -36754,7 +36875,7 @@ int fsl_tag_propagate(fsl_cx *f, fsl_tagtype_e tagType,
   }
   else if(!db) return FSL_RC_NOT_A_REPO;
 
-  rc = fsl_pq_insert(&queue, pid, 0.0, NULL);
+  rc = fsl__pq_insert(&queue, pid, 0.0, NULL);
   if(rc) return rc;
 
   rc = fsl_db_prepare(db, &s,
@@ -36805,7 +36926,7 @@ int fsl_tag_propagate(fsl_cx *f, fsl_tagtype_e tagType,
     if(rc) goto end;
   }
 
-  while( 0 != (pid = fsl_pq_extract(&queue,NULL))){
+  while( 0 != (pid = fsl__pq_extract(&queue,NULL))){
     fsl_stmt_bind_id_name(&s, ":pid", pid);
 #if 0
     MARKER(("Walking over pid %"FSL_ID_T_PFMT
@@ -36818,7 +36939,7 @@ int fsl_tag_propagate(fsl_cx *f, fsl_tagtype_e tagType,
         double mtime = fsl_stmt_g_double(&s,1);
         assert(cid>0);
         assert(mtime>0.0);
-        rc = fsl_pq_insert(&queue, cid, mtime, NULL);
+        rc = fsl__pq_insert(&queue, cid, mtime, NULL);
         if(!rc) rc = fsl_stmt_bind_id_name(&ins, ":rid", cid);
         if(rc) goto end;
         else {
@@ -36836,7 +36957,7 @@ int fsl_tag_propagate(fsl_cx *f, fsl_tagtype_e tagType,
           }
           fsl_stmt_reset(&eventupdate);
         }else if( FSL_TAGID_BRANCH == tagid ){
-          rc = fsl_repo_leaf_eventually_check(f, cid);
+          rc = fsl__repo_leafeventually_check(f, cid);
         }
       }
     }
@@ -36846,12 +36967,12 @@ int fsl_tag_propagate(fsl_cx *f, fsl_tagtype_e tagType,
   fsl_stmt_finalize(&s);
   fsl_stmt_finalize(&ins);
   fsl_stmt_finalize(&eventupdate);
-  fsl_pq_clear(&queue);
+  fsl__pq_clear(&queue);
   return rc;
   
 }
 
-int fsl_tag_propagate_all(fsl_cx * f, fsl_id_t pid){
+int fsl__tag_propagate_all(fsl_cx * const f, fsl_id_t pid){
   fsl_stmt q = fsl_stmt_empty;
   int rc;
   fsl_db * const db = fsl_cx_db_repo(f);
@@ -36871,7 +36992,7 @@ int fsl_tag_propagate_all(fsl_cx * f, fsl_id_t pid){
     fsl_id_t const origid = fsl_stmt_g_id(&q, 4);
     if( FSL_TAGTYPE_ADD==tagtype ) tagtype = FSL_TAGTYPE_CANCEL
       /* For propagating purposes */;
-    rc = fsl_tag_propagate(f, tagtype, pid, tagid,
+    rc = fsl__tag_propagate(f, tagtype, pid, tagid,
                            origid, zValue, mtime);
   }
   fsl_stmt_finalize(&q);
@@ -36879,7 +37000,7 @@ int fsl_tag_propagate_all(fsl_cx * f, fsl_id_t pid){
 }
 
 
-int fsl_tag_insert( fsl_cx * f, fsl_tagtype_e tagtype,
+int fsl__tag_insert( fsl_cx * const f, fsl_tagtype_e tagtype,
                     char const * zTag, char const * zValue,
                     fsl_id_t srcId, double mtime,
                     fsl_id_t rid, fsl_id_t *outRid ){
@@ -36946,7 +37067,7 @@ int fsl_tag_insert( fsl_cx * f, fsl_tagtype_e tagtype,
   fsl_stmt_finalize(&q);
 
   if(FSL_TAGID_BRANCH == tagid ){
-    rc = fsl_repo_leaf_eventually_check(f, rid);
+    rc = fsl__repo_leafeventually_check(f, rid);
     if(rc) goto end;
   }
 #if 0
@@ -37007,7 +37128,7 @@ int fsl_tag_insert( fsl_cx * f, fsl_tagtype_e tagtype,
   }
   if( FSL_TAGTYPE_ADD == tagtype ) tagtype = FSL_TAGTYPE_CANCEL
     /* For propagation purposes */;
-  rc = fsl_tag_propagate(f, tagtype, rid, tagid,
+  rc = fsl__tag_propagate(f, tagtype, rid, tagid,
                          rid, zValue, mtime);
   end:
   if(rc){
@@ -37199,13 +37320,13 @@ int fsl_branch_create(fsl_cx * f, fsl_branch_opt const * opt, fsl_id_t * newRid 
                       NULL, "branch", opt->name);
   if(!rc){
     /* Add tag named sym-BRANCHNAME... */
-    fsl_buffer * buf = fsl_cx_scratchpad(f);
+    fsl_buffer * buf = fsl__cx_scratchpad(f);
     rc = fsl_buffer_appendf(buf, "sym-%s", opt->name);
     if(!rc){
       rc = fsl_deck_T_add(&deck, FSL_TAGTYPE_PROPAGATING,
                           NULL, fsl_buffer_cstr(buf), NULL);
     }
-    fsl_cx_scratchpad_yield(f, buf);
+    fsl__cx_scratchpad_yield(f, buf);
   }
   if(rc) goto end;
 
@@ -37239,7 +37360,7 @@ int fsl_branch_create(fsl_cx * f, fsl_branch_opt const * opt, fsl_id_t * newRid 
                          (fsl_id_t)deck.rid);
         if(!rc){
           /* Make the parent a delta of this one. */
-          rc = fsl_content_deltify(f, parent.rid, deck.rid, 0);
+          rc = fsl__content_deltify(f, parent.rid, deck.rid, 0);
         }
       }
     }
@@ -37287,7 +37408,7 @@ int fsl_branch_create(fsl_cx * f, fsl_branch_opt const * opt, fsl_id_t * newRid 
 #include <assert.h>
 #include <string.h> /* memcmp() */
 
-int fsl_cx_ticket_create_table(fsl_cx * const f){
+int fsl__cx_ticket_create_table(fsl_cx * const f){
   fsl_db * const db = fsl_needs_repo(f);
   int rc;
   if(!db) return FSL_RC_NOT_A_REPO;
@@ -37314,7 +37435,7 @@ static int fsl_tkt_field_id(fsl_list const * jli, const char *zFieldName){
   return -1;
 }
 
-int fsl_cx_ticket_load_fields(fsl_cx * f, bool forceReload){
+int fsl__cx_ticket_load_fields(fsl_cx * const f, bool forceReload){
   fsl_stmt q = fsl_stmt_empty;
   int i, rc = 0;
   fsl_list * li = &f->ticket.customFields;
@@ -37322,7 +37443,7 @@ int fsl_cx_ticket_load_fields(fsl_cx * f, bool forceReload){
   fsl_db * db;
   if(li->used){
     if(!forceReload) return 0;
-    fsl_card_J_list_free(li, 0);
+    fsl__card_J_list_free(li, 0);
     /* Fall through and reload ... */
   }
   if( !(db = fsl_needs_repo(f)) ){
@@ -37379,7 +37500,7 @@ int fsl_cx_ticket_load_fields(fsl_cx * f, bool forceReload){
   fsl_stmt_finalize(&q);
   end:
   if(!rc){
-    fsl_list_sort(li, fsl_qsort_cmp_J_cards);
+    fsl_list_sort(li, fsl__qsort_cmp_J_cards);
   }
   return rc;
 }
@@ -37902,7 +38023,7 @@ int fsl_vfile_changes_scan(fsl_cx * const f, fsl_id_t vid, unsigned cksigFlags){
   fsl_db * const db = fsl_needs_ckout(f);
   fsl_fstat fst = fsl_fstat_empty;
   fsl_size_t rootLen;
-  fsl_buffer * fileCksum = fsl_cx_scratchpad(f);
+  fsl_buffer * fileCksum = fsl__cx_scratchpad(f);
   bool const useMtime = (cksigFlags & FSL_VFILE_CKSIG_HASH)==0
     && fsl_config_get_bool(f, FSL_CONFDB_REPO, true, "mtime-changes");
   if(!db) return FSL_RC_NOT_A_CKOUT;
@@ -38125,10 +38246,10 @@ int fsl_vfile_changes_scan(fsl_cx * const f, fsl_id_t vid, unsigned cksigFlags){
                "ORDER BY vf.id", vid);
 #endif
   end:
-  fsl_cx_scratchpad_yield(f, fileCksum);
+  fsl__cx_scratchpad_yield(f, fileCksum);
   if(!rc && (cksigFlags & FSL_VFILE_CKSIG_WRITE_CKOUT_VERSION)
      && (f->ckout.rid != vid)){
-    rc = fsl_ckout_version_write(f, vid, 0);
+    rc = fsl__ckout_version_write(f, vid, 0);
   }else if(rc){
     rc = fsl_cx_uplift_db_error2(f, db, rc);
   }
@@ -38145,7 +38266,7 @@ int fsl_vfile_changes_scan(fsl_cx * const f, fsl_id_t vid, unsigned cksigFlags){
   return rc;
 }
 
-int fsl_vfile_to_ckout(fsl_cx * f, fsl_id_t vfileId,
+int fsl__vfile_to_ckout(fsl_cx * const f, fsl_id_t vfileId,
                        int * wasWritten){
   int rc = 0;
   fsl_db * const db = fsl_needs_ckout(f);
@@ -38199,11 +38320,11 @@ int fsl_vfile_to_ckout(fsl_cx * f, fsl_id_t vfileId,
     int isMod = 0;
     ++counter;
     assert(nameLen > f->ckout.dirLen);
-    rc = fsl_ckout_safe_file_check(f, zName);
+    rc = fsl__ckout_safe_file_check(f, zName);
     if(rc) break;
     assert(fsl_is_uuid_len(hashLen));
     f->cache.fstat = fsl_fstat_empty;
-    rc = fsl_is_locally_modified(f, zName, sz, zHash,
+    rc = fsl__is_locally_modified(f, zName, sz, zHash,
                                  (fsl_int_t)hashLen,
                                  isExe ? FSL_FILE_PERM_EXE :
                                  (isLink
@@ -38227,10 +38348,10 @@ int fsl_vfile_to_ckout(fsl_cx * f, fsl_id_t vfileId,
                           zName);
       break;
     }
-    if(FSL_LOCALMOD_LINK & isMod){
+    if(FSL__LOCALMOD_LINK & isMod){
       assert(((isLink && FSL_FILE_PERM_LINK!=fst->perm)
               ||(!isLink && FSL_FILE_PERM_LINK==fst->perm))
-             && "Expected fsl_is_locally_modified() to set this.");
+             && "Expected fsl__is_locally_modified() to set this.");
       rc = fsl_file_unlink(zName);
       if(rc){
         rc = fsl_cx_err_set(f, rc,
@@ -38239,19 +38360,19 @@ int fsl_vfile_to_ckout(fsl_cx * f, fsl_id_t vfileId,
         break;
       }
     }
-    if(isLink || (isMod & (FSL_LOCALMOD_NOTFOUND
-                           | FSL_LOCALMOD_LINK
-                           | FSL_LOCALMOD_CONTENT))){
+    if(isLink || (isMod & (FSL__LOCALMOD_NOTFOUND
+                           | FSL__LOCALMOD_LINK
+                           | FSL__LOCALMOD_CONTENT))){
       /* switched link type, content changed, or was not found in the
          filesystem. */
       rc = fsl_content_get(f, rid, &content);
       if(rc) break;
     }
     if(isLink){
-      rc = fsl_ckout_symlink_create(f, zName,
+      rc = fsl__ckout_symlink_create(f, zName,
                                     fsl_buffer_cstr(&content));
       if(wasWritten && !rc) *wasWritten = 2;
-    }else if(isMod & (FSL_LOCALMOD_NOTFOUND | FSL_LOCALMOD_CONTENT)){
+    }else if(isMod & (FSL__LOCALMOD_NOTFOUND | FSL__LOCALMOD_CONTENT)){
       /* Not found locally or its contents differ. */
       rc = fsl_buffer_to_filename(&content, zName);
       if(rc){
@@ -38260,7 +38381,7 @@ int fsl_vfile_to_ckout(fsl_cx * f, fsl_id_t vfileId,
       }else if(wasWritten){
         *wasWritten = 2;
       }
-    }else if(wasWritten && (isMod & FSL_LOCALMOD_PERM)){
+    }else if(wasWritten && (isMod & FSL__LOCALMOD_PERM)){
       *wasWritten = 1;
     }
     if(rc) break;
@@ -38909,7 +39030,7 @@ int fsl_wiki_save(fsl_cx * f, char const * pageName,
       char * u = NULL;
       if(!userName) userName = fsl_cx_user_get(f);
       if(!userName){
-        u = fsl_guess_user_name();
+        u = fsl_user_name_guess();
         if(!u) rc = FSL_RC_OOM;
       }
       if(!rc) rc = fsl_deck_U_set(&d, u ? u : userName);
@@ -38994,18 +39115,18 @@ static void fzip_timestamp_from_str(fsl_zip_writer *z, const char *zDate){
   z->dosDate = ((y-1980)<<9) + (m<<5) + d;
 }
 
-fsl_buffer const * fsl_zip_body( fsl_zip_writer const * z ){
+fsl_buffer const * fsl_zip_body( fsl_zip_writer const * const z ){
   return z ? &z->body : NULL;
 }
 
-void fsl_zip_timestamp_set_julian(fsl_zip_writer *z, double rDate){
+void fsl_zip_timestamp_set_julian(fsl_zip_writer * const z, double rDate){
   char buf[20] = {0};
   fsl_julian_to_iso8601(rDate, buf, 0);
   fzip_timestamp_from_str(z, buf);
   z->unixTime = (fsl_time_t)((rDate - 2440587.5)*86400.0);
 }
 
-void fsl_zip_timestamp_set_unix(fsl_zip_writer *z, fsl_time_t epochTime){
+void fsl_zip_timestamp_set_unix(fsl_zip_writer * const z, fsl_time_t epochTime){
   char buf[20] = {0};
   fsl_julian_to_iso8601(fsl_unix_to_julian(epochTime), buf, 0);
   fzip_timestamp_from_str(z, buf);
@@ -39018,7 +39139,7 @@ void fsl_zip_timestamp_set_unix(fsl_zip_writer *z, fsl_time_t epochTime){
     in there already. Returns 0 on success, non-0 on error (namely
     OOM).
  */
-static int fzip_mkdir(fsl_zip_writer * z, char const *zName);
+static int fzip_mkdir(fsl_zip_writer * const z, char const *zName);
 
 /**
     Adds a file entry to zw's zip output. zName is the virtual name of
@@ -39029,7 +39150,7 @@ static int fzip_mkdir(fsl_zip_writer * z, char const *zName);
     is called to create the directory entries for zName, otherwise
     they are not.
  */
-static int fzip_file_add(fsl_zip_writer *zw, char const * zName,
+static int fzip_file_add(fsl_zip_writer * const zw, char const * zName,
                          fsl_buffer const * pSrc, int mPerm,
                          char doMkDirs){
   int rc = 0;
@@ -39173,7 +39294,7 @@ static int fzip_file_add(fsl_zip_writer *zw, char const * zName,
   return rc;
 }
 
-int fzip_mkdir(fsl_zip_writer * z, char const *zName){
+int fzip_mkdir(fsl_zip_writer * const z, char const *zName){
   fsl_size_t i;
   fsl_size_t j;
   int rc = 0;
@@ -39201,12 +39322,12 @@ int fzip_mkdir(fsl_zip_writer * z, char const *zName){
   return rc;
 }
 
-int fsl_zip_file_add(fsl_zip_writer *z, char const * zName,
+int fsl_zip_file_add(fsl_zip_writer * const z, char const * zName,
                      fsl_buffer const * pSrc, int mPerm){
   return fzip_file_add(z, zName, pSrc, mPerm, 1);
 }
 
-int fsl_zip_root_set(fsl_zip_writer * z, char const * zRoot ){
+int fsl_zip_root_set(fsl_zip_writer * const z, char const * zRoot ){
   if(!z) return FSL_RC_MISUSE;
   else if(zRoot && *zRoot && fsl_is_absolute_path(zRoot)){
     return FSL_RC_RANGE;
@@ -39256,7 +39377,7 @@ int fsl_zip_root_set(fsl_zip_writer * z, char const * zRoot ){
   }
 }
 
-static void fsl_zip_finalize_impl(fsl_zip_writer * z, char alsoBody){
+static void fsl_zip_finalize_impl(fsl_zip_writer * const z, bool alsoBody){
   if(z){
     fsl_buffer_clear(&z->toc);
     fsl_buffer_clear(&z->scratch);
@@ -39274,12 +39395,12 @@ static void fsl_zip_finalize_impl(fsl_zip_writer * z, char alsoBody){
   }
 }
 
-void fsl_zip_finalize(fsl_zip_writer * z){
+void fsl_zip_finalize(fsl_zip_writer * const z){
   fsl_zip_finalize_impl(z, 1);
 }
 
 
-int fsl_zip_end( fsl_zip_writer * z ){
+int fsl_zip_end( fsl_zip_writer * const z ){
   int rc;
   fsl_int_t iTocStart;
   fsl_int_t iTocEnd;
@@ -39307,7 +39428,7 @@ int fsl_zip_end( fsl_zip_writer * z ){
   return rc;
 }
 
-int fsl_zip_end_take( fsl_zip_writer * z, fsl_buffer * dest ){
+int fsl_zip_end_take( fsl_zip_writer * const z, fsl_buffer * dest ){
   if(!z) return FSL_RC_MISUSE;
   else{
     int rc;
@@ -39324,7 +39445,7 @@ int fsl_zip_end_take( fsl_zip_writer * z, fsl_buffer * dest ){
   }
 }
 
-int fsl_zip_end_to_filename( fsl_zip_writer * z, char const * filename ){
+int fsl_zip_end_to_filename( fsl_zip_writer * const z, char const * filename ){
   if(!z) return FSL_RC_MISUSE;
   else{
     int rc;
@@ -39446,13 +39567,13 @@ int fsl_repo_zip_sym_to_filename( fsl_cx * f, char const * sym,
   }
 
   /**
-     Always write he manifest files to the zip, regardless of
-     the repo-level settings. */
+     Always write the manifest files to the zip, regardless of
+     the repo-level settings. This decision is up for debate. */
   if(rc) goto end;
   else {
     fsl_buffer * const bManifest = &f->fileContent;
-    fsl_buffer * const bHash = fsl_cx_scratchpad(f);
-    fsl_buffer * const bTags = fsl_cx_scratchpad(f);
+    fsl_buffer * const bHash = fsl__cx_scratchpad(f);
+    fsl_buffer * const bTags = fsl__cx_scratchpad(f);
     fsl_buffer_reuse(bManifest);
     rc = fsl_repo_manifest_write(f, mf.rid, bManifest, bHash, bTags);
     if(rc) goto mf_end;
@@ -39466,8 +39587,8 @@ int fsl_repo_zip_sym_to_filename( fsl_cx * f, char const * sym,
                           FSL_FILE_PERM_REGULAR);
     mf_end:
     fsl_buffer_reuse(bManifest);
-    fsl_cx_scratchpad_yield(f, bHash);
-    fsl_cx_scratchpad_yield(f, bTags);
+    fsl__cx_scratchpad_yield(f, bHash);
+    fsl__cx_scratchpad_yield(f, bTags);
   }
   if(rc) goto end;
   rc = fsl_zip_end( &zs.z );
