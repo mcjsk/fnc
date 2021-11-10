@@ -281,117 +281,117 @@ static struct fnc_setup {
 
 	{ /* cliflags_timeline timeline command related options. */
 	    FCLI_FLAG_BOOL("C", "no-colour", &fnc_init.nocolour,
-            "Disable colourised timeline, which is enabled by default on\n    "
-            "supported terminals. Colour can also be toggled with the 'c' "
-            "\n    key binding in timeline view when this option is not used."),
+	    "Disable colourised timeline, which is enabled by default on\n    "
+	    "supported terminals. Colour can also be toggled with the 'c' "
+	    "\n    key binding in timeline view when this option is not used."),
 	    FCLI_FLAG("T", "tag", "<tag>", &fnc_init.filter_tag,
-            "Only display commits with T cards containing <tag>."),
+	    "Only display commits with T cards containing <tag>."),
 	    FCLI_FLAG("b", "branch", "<branch>", &fnc_init.filter_branch,
-            "Only display commits that reside on the given <branch>."),
+	    "Only display commits that reside on the given <branch>."),
 	    FCLI_FLAG("c", "commit", "<commit>", &fnc_init.sym,
-            "Open the timeline from <commit>. Common symbols are:\n"
-            "\tSHA{1,3} hash\n"
-            "\tSHA{1,3} unique prefix\n"
-            "\tbranch\n"
-            "\ttag:TAG\n"
-            "\troot:BRANCH\n"
-            "\tISO8601 date\n"
-            "\tISO8601 timestamp\n"
-            "\t{tip,current,prev,next}\n    "
-            "For a complete list of symbols see Fossil's Check-in Names:\n    "
-            "https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki"),
+	    "Open the timeline from <commit>. Common symbols are:\n"
+	    "\tSHA{1,3} hash\n"
+	    "\tSHA{1,3} unique prefix\n"
+	    "\tbranch\n"
+	    "\ttag:TAG\n"
+	    "\troot:BRANCH\n"
+	    "\tISO8601 date\n"
+	    "\tISO8601 timestamp\n"
+	    "\t{tip,current,prev,next}\n    "
+	    "For a complete list of symbols see Fossil's Check-in Names:\n    "
+	    "https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki"),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
-            "Display timeline command help and usage."),
+	    "Display timeline command help and usage."),
 	    FCLI_FLAG("n", "limit", "<n>", &fnc_init.nrecords.zlimit,
-            "Limit display to <n> latest commits; defaults to entire history "
-            "of\n    current checkout. Negative values are a no-op."),
+	    "Limit display to <n> latest commits; defaults to entire history "
+	    "of\n    current checkout. Negative values are a no-op."),
 	    FCLI_FLAG_X("t", "type", "<type>", &fnc_init.filter_type,
 	    fcli_flag_type_arg_cb,
-            "Only display <type> commits. Valid types are:\n"
-            "\tci - check-in\n"
-            "\tw  - wiki\n"
-            "\tt  - ticket\n"
-            "\te  - technote\n"
-            "\tf  - forum post\n"
-            "    n.b. This is a repeatable flag (e.g., -t ci -t w)."),
+	    "Only display <type> commits. Valid types are:\n"
+	    "\tci - check-in\n"
+	    "\tw  - wiki\n"
+	    "\tt  - ticket\n"
+	    "\te  - technote\n"
+	    "\tf  - forum post\n"
+	    "    n.b. This is a repeatable flag (e.g., -t ci -t w)."),
 	    FCLI_FLAG("u", "username", "<user>", &fnc_init.filter_user,
-            "Only display commits authored by <username>."),
+	    "Only display commits authored by <username>."),
 	    FCLI_FLAG_BOOL("z", "utc", &fnc_init.utc,
-            "Use UTC (instead of local) time."),
+	    "Use UTC (instead of local) time."),
 	    fcli_cliflag_empty_m
 	}, /* End cliflags_timeline. */
 
 	{ /* cliflags_diff diff command related options. */
 	    FCLI_FLAG_BOOL("C", "no-colour", &fnc_init.nocolour,
-            "Disable coloured diff output, which is enabled by default on\n    "
-            "supported terminals. Colour can also be toggled with the 'c' "
-            "\n    key binding in diff view when this option is not used."),
+	    "Disable coloured diff output, which is enabled by default on\n    "
+	    "supported terminals. Colour can also be toggled with the 'c' "
+	    "\n    key binding in diff view when this option is not used."),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
-            "Display diff command help and usage."),
+	    "Display diff command help and usage."),
 	    FCLI_FLAG_BOOL("i", "invert", &fnc_init.invert,
-            "Invert difference between artifacts. Inversion can also be "
-            "toggled\n    with the 'i' key binding in diff view."),
+	    "Invert difference between artifacts. Inversion can also be "
+	    "toggled\n    with the 'i' key binding in diff view."),
 	    FCLI_FLAG_BOOL("q", "quiet", &fnc_init.quiet,
-            "Disable verbose diff output; that is, do not output complete"
-            " content\n    of newly added or deleted files. Verbosity can also"
-            " be toggled with\n    the 'v' key binding in diff view."),
+	    "Disable verbose diff output; that is, do not output complete"
+	    " content\n    of newly added or deleted files. Verbosity can also"
+	    " be toggled with\n    the 'v' key binding in diff view."),
 	    FCLI_FLAG_BOOL("w", "whitespace", &fnc_init.ws,
-            "Ignore whitespace-only changes when displaying diff. This option "
-            "can\n    also be toggled with the 'w' key binding in diff view."),
+	    "Ignore whitespace-only changes when displaying diff. This option "
+	    "can\n    also be toggled with the 'w' key binding in diff view."),
 	    FCLI_FLAG("x", "context", "<n>", &fnc_init.context,
-            "Show <n> context lines when displaying diff; <n> is capped at 64."
-            "\n    Negative values are a no-op."),
+	    "Show <n> context lines when displaying diff; <n> is capped at 64."
+	    "\n    Negative values are a no-op."),
 	    fcli_cliflag_empty_m
 	}, /* End cliflags_diff. */
 
 	{ /* cliflags_tree tree command related options. */
 	    FCLI_FLAG_BOOL("C", "no-colour", &fnc_init.nocolour,
-            "Disable coloured output, which is enabled by default on supported"
-            "\n    terminals. Colour can also be toggled with the 'c' key "
-            "binding when\n    this option is not used."),
+	    "Disable coloured output, which is enabled by default on supported"
+	    "\n    terminals. Colour can also be toggled with the 'c' key "
+	    "binding when\n    this option is not used."),
 	    FCLI_FLAG("c", "commit", "<commit>", &fnc_init.sym,
-            "Display tree that reflects repository state as at <commit>.\n"
-            "    Common symbols are:"
-            "\n\tSHA{1,3} hash\n"
-            "\tSHA{1,3} unique prefix\n"
-            "\tbranch\n"
-            "\ttag:TAG\n"
-            "\troot:BRANCH\n"
-            "\tISO8601 date\n"
-            "\tISO8601 timestamp\n"
-            "\t{tip,current,prev,next}\n    "
-            "For a complete list of symbols see Fossil's Check-in Names:\n    "
-            "https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki"),
+	    "Display tree that reflects repository state as at <commit>.\n"
+	    "    Common symbols are:"
+	    "\n\tSHA{1,3} hash\n"
+	    "\tSHA{1,3} unique prefix\n"
+	    "\tbranch\n"
+	    "\ttag:TAG\n"
+	    "\troot:BRANCH\n"
+	    "\tISO8601 date\n"
+	    "\tISO8601 timestamp\n"
+	    "\t{tip,current,prev,next}\n    "
+	    "For a complete list of symbols see Fossil's Check-in Names:\n    "
+	    "https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki"),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
-            "Display tree command help and usage."),
+	    "Display tree command help and usage."),
 	    fcli_cliflag_empty_m
 	}, /* End cliflags_tree. */
 
 	{ /* cliflags_blame blame command related options. */
 	    FCLI_FLAG_BOOL("C", "no-colour", &fnc_init.nocolour,
-            "Disable coloured output, which is enabled by default on supported"
-            "\n    terminals. Colour can also be toggled with the 'c' key "
-            "binding when\n    this option is not used."),
+	    "Disable coloured output, which is enabled by default on supported"
+	    "\n    terminals. Colour can also be toggled with the 'c' key "
+	    "binding when\n    this option is not used."),
 	    FCLI_FLAG("c", "commit", "<commit>", &fnc_init.sym,
-            "Start blame of specified file from <commit>. Common symbols are:\n"
-            "\tSHA{1,3} hash\n"
-            "\tSHA{1,3} unique prefix\n"
-            "\tbranch\n"
-            "\ttag:TAG\n"
-            "\troot:BRANCH\n"
-            "\tISO8601 date\n"
-            "\tISO8601 timestamp\n"
-            "\t{tip,current,prev,next}\n    "
-            "For a complete list of symbols see Fossil's Check-in Names:\n    "
-            "https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki"),
+	    "Start blame of specified file from <commit>. Common symbols are:\n"
+	    "\tSHA{1,3} hash\n"
+	    "\tSHA{1,3} unique prefix\n"
+	    "\tbranch\n"
+	    "\ttag:TAG\n"
+	    "\troot:BRANCH\n"
+	    "\tISO8601 date\n"
+	    "\tISO8601 timestamp\n"
+	    "\t{tip,current,prev,next}\n    "
+	    "For a complete list of symbols see Fossil's Check-in Names:\n    "
+	    "https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki"),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
-            "Display blame command help and usage."),
-            FCLI_FLAG("n", "limit", "<n>", &fnc_init.nrecords.zlimit,
+	    "Display blame command help and usage."),
+	    FCLI_FLAG("n", "limit", "<n>", &fnc_init.nrecords.zlimit,
 	    "Limit depth of blame history to <n> commits or seconds. Denote the"
 	    "\n    latter by postfixing 's' (e.g., 30s). Useful for large files"
 	    " with\n    extensive history. Persists for the duration of the "
 	    "session."),
-            FCLI_FLAG_BOOL("r", "reverse", &fnc_init.reverse,
+	    FCLI_FLAG_BOOL("r", "reverse", &fnc_init.reverse,
 	    "Reverse annotate the file starting from a historical commit. "
 	    "Rather\n    than show the most recent change of each line, show "
 	    "the first time\n    each line was modified after the specified "
@@ -401,35 +401,35 @@ static struct fnc_setup {
 
 	{ /* cliflags_branch branch command related options. */
 	    FCLI_FLAG_BOOL("C", "no-colour", &fnc_init.nocolour,
-            "Disable coloured output, which is enabled by default on supported"
-            "\n    terminals. Colour can also be toggled with the 'c' key "
-            "binding when\n    this option is not used."),
+	    "Disable coloured output, which is enabled by default on supported"
+	    "\n    terminals. Colour can also be toggled with the 'c' key "
+	    "binding when\n    this option is not used."),
 	    FCLI_FLAG("a", "after", "<date>", &fnc_init.after,
-            "Show branches with last activity occuring after <date>, which is\n"
-            "    expected to be either an ISO8601 (e.g., 2020-10-10) or "
-            "unambiguous\n    DD/MM/YYYY or MM/DD/YYYY formatted date."),
+	    "Show branches with last activity occuring after <date>, which is\n"
+	    "    expected to be either an ISO8601 (e.g., 2020-10-10) or "
+	    "unambiguous\n    DD/MM/YYYY or MM/DD/YYYY formatted date."),
 	    FCLI_FLAG("b", "before", "<date>", &fnc_init.before,
-            "Show branches with last activity occuring before <date>, which is"
-            "\n    expected to be either an ISO8601 (e.g., 2020-10-10) or "
-            "unambiguous\n    DD/MM/YYYY or MM/DD/YYYY formatted date."),
-            FCLI_FLAG_BOOL("c", "closed", &fnc_init.closed,
+	    "Show branches with last activity occuring before <date>, which is"
+	    "\n    expected to be either an ISO8601 (e.g., 2020-10-10) or "
+	    "unambiguous\n    DD/MM/YYYY or MM/DD/YYYY formatted date."),
+	    FCLI_FLAG_BOOL("c", "closed", &fnc_init.closed,
 	    "Show closed branches only. Open and closed branches are listed by "
 	    "\n    default."),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
-            "Display branch command help and usage."),
-            FCLI_FLAG_BOOL("o", "open", &fnc_init.open,
+	    "Display branch command help and usage."),
+	    FCLI_FLAG_BOOL("o", "open", &fnc_init.open,
 	    "Show open branches only. Open and closed branches are listed by "
 	    "\n    default."),
-            FCLI_FLAG_BOOL("p", "no-private", &fnc_init.noprivate,
+	    FCLI_FLAG_BOOL("p", "no-private", &fnc_init.noprivate,
 	    "Do not show private branches, which are otherwise included in the"
 	    "\n    list of displayed branches by default."),
-            FCLI_FLAG_BOOL("r", "reverse", &fnc_init.reverse,
+	    FCLI_FLAG_BOOL("r", "reverse", &fnc_init.reverse,
 	    "Reverse the order in which branches are displayed."),
 	    FCLI_FLAG("s", "sort", "<order>", &fnc_init.sort,
-            "Sort branches by <order>. Available options are:\n"
-            "\tmru   - most recently used\n"
-            "\tstate - open/closed state\n    "
-            "Branches are sorted in lexicographical order by default."),
+	    "Sort branches by <order>. Available options are:\n"
+	    "\tmru   - most recently used\n"
+	    "\tstate - open/closed state\n    "
+	    "Branches are sorted in lexicographical order by default."),
 	    fcli_cliflag_empty_m
 	}, /* End cliflags_blame. */
 
@@ -438,11 +438,11 @@ static struct fnc_setup {
 	    "Set or unset the specified setting from global rather than local\n"
 	    "    configuration."),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
-            "Display config command help and usage."),
+	    "Display config command help and usage."),
 	    FCLI_FLAG_BOOL(NULL, "ls", &fnc_init.lsconf,
-            "Display a list of all currently defined settings."),
+	    "Display a list of all currently defined settings."),
 	    FCLI_FLAG_BOOL("u", "unset", &fnc_init.unset,
-            "Unset (i.e., remove) the specified repository setting."),
+	    "Unset (i.e., remove) the specified repository setting."),
 	    fcli_cliflag_empty_m
 	}, /* End cliflags_tree. */
 
@@ -1585,7 +1585,7 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 	}
 
 	fsl_buffer_appendf(&sql, "SELECT "
-            /* 0 */"uuid, "
+	    /* 0 */"uuid, "
 	    /* 1 */"datetime(event.mtime%s), "
 	    /* 2 */"coalesce(euser, user), "
 	    /* 3 */"rid AS rid, "
@@ -1613,13 +1613,13 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 
 	if (fnc_init.filter_branch) {
 		idtag = fsl_db_g_id(db, 0,
-                    "SELECT tagid FROM tag WHERE tagname='sym-%q'",
-                    fnc_init.filter_branch);
+		    "SELECT tagid FROM tag WHERE tagname='sym-%q'",
+		    fnc_init.filter_branch);
 		if (idtag > 0)
 			fsl_buffer_appendf(&sql,
-                             " AND EXISTS(SELECT 1 FROM tagxref"
-                             " WHERE tagid=%"FSL_ID_T_PFMT
-                             " AND tagtype > 0 AND rid=blob.rid)", idtag);
+			    " AND EXISTS(SELECT 1 FROM tagxref"
+			    " WHERE tagid=%"FSL_ID_T_PFMT
+			    " AND tagtype > 0 AND rid=blob.rid)", idtag);
 		else {
 			rc = RC(FSL_RC_NOT_FOUND, "Invalid branch name [%s]",
 			    fnc_init.filter_branch);
@@ -1629,17 +1629,17 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 
 	if (fnc_init.filter_tag) {
 		idtag = fsl_db_g_id(db, 0,
-                    "SELECT tagid FROM tag WHERE tagname GLOB 'sym-%q'",
-                    fnc_init.filter_tag);
-                if (idtag == 0)
+		    "SELECT tagid FROM tag WHERE tagname GLOB 'sym-%q'",
+		    fnc_init.filter_tag);
+		if (idtag == 0)
 			idtag = fsl_db_g_id(db, 0,
 			    "SELECT tagid FROM tag WHERE tagname='%q'",
 			    fnc_init.filter_tag);
 		if (idtag > 0)
 			fsl_buffer_appendf(&sql,
-                             " AND EXISTS(SELECT 1 FROM tagxref"
-                             " WHERE tagid=%"FSL_ID_T_PFMT
-                             " AND tagtype > 0 AND rid=blob.rid)", idtag);
+			    " AND EXISTS(SELECT 1 FROM tagxref"
+			    " WHERE tagid=%"FSL_ID_T_PFMT
+			    " AND tagtype > 0 AND rid=blob.rid)", idtag);
 		else {
 			rc = RC(FSL_RC_NOT_FOUND, "Invalid tag [%s]",
 			    fnc_init.filter_tag);
@@ -1649,8 +1649,8 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 
 	if (fnc_init.filter_user)
 		if ((rc = fsl_buffer_appendf(&sql,
-                    " AND coalesce(euser, user) GLOB lower('*%q*')",
-                    fnc_init.filter_user)))
+		    " AND coalesce(euser, user) GLOB lower('*%q*')",
+		    fnc_init.filter_user)))
 		goto end;
 
 	if (startdate) {
@@ -2822,11 +2822,11 @@ help(struct fnc_view *view)
 	    "Jump to last line or end of the view",
 	    "Switch focus between open views",
 	    "Toggle coloured output",
-            "Toggle fullscreen",
+	    "Toggle fullscreen",
 	    "Open prompt to enter search term (not available in this view)",
 	    "Find next line or token matching the current search term",
 	    "Find previous line or token matching the current search term",
-            "Quit the active view",
+	    "Quit the active view",
 	    "Quit the program",
 	    "",
 	    "Timeline",
@@ -3534,7 +3534,7 @@ regex_t *regex)
 static int
 view_close(struct fnc_view *view)
 {
-        int	rc = 0;
+	int	rc = 0;
 
 	if (view->child) {
 		view_close(view->child);
@@ -5503,7 +5503,7 @@ usage(void)
 	/* fsl_cx *f = fcli_cx(); */
 	/* f->output = fsl_outputer_FILE; */
 	/* f->output.state.state = (fnc_init.err == true) ? stderr : stdout; */
-        FILE *f = fnc_init.err ? stderr : stdout;
+	FILE *f = fnc_init.err ? stderr : stdout;
 	size_t idx = 0;
 
 	endwin();
@@ -6192,7 +6192,7 @@ link_tree_node(struct fnc_repository_tree *tree, const char *path,
 	parent_dir = tree->tail;
 	while (parent_dir != 0 &&
 	    (strncmp(parent_dir->path, path, parent_dir->pathlen) != 0 ||
-            path[parent_dir->pathlen] != '/'))
+	    path[parent_dir->pathlen] != '/'))
 		parent_dir = parent_dir->parent_dir;
 
 	i = parent_dir ? parent_dir->pathlen + 1 : 0;
