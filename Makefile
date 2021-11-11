@@ -2,6 +2,13 @@
 # FNC Makefile
 #
 
+DBG :=
+# ^^^^ on BSD Make (bmake), CFLAGS gets unconditionally assigned to:
+#   ${DBG} -Wno-error
+# because of code in /usr/shake/mk/sys.mk. We cannot eliminate the
+# -Wno-error flag without *explicitly* setting CFLAGS, but we can
+# eliminate the default -O2 of ${DBG} by replacing that var.
+
 # CONFIGUGRAION
 CC ?=		cc
 PREFIX ?=	/usr/local
