@@ -16315,6 +16315,8 @@ extern "C" {
    were
 */
 enum fsl_confdb_e {
+/** Sentinel value. Not for use with public APIs. */
+FSL_CONFDB_NONE = 0,
 /**
    Signfies the global-level (per system user) configuration area.
 */
@@ -16380,7 +16382,7 @@ FSL_EXPORT char const * fsl_config_table_for_role(fsl_confdb_e mode);
    even though there is no database-side support for versionable files
    (which live in files in a checkout).
 */
-FSL_EXPORT fsl_db * fsl_config_for_role(fsl_cx * f, fsl_confdb_e mode);
+FSL_EXPORT fsl_db * fsl_config_for_role(fsl_cx * const f, fsl_confdb_e mode);
 
 /**
    Returns the int32 value of a property from one of f's config
@@ -16388,23 +16390,23 @@ FSL_EXPORT fsl_db * fsl_config_for_role(fsl_cx * f, fsl_confdb_e mode);
    does not have the requested config db opened, no entry is found,
    or on db-level errors.
 */
-FSL_EXPORT int32_t fsl_config_get_int32( fsl_cx * f, fsl_confdb_e mode,
+FSL_EXPORT int32_t fsl_config_get_int32( fsl_cx * const f, fsl_confdb_e mode,
                                          int32_t dflt, char const * key );
 /**
    int64_t counterpart of fsl_config_get_int32().
 */
-FSL_EXPORT int64_t fsl_config_get_int64( fsl_cx * f, fsl_confdb_e mode,
+FSL_EXPORT int64_t fsl_config_get_int64( fsl_cx * const f, fsl_confdb_e mode,
                                          int64_t dflt, char const * key );
 
 /**
    fsl_id_t counterpart of fsl_config_get_int32().
 */
-FSL_EXPORT fsl_id_t fsl_config_get_id( fsl_cx * f, fsl_confdb_e mode,
+FSL_EXPORT fsl_id_t fsl_config_get_id( fsl_cx * const f, fsl_confdb_e mode,
                                        fsl_id_t dflt, char const * key );
 /**
    double counterpart of fsl_config_get_int32().
 */
-FSL_EXPORT double fsl_config_get_double( fsl_cx * f, fsl_confdb_e mode,
+FSL_EXPORT double fsl_config_get_double( fsl_cx * const f, fsl_confdb_e mode,
                                          double dflt, char const * key );
 
 
@@ -16414,7 +16416,7 @@ FSL_EXPORT double fsl_config_get_double( fsl_cx * f, fsl_confdb_e mode,
    fsl_str_bool() is used to determine the booleanness (booleanity?)
    of a given config option.
 */
-FSL_EXPORT bool fsl_config_get_bool( fsl_cx * f, fsl_confdb_e mode,
+FSL_EXPORT bool fsl_config_get_bool( fsl_cx * const f, fsl_confdb_e mode,
                                      bool dflt, char const * key );
 
 /**
@@ -16432,7 +16434,7 @@ FSL_EXPORT bool fsl_config_get_bool( fsl_cx * f, fsl_confdb_e mode,
    fsl_config_get_buffer() instead, which provides the same features
    as this one but propagates any error state.
 */
-FSL_EXPORT char * fsl_config_get_text( fsl_cx * f, fsl_confdb_e mode,
+FSL_EXPORT char * fsl_config_get_text( fsl_cx * const f, fsl_confdb_e mode,
                                        char const * key,
                                        fsl_size_t * len );
 
@@ -16472,8 +16474,8 @@ FSL_EXPORT char * fsl_config_get_text( fsl_cx * f, fsl_confdb_e mode,
 
    @see fsl_config_has_versionable()
 */
-FSL_EXPORT int fsl_config_get_buffer( fsl_cx * f, fsl_confdb_e mode,
-                                      char const * key, fsl_buffer * b );
+FSL_EXPORT int fsl_config_get_buffer( fsl_cx * const f, fsl_confdb_e mode,
+                                      char const * key, fsl_buffer * const b );
 
 
 /**
@@ -16526,7 +16528,7 @@ FSL_EXPORT int fsl_config_versionable_filename(fsl_cx *f, char const * key, fsl_
 
    @see fsl_config_versionable_filename()
 */
-FSL_EXPORT int fsl_config_set_text( fsl_cx * f, fsl_confdb_e mode, char const * key, char const * val );
+FSL_EXPORT int fsl_config_set_text( fsl_cx * const f, fsl_confdb_e mode, char const * key, char const * val );
 
 /**
    The blob counterpart of fsl_config_set_text(). If len is
@@ -16537,27 +16539,27 @@ FSL_EXPORT int fsl_config_set_text( fsl_cx * f, fsl_confdb_e mode, char const * 
    NULL is bound instead of an empty blob. For FSL_CONFDB_VERSIONABLE
    an empty file will be written for that case.
 */
-FSL_EXPORT int fsl_config_set_blob( fsl_cx * f, fsl_confdb_e mode, char const * key,
+FSL_EXPORT int fsl_config_set_blob( fsl_cx * const f, fsl_confdb_e mode, char const * key,
                                     void const * mem, fsl_int_t len );
 /**
    int32 counterpart of fsl_config_set_text().
 */
-FSL_EXPORT int fsl_config_set_int32( fsl_cx * f, fsl_confdb_e mode,
+FSL_EXPORT int fsl_config_set_int32( fsl_cx * const f, fsl_confdb_e mode,
                                      char const * key, int32_t val );
 /**
    int64 counterpart of fsl_config_set_text().
 */
-FSL_EXPORT int fsl_config_set_int64( fsl_cx * f, fsl_confdb_e mode,
+FSL_EXPORT int fsl_config_set_int64( fsl_cx * const f, fsl_confdb_e mode,
                                      char const * key, int64_t val );
 /**
    fsl_id_t counterpart of fsl_config_set_text().
 */
-FSL_EXPORT int fsl_config_set_id( fsl_cx * f, fsl_confdb_e mode,
+FSL_EXPORT int fsl_config_set_id( fsl_cx * const f, fsl_confdb_e mode,
                                   char const * key, fsl_id_t val );
 /**
    fsl_double counterpart of fsl_config_set_text().
 */
-FSL_EXPORT int fsl_config_set_double( fsl_cx * f, fsl_confdb_e mode,
+FSL_EXPORT int fsl_config_set_double( fsl_cx * const f, fsl_confdb_e mode,
                                       char const * key, double val );
 /**
    Boolean counterpart of fsl_config_set_text().
@@ -16566,7 +16568,7 @@ FSL_EXPORT int fsl_config_set_double( fsl_cx * f, fsl_confdb_e mode,
    in the string form "on" or "off". When mode is
    FSL_CONFDB_VERSIONABLE, that value will include a trailing newline.
 */
-FSL_EXPORT int fsl_config_set_bool( fsl_cx * f, fsl_confdb_e mode,
+FSL_EXPORT int fsl_config_set_bool( fsl_cx * const f, fsl_confdb_e mode,
                                     char const * key, bool val );
 
 /**
@@ -16581,7 +16583,7 @@ FSL_EXPORT int fsl_config_set_bool( fsl_cx * f, fsl_confdb_e mode,
    the future, be changed to do so, or at least to remove the local
    settings file.
 */
-FSL_EXPORT int fsl_config_unset( fsl_cx * f, fsl_confdb_e mode,
+FSL_EXPORT int fsl_config_unset( fsl_cx * const f, fsl_confdb_e mode,
                                  char const * key );
 
 /**
@@ -16601,7 +16603,7 @@ FSL_EXPORT int fsl_config_unset( fsl_cx * f, fsl_confdb_e mode,
    @see fsl_config_transaction_end()
    @see fsl_db_transaction_begin()
 */
-FSL_EXPORT int fsl_config_transaction_begin(fsl_cx * f, fsl_confdb_e mode);
+FSL_EXPORT int fsl_config_transaction_begin(fsl_cx * const f, fsl_confdb_e mode);
 
 /**
    Pops the transaction stack pushed by
@@ -16617,7 +16619,7 @@ FSL_EXPORT int fsl_config_transaction_begin(fsl_cx * f, fsl_confdb_e mode);
    @see fsl_config_transaction_begin()
    @see fsl_db_transaction_end()
 */
-FSL_EXPORT int fsl_config_transaction_end(fsl_cx * f, fsl_confdb_e mode, bool rollback);
+FSL_EXPORT int fsl_config_transaction_end(fsl_cx * const f, fsl_confdb_e mode, bool rollback);
 
 /**
    Populates li as a glob list from the given configuration key.
@@ -16634,9 +16636,11 @@ FSL_EXPORT int fsl_config_transaction_end(fsl_cx * f, fsl_confdb_e mode, bool ro
 
    Arguably a bug: this function does not open the global config if
    it was not already opened, but will use it if it is opened. This
-   function should arbuably open and close it in that case.
+   function should arbuably open and close it in that case. That said,
+   there are cases which prohibit closing of the config db and this
+   function cannot know if one of those cases is active.
 */
-FSL_EXPORT int fsl_config_globs_load(fsl_cx * f, fsl_list * li, char const * key);
+FSL_EXPORT int fsl_config_globs_load(fsl_cx * const f, fsl_list * const li, char const * key);
 
 /**
    Fetches the preferred name of the "global" db file for the current
@@ -16671,6 +16675,81 @@ FSL_EXPORT int fsl_config_globs_load(fsl_cx * f, fsl_list * li, char const * key
    out at compile-time on Windows.
 */
 FSL_EXPORT int fsl_config_global_preferred_name(char ** zOut);
+
+/**
+   A variant of fsl_config_get_int32() which can search through multiple
+   config sources in an order specified by the caller.
+
+   zCfg must be a NUL-terminated list of case-sensitive letters
+   corresponding to config sources: any of (c, r, v, g) for checkout,
+   repo, versionable, and global, respectively. Each source, if
+   available, is searched, in the order provided, until either the
+   given key is found in that source or no more sources are available,
+   in which case dflt is returned. Any missing sources are silently
+   skipped over (e.g. if 'c' is provided by no checkout is opened,
+   that is not considered an error by this function).
+
+   Errors are silently ignored and cause dflt to be returned.
+
+   @see fsl_configs_get_int64()
+   @see fsl_configs_get_id()
+   @see fsl_configs_get_bool()
+   @see fsl_configs_get_text()
+*/
+FSL_EXPORT int32_t fsl_configs_get_int32(fsl_cx * const f, char const * zCfg, int32_t dflt, char const * key);
+
+/**
+   The int64_t counterpart of fsl_configs_get_int32().
+*/
+FSL_EXPORT int64_t fsl_configs_get_int64(fsl_cx * const f, char const * zCfg, int64_t dflt, char const * key);
+
+/**
+   The fsl_id_t counterpart of fsl_configs_get_int32().
+*/
+FSL_EXPORT fsl_id_t fsl_configs_get_id(fsl_cx * const f, char const * zCfg, fsl_id_t dflt, char const * key);
+
+/**
+   The bool counterpart of fsl_configs_get_int32().
+*/
+FSL_EXPORT bool fsl_configs_get_bool(fsl_cx * const f, char const * zCfg, bool dflt, char const * key);
+
+/**
+   The double counterpart of fsl_configs_get_int32().
+*/
+FSL_EXPORT double fsl_configs_get_double(fsl_cx * const f, char const * zCfg, double dflt, char const * key);
+
+/**
+   The buffer counterpart of fsl_configs_get_int32(). This variant
+   collects, if found, its results in the given buffer (its memory, if
+   any, is reused by this routine). It returns 0 if an entry is found,
+   FSL_RC_OOM on buffer allocation error, and FSL_RC_NOT_FOUND if no
+   match is found in any of the listed sources (noting that missing
+   sources are silently skipped). The full range of errors reported by
+   fsl_config_get_buffer() is not supported here: only FSL_RC_OOM and
+   FSL_RC_NOT_FOUND are reported.
+
+   @see fsl_configs_get_text()
+*/
+FSL_EXPORT int fsl_configs_get_buffer( fsl_cx * const f, char const *zCfg,
+                                       char const * key, fsl_buffer * const b );
+
+/**
+   The C-string counterpart of fsl_configs_get_int32(). If the final
+   argument is not NULL then if a match is found then its length (in
+   bytes) is assigned to (*len). Returns NULL if no match is found.
+
+   If non-NULL is returned, ownership is transfered to the caller, who
+   must eventually pass the value to fsl_free().
+
+   Note that this function silently ignores any errors,
+   e.g. allocation failure for the result string will be reported by
+   returning NULL (which is indistinguishable from it not finding a
+   match).
+
+   @see fsl_configs_get_buffer()
+*/
+FSL_EXPORT char * fsl_configs_get_text(fsl_cx * const f, char const * zCfg, char const * key,
+                                       fsl_size_t * len);
 
 #if defined(__cplusplus)
 } /*extern "C"*/

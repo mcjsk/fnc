@@ -11339,7 +11339,7 @@ char const * fsl_config_table_for_role(fsl_confdb_e mode){
   }
 }
 
-fsl_db * fsl_config_for_role(fsl_cx * f, fsl_confdb_e mode){
+fsl_db * fsl_config_for_role(fsl_cx * const f, fsl_confdb_e mode){
   switch(mode){
     case FSL_CONFDB_REPO: return fsl_cx_db_repo(f);
     case FSL_CONFDB_CKOUT: return fsl_cx_db_ckout(f);
@@ -11363,7 +11363,7 @@ int fsl_config_versionable_filename(fsl_cx *f, char const * key,
 }
 
 
-int fsl_config_unset( fsl_cx * f, fsl_confdb_e mode, char const * key ){
+int fsl_config_unset( fsl_cx * const f, fsl_confdb_e mode, char const * key ){
   fsl_db * db = fsl_config_for_role(f, mode);
   if(!db || !key || !*key) return FSL_RC_MISUSE;
   else if(mode==FSL_CONFDB_VERSIONABLE) return FSL_RC_UNSUPPORTED;
@@ -11374,7 +11374,7 @@ int fsl_config_unset( fsl_cx * f, fsl_confdb_e mode, char const * key ){
   }
 }
 
-int32_t fsl_config_get_int32( fsl_cx * f, fsl_confdb_e mode,
+int32_t fsl_config_get_int32( fsl_cx * const f, fsl_confdb_e mode,
                               int32_t dflt, char const * key ){
   int32_t rv = dflt;
   switch(mode){
@@ -11387,7 +11387,7 @@ int32_t fsl_config_get_int32( fsl_cx * f, fsl_confdb_e mode,
       break;
     }
     default: {
-      fsl_db * db = fsl_config_for_role(f, mode);
+      fsl_db * const db = fsl_config_for_role(f, mode);
       char const * table = fsl_config_table_for_role(mode);
       assert(table);
       if(db){
@@ -11409,7 +11409,7 @@ int32_t fsl_config_get_int32( fsl_cx * f, fsl_confdb_e mode,
   return rv;
 }
 
-int64_t fsl_config_get_int64( fsl_cx * f, fsl_confdb_e mode,
+int64_t fsl_config_get_int64( fsl_cx * const f, fsl_confdb_e mode,
                               int64_t dflt, char const * key ){
   int64_t rv = dflt;
   switch(mode){
@@ -11444,14 +11444,14 @@ int64_t fsl_config_get_int64( fsl_cx * f, fsl_confdb_e mode,
   return rv;
 }
 
-fsl_id_t fsl_config_get_id( fsl_cx * f, fsl_confdb_e mode,
+fsl_id_t fsl_config_get_id( fsl_cx * const f, fsl_confdb_e mode,
                             fsl_id_t dflt, char const * key ){
   return (sizeof(fsl_id_t)==sizeof(int32_t))
     ? (fsl_id_t)fsl_config_get_int32(f, mode, dflt, key)
     : (fsl_id_t)fsl_config_get_int64(f, mode, dflt, key);
 }
 
-double fsl_config_get_double( fsl_cx * f, fsl_confdb_e mode,
+double fsl_config_get_double( fsl_cx * const f, fsl_confdb_e mode,
                               double dflt, char const * key ){
   double rv = dflt;
   switch(mode){
@@ -11485,7 +11485,7 @@ double fsl_config_get_double( fsl_cx * f, fsl_confdb_e mode,
   return rv;
 }
 
-char * fsl_config_get_text( fsl_cx * f, fsl_confdb_e mode,
+char * fsl_config_get_text( fsl_cx * const f, fsl_confdb_e mode,
                             char const * key, fsl_size_t * len ){
   char * rv = NULL;
   fsl_buffer val = fsl_buffer_empty;
@@ -11500,9 +11500,10 @@ char * fsl_config_get_text( fsl_cx * f, fsl_confdb_e mode,
   return rv;
 }
 
-int fsl_config_get_buffer( fsl_cx * f, fsl_confdb_e mode,
-                           char const * key, fsl_buffer * b ){
+int fsl_config_get_buffer( fsl_cx * const f, fsl_confdb_e mode,
+                           char const * key, fsl_buffer * const b ){
   int rc = FSL_RC_NOT_FOUND;
+  fsl_buffer_reuse(b);
   switch(mode){
     case FSL_CONFDB_VERSIONABLE:{
       if(!fsl_needs_ckout(f)){
@@ -11552,7 +11553,7 @@ int fsl_config_get_buffer( fsl_cx * f, fsl_confdb_e mode,
   return rc;
 }
 
-bool fsl_config_get_bool( fsl_cx * f, fsl_confdb_e mode,
+bool fsl_config_get_bool( fsl_cx * const f, fsl_confdb_e mode,
                           bool dflt, char const * key ){
   bool rv = dflt;
   switch(mode){
@@ -11598,7 +11599,7 @@ bool fsl_config_get_bool( fsl_cx * f, fsl_confdb_e mode,
    
     Returns non-0 on error.
 */
-static int fsl_config_set_prepare( fsl_cx * f, fsl_stmt **st,
+static int fsl_config_set_prepare( fsl_cx * const f, fsl_stmt **st,
                                    fsl_confdb_e mode, char const * key ){
   char const * table = fsl_config_table_for_role(mode);
   fsl_db * db = fsl_config_for_role(f,mode);
@@ -11632,7 +11633,7 @@ static int fsl_config_set_prepare( fsl_cx * f, fsl_stmt **st,
    Writes valLen bytes of val to a versioned-setting file. Returns 0
    on success. Requires a checkout db.
 */
-static int fsl_config_set_versionable( fsl_cx * f, char const * key,
+static int fsl_config_set_versionable( fsl_cx * const f, char const * key,
                                        char const * val,
                                        fsl_size_t valLen){
   assert(key && *key);
@@ -11652,7 +11653,7 @@ static int fsl_config_set_versionable( fsl_cx * f, char const * key,
 }
 
   
-int fsl_config_set_text( fsl_cx * f, fsl_confdb_e mode,
+int fsl_config_set_text( fsl_cx * const f, fsl_confdb_e mode,
                          char const * key, char const * val ){
   if(!key) return FSL_RC_MISUSE;
   else if(!*key) return FSL_RC_RANGE;
@@ -11682,7 +11683,7 @@ int fsl_config_set_text( fsl_cx * f, fsl_confdb_e mode,
   return rc;
 }
 
-int fsl_config_set_blob( fsl_cx * f, fsl_confdb_e mode, char const * key,
+int fsl_config_set_blob( fsl_cx * const f, fsl_confdb_e mode, char const * key,
                          void const * val, fsl_int_t len ){
   if(!key) return FSL_RC_MISUSE;
   else if(!*key) return FSL_RC_RANGE;
@@ -11713,7 +11714,7 @@ int fsl_config_set_blob( fsl_cx * f, fsl_confdb_e mode, char const * key,
   return rc;
 }
 
-int fsl_config_set_int32( fsl_cx * f, fsl_confdb_e mode,
+int fsl_config_set_int32( fsl_cx * const f, fsl_confdb_e mode,
                           char const * key, int32_t val ){
   if(!key) return FSL_RC_MISUSE;
   else if(!*key) return FSL_RC_RANGE;
@@ -11739,7 +11740,7 @@ int fsl_config_set_int32( fsl_cx * f, fsl_confdb_e mode,
   return rc;
 }
 
-int fsl_config_set_int64( fsl_cx * f, fsl_confdb_e mode,
+int fsl_config_set_int64( fsl_cx * const f, fsl_confdb_e mode,
                           char const * key, int64_t val ){
   if(!key) return FSL_RC_MISUSE;
   else if(!*key) return FSL_RC_RANGE;
@@ -11765,7 +11766,7 @@ int fsl_config_set_int64( fsl_cx * f, fsl_confdb_e mode,
   return rc;
 }
 
-int fsl_config_set_id( fsl_cx * f, fsl_confdb_e mode,
+int fsl_config_set_id( fsl_cx * const f, fsl_confdb_e mode,
                           char const * key, fsl_id_t val ){
   if(!key) return FSL_RC_MISUSE;
   else if(!*key) return FSL_RC_RANGE;
@@ -11791,7 +11792,7 @@ int fsl_config_set_id( fsl_cx * f, fsl_confdb_e mode,
   return rc;
 }
 
-int fsl_config_set_double( fsl_cx * f, fsl_confdb_e mode,
+int fsl_config_set_double( fsl_cx * const f, fsl_confdb_e mode,
                            char const * key, double val ){
   if(!key) return FSL_RC_MISUSE;
   else if(!*key) return FSL_RC_RANGE;
@@ -11817,7 +11818,7 @@ int fsl_config_set_double( fsl_cx * f, fsl_confdb_e mode,
   return rc;
 }
 
-int fsl_config_set_bool( fsl_cx * f, fsl_confdb_e mode,
+int fsl_config_set_bool( fsl_cx * const f, fsl_confdb_e mode,
                          char const * key, bool val ){
   if(!key) return FSL_RC_MISUSE;
   else if(!*key) return FSL_RC_RANGE;
@@ -11845,7 +11846,7 @@ int fsl_config_set_bool( fsl_cx * f, fsl_confdb_e mode,
   return rc;
 }
 
-int fsl_config_transaction_begin(fsl_cx * f, fsl_confdb_e mode){
+int fsl_config_transaction_begin(fsl_cx * const f, fsl_confdb_e mode){
   fsl_db * db = fsl_config_for_role(f,mode);
   if(!db) return FSL_RC_MISUSE;
   else{
@@ -11855,7 +11856,7 @@ int fsl_config_transaction_begin(fsl_cx * f, fsl_confdb_e mode){
   }
 }
 
-int fsl_config_transaction_end(fsl_cx * f, fsl_confdb_e mode, bool rollback){
+int fsl_config_transaction_end(fsl_cx * const f, fsl_confdb_e mode, bool rollback){
   fsl_db * db = fsl_config_for_role(f,mode);
   if(!db) return FSL_RC_MISUSE;
   else{
@@ -11865,7 +11866,7 @@ int fsl_config_transaction_end(fsl_cx * f, fsl_confdb_e mode, bool rollback){
   }
 }
 
-int fsl_config_globs_load(fsl_cx * f, fsl_list * li, char const * key){
+int fsl_config_globs_load(fsl_cx * const f, fsl_list * const li, char const * key){
   int rc = 0;
   char * val = NULL;
   if(!f || !li || !key || !*key) return FSL_RC_MISUSE;
@@ -12120,7 +12121,7 @@ FSL_EXPORT char const * fsl_config_key_default_value(char const * key);
 
    @see fsl_config_ctrl
 */
-FSL_EXPORT bool fsl_config_has_versionable( fsl_cx * f, char const * key );
+FSL_EXPORT bool fsl_config_has_versionable( fsl_cx * const f, char const * key );
 
 static fsl_config_ctrl const fslConfigCtrl[] = {
 /*
@@ -12241,7 +12242,7 @@ char const * fsl_config_key_default_value(char const * key){
   return (fcc && fcc->name) ? fcc->defaultValue : NULL;
 }
 
-bool fsl_config_has_versionable( fsl_cx * f, char const * key ){
+bool fsl_config_has_versionable( fsl_cx * const f, char const * key ){
   if(!f || !key || !*key || !f->ckout.dir) return 0;
   else if(!fsl_config_key_is_fossil(key)) return 0;
   else{
@@ -12253,7 +12254,180 @@ bool fsl_config_has_versionable( fsl_cx * f, char const * key ){
   }
 }
 
+static fsl_confdb_e fsl__char_to_confdb(char ch){
+  fsl_confdb_e rc = FSL_CONFDB_NONE;
+  switch(ch){
+    case 'c': rc = FSL_CONFDB_CKOUT; break;
+    case 'r': rc = FSL_CONFDB_REPO; break;
+    case 'g': rc = FSL_CONFDB_GLOBAL; break;
+    case 'v': rc = FSL_CONFDB_VERSIONABLE; break;
+    default: break;
+  }
+  return rc;
+}
 
+#define fsl__configs_get_v(CONV) {                                      \
+  char * val = fsl_config_get_text(f, FSL_CONFDB_VERSIONABLE, key, NULL); \
+  fsl_cx_err_reset(f); \
+  if(val){ rv = CONV; fsl_free(val); goto end; } \
+  break; }
+
+#define fsl__configs_get_x1 \
+  fsl_db * const db = fsl_config_for_role(f, mode); \
+  char const * table = fsl_config_table_for_role(mode); \
+  assert(table); \
+  if(db){ \
+    fsl_stmt * st = NULL; \
+    fsl_db_prepare_cached(db, &st, SELECT_FROM_CONFIG, table, __FILE__); \
+    if(st){                                                             \
+      fsl_stmt_bind_text(st, 1, key, -1, 0); \
+      if(FSL_RC_STEP_ROW==fsl_stmt_step(st)){ (void)0
+#define fsl__configs_get_x2 \
+        fsl_stmt_cached_yield(st);            \
+        goto end;                             \
+      }                                       \
+      fsl_stmt_cached_yield(st);              \
+    }                                         \
+  } \
+  break
+
+int32_t fsl_configs_get_int32(fsl_cx * const f, char const * zCfg, int32_t dflt, char const * key){
+  int32_t rv = dflt;
+  for( char const * z = zCfg; *z; ++z ){
+    fsl_confdb_e const mode = fsl__char_to_confdb(*z);
+    switch(mode){
+      case FSL_CONFDB_VERSIONABLE: fsl__configs_get_v((int32_t)atoi(val));
+      case FSL_CONFDB_CKOUT:
+      case FSL_CONFDB_REPO:
+      case FSL_CONFDB_GLOBAL: {
+        fsl__configs_get_x1;
+        rv = fsl_stmt_g_int32(st, 0);
+        fsl__configs_get_x2;
+      }
+      default: continue;
+    }
+  }
+  end:
+  return rv;  
+}
+
+int64_t fsl_configs_get_int64(fsl_cx * const f, char const * zCfg, int64_t dflt, char const * key){
+  int64_t rv = dflt;
+  for( char const * z = zCfg; *z; ++z ){
+    fsl_confdb_e const mode = fsl__char_to_confdb(*z);
+    switch(mode){
+      case FSL_CONFDB_VERSIONABLE: fsl__configs_get_v((int64_t)strtoll(val, NULL, 10));
+      case FSL_CONFDB_CKOUT:
+      case FSL_CONFDB_REPO:
+      case FSL_CONFDB_GLOBAL: {
+        fsl__configs_get_x1;
+        rv = fsl_stmt_g_int64(st, 0);
+        fsl__configs_get_x2;
+      }
+      default: continue;
+    }
+  }
+  end:
+  return rv;  
+}
+
+fsl_id_t fsl_configs_get_id(fsl_cx * const f, char const * zCfg, fsl_id_t dflt, char const * key){
+  return (sizeof(fsl_id_t)==sizeof(int32_t))
+    ? (fsl_id_t)fsl_configs_get_int32(f, zCfg, dflt, key)
+    : (fsl_id_t)fsl_configs_get_int64(f, zCfg, dflt, key);
+}
+
+bool fsl_configs_get_bool(fsl_cx * const f, char const * zCfg, bool dflt, char const * key){
+  bool rv = dflt;
+  for( char const * z = zCfg; *z; ++z ){
+    fsl_confdb_e const mode = fsl__char_to_confdb(*z);
+    switch(mode){
+      case FSL_CONFDB_VERSIONABLE: fsl__configs_get_v(fsl_str_bool(val));
+      case FSL_CONFDB_CKOUT:
+      case FSL_CONFDB_REPO:
+      case FSL_CONFDB_GLOBAL: {
+        fsl__configs_get_x1;
+        char const * col = fsl_stmt_g_text(st, 0, NULL);
+        rv = col ? fsl_str_bool(col) : dflt;
+        fsl__configs_get_x2;
+      }
+      default: continue;
+    }
+  }
+  end:
+  return rv;  
+}
+
+double fsl_configs_get_double(fsl_cx * const f, char const * zCfg, double dflt, char const * key){
+  double rv = dflt;
+  for( char const * z = zCfg; *z; ++z ){
+    fsl_confdb_e const mode = fsl__char_to_confdb(*z);
+    switch(mode){
+      case FSL_CONFDB_VERSIONABLE: fsl__configs_get_v(strtod(val,NULL));
+      case FSL_CONFDB_CKOUT:
+      case FSL_CONFDB_REPO:
+      case FSL_CONFDB_GLOBAL: {
+        fsl__configs_get_x1;
+        rv = fsl_stmt_g_double(st, 0);
+        fsl__configs_get_x2;
+      }
+      default: continue;
+    }
+  }
+  end:
+  return rv;  
+}
+
+char * fsl_configs_get_text(fsl_cx * const f, char const * zCfg, char const * key,
+                            fsl_size_t * len){
+  char * rv = NULL;
+  fsl_buffer val = fsl_buffer_empty;
+  if(fsl_configs_get_buffer(f, zCfg, key, &val)){
+    fsl_cx_err_reset(f);
+    if(len) *len = 0;
+    fsl_buffer_clear(&val)/*in case of partial read failure*/;
+  }else{
+    if(len) *len = val.used;
+    rv = fsl_buffer_take(&val);
+  }
+  return rv;
+}
+
+int fsl_configs_get_buffer(fsl_cx * const f, char const * zCfg, char const * key,
+                           fsl_buffer * const b){
+  int rc = FSL_RC_NOT_FOUND;
+  fsl_buffer_reuse(b);
+  for( char const * z = zCfg;
+       (rc && FSL_RC_OOM!=rc) && *z; ++z ){
+    fsl_confdb_e const mode = fsl__char_to_confdb(*z);
+    switch(mode){
+      case FSL_CONFDB_VERSIONABLE:
+        rc = fsl_config_get_buffer(f, mode, key, b);
+        if(rc){
+          if(FSL_RC_OOM!=rc) rc = FSL_RC_NOT_FOUND;
+          fsl_cx_err_reset(f);
+        }
+        break;
+      case FSL_CONFDB_CKOUT:
+      case FSL_CONFDB_REPO:
+      case FSL_CONFDB_GLOBAL: {
+        fsl__configs_get_x1;
+        fsl_size_t len = 0;
+        char const * s = fsl_stmt_g_text(st, 0, &len);
+        rc = s ? fsl_buffer_append(b, s, len) : 0;
+        fsl__configs_get_x2;
+      }
+      default: break;
+    }
+  }
+  end:
+  return rc; 
+}
+
+
+#undef fsl__configs_get_v
+#undef fsl__configs_get_x1
+#undef fsl__configs_get_x2
 #undef SELECT_FROM_CONFIG
 #undef MARKER
 #undef ARRAYLEN
@@ -12711,7 +12885,6 @@ static int fsl_cx_detach_role(fsl_cx * const f, fsl_dbrole_e r){
     int rc;
     assert(db && "Internal API misuse.");
     assert(f->dbMain != db);
-    f->dbMain->role &= ~r;
     rc = fsl__db_cached_clear_role(f->dbMain, r)
       /* Make sure that we destroy any cached statements which are
          known to be tied to this db role. This is primarily a kludge
@@ -12724,8 +12897,13 @@ static int fsl_cx_detach_role(fsl_cx * const f, fsl_dbrole_e r){
       rc = fsl_db_detach( f->dbMain, fsl_db_role_label(r) );
       //MARKER(("rc=%s %s %s\n", fsl_rc_cstr(rc), fsl_db_role_label(r),
       //        fsl_buffer_cstr(&f->dbMain->error.msg)));
+      if(rc){
+        fsl_cx_uplift_db_error(f, f->dbMain);
+      }else{
+        f->dbMain->role &= ~r;
+        fsl__db_clear_strings(db, true);
+      }
     }
-    fsl__db_clear_strings(db, true);
     return rc;
   }
 }
@@ -13823,6 +14001,12 @@ int fsl_cx_close_dbs( fsl_cx * const f ){
   if(rc1) rc = rc1;
   rc1 = fsl_config_close(f);
   if(rc1) rc = rc1;
+  /* Forcibly reset the role and db strings for this case, even
+     if closing ostensibly fails. */
+  f->dbMain->role = FSL_DBROLE_MAIN;
+  fsl__db_clear_strings(&f->repo.db, true);
+  fsl__db_clear_strings(&f->ckout.db, true);
+  fsl__db_clear_strings(&f->config.db, true);
   assert(!f->repo.db.dbh);
   assert(!f->ckout.db.dbh);
   assert(!f->config.db.dbh);
