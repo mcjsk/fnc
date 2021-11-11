@@ -1044,6 +1044,8 @@ static int		 strtonumcheck(int *, const char *, const int,
 static int		 fnc_date_to_mtime(double *, const char *, int);
 static char		*fnc_strsep (char **, const char *);
 static int		 set_colours(fsl_list *, enum fnc_view_id vid);
+static int		 set_colour_scheme(fsl_list *, const int (*)[2],
+			    const char **, int);
 static int		 init_colour(enum fnc_colour_obj);
 static char		*fnc_conf_get(enum fnc_colour_obj, bool);
 static int		 default_colour(enum fnc_colour_obj);
@@ -7229,11 +7231,7 @@ view_set_child(struct fnc_view *view, struct fnc_view *child)
 static int
 set_colours(fsl_list *s, enum fnc_view_id vid)
 {
-	struct fnc_colour	 *colour;
-	const char		**regexp = NULL;
-	const int		(*pairs)[2];
-	size_t			  idx, n;
-	int			  rc = 0;
+	int	rc = 0;
 
 	switch (vid) {
 	case FNC_VIEW_DIFF: {
@@ -7251,9 +7249,8 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 		    {FNC_COLOUR_DIFF_PLUS, init_colour(FNC_COLOUR_DIFF_PLUS)},
 		    {FNC_COLOUR_DIFF_CHUNK, init_colour(FNC_COLOUR_DIFF_CHUNK)}
 		};
-		regexp = regexp_diff;
-		pairs = pairs_diff;
-		n = nitems(regexp_diff);
+		rc = set_colour_scheme(s, pairs_diff, regexp_diff,
+		    nitems(regexp_diff));
 		break;
 
 	}
@@ -7265,9 +7262,8 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 		    {FNC_COLOUR_TREE_EXEC, init_colour(FNC_COLOUR_TREE_EXEC)},
 		    {FNC_COLOUR_COMMIT, init_colour(FNC_COLOUR_COMMIT)}
 		};
-		regexp = regexp_tree;
-		pairs = pairs_tree;
-		n = nitems(regexp_tree);
+		rc = set_colour_scheme(s, pairs_tree, regexp_tree,
+		    nitems(regexp_tree));
 		break;
 	}
 	case FNC_VIEW_TIMELINE: {
@@ -7277,9 +7273,8 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 		    {FNC_COLOUR_USER, init_colour(FNC_COLOUR_USER)},
 		    {FNC_COLOUR_DATE, init_colour(FNC_COLOUR_DATE)}
 		};
-		regexp = regexp_timeline;
-		pairs = pairs_timeline;
-		n = nitems(regexp_timeline);
+		rc = set_colour_scheme(s, pairs_timeline, regexp_timeline,
+		    nitems(regexp_timeline));
 		break;
 	}
 	case FNC_VIEW_BLAME: {
@@ -7287,14 +7282,23 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 		const int pairs_blame[][2] = {
 		    {FNC_COLOUR_COMMIT, init_colour(FNC_COLOUR_COMMIT)}
 		};
-		regexp = regexp_blame;
-		pairs = pairs_blame;
-		n = nitems(regexp_blame);
+		rc = set_colour_scheme(s, pairs_blame, regexp_blame,
+		    nitems(regexp_blame));
 		break;
 	}
 	default:
 		return RC(FSL_RC_TYPE, "%s", "invalid fnc_view_id");
 	}
+
+	return rc;
+}
+
+static int
+set_colour_scheme(fsl_list *s, const int (*pairs)[2], const char **regexp,
+    int n)
+{
+	struct fnc_colour	*colour;
+	int			 idx, rc = 0;
 
 	for (idx = 0; idx < n; ++idx) {
 		colour = fsl_malloc(sizeof(*colour));
