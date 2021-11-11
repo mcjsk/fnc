@@ -13902,7 +13902,7 @@ int fsl_cx_stat2( fsl_cx * const f, bool relativeToCwd,
   int rc;
   fsl_buffer * b = 0;
   fsl_buffer * bufRel = 0;
-  fsl_size_t n;
+  fsl_size_t n = 0;
   assert(f);
   if(!zName || !*zName) return FSL_RC_MISUSE;
   else if(!fsl_needs_ckout(f)) return FSL_RC_NOT_A_CKOUT;
@@ -30463,7 +30463,7 @@ static const unsigned char lb_tab[] = {
 #undef US0A
 
 int fsl_looks_like_utf8(fsl_buffer const * const b, int stopFlags){
-  fsl_size_t n;
+  fsl_size_t n = 0;
   const char *z = fsl_buffer_cstr2(b, &n);
   int j, c, flags = FSL_LOOKSLIKE_NONE;  /* Assume UTF-8 text, prove otherwise */
 
