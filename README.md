@@ -1,13 +1,13 @@
 # README
 
-# fnc 0.4
+# fnc 0.5
 
-## A read-only ncurses browser for [Fossil][0] repositories in the terminal.
+## An ncurses browser for [Fossil][0] repositories in the terminal.
 
 `fnc` uses [libfossil][1] to create a [`fossil ui`][2] experience in the
 terminal.
 
-Tested and confirmed to run on the following x64 systems (additional platforms
+Tested and confirmed to run on the following amd64 systems (additional platforms
 noted inline):
 
 1. OpenBSD 6.8- and 6.9-release
