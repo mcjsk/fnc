@@ -1042,7 +1042,7 @@ static int		 set_colours(fsl_list *, enum fnc_view_id vid);
 static int		 set_colour_scheme(fsl_list *, const int (*)[2],
 			    const char **, int);
 static int		 init_colour(enum fnc_colour_obj);
-static char		*fnc_conf_get(enum fnc_colour_obj, bool);
+static char		*fnc_conf_get(enum fnc_colour_obj);
 static int		 default_colour(enum fnc_colour_obj);
 static int		 fnc_conf_set(enum fnc_colour_obj, const char *, bool);
 static int		 match_colour(const void *, const void *);
@@ -5580,8 +5580,7 @@ static void
 usage_config(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " usage: %s config [-h|--help] [--ls] [-u|--unset] "
-	    "[setting [value]]\n"
+	    " usage: %s config [-h|--help] [--ls] [setting [value|--unset]]\n"
 	    "  e.g.: %s config FNC_DIFF_COMMIT blue\n\n" ,
 	    fcli_progname(), fcli_progname());
 }
@@ -7109,8 +7108,15 @@ cmd_config(const fcli_command *argv)
 		return rc;
 
 	set = fcli_next_arg(true);
-	if (set == NULL || fnc_init.lsconf)
+	if (set == NULL || fnc_init.lsconf) {
+		if (fnc_init.unset) {
+			fnc_init.err = RC(FSL_RC_MISSING_INFO,
+			    "%s", "-u|--unset requires <setting>");
+			usage();
+			/* NOT REACHED */
+		}
 		return fnc_conf_ls_settings(fnc_init.lsconf ? false : true);
+	}
 
 	setid = fnc_conf_str2enum(set);
 	if (!setid)  /* Presently, the only valid settings are colours. */
@@ -7121,14 +7127,14 @@ cmd_config(const fcli_command *argv)
 		if (value && fnc_init.unset)
 			return RC(FSL_RC_MISUSE,
 			    "\n--unset %s or set %s to %s?", set, set, value);
-		char *prev = fnc_conf_get(setid, true);
+		char *prev = fnc_conf_get(setid);
 		rc = fnc_conf_set(setid, value, fnc_init.unset);
 		if (!rc)
 			f_out("%s: %s -> %s", fnc_conf_enum2str(setid),
 			    prev ? prev : "default", value ? value : "default");
 		fsl_free(prev);
 	} else {
-		char *v = fnc_conf_get(setid, true);
+		char *v = fnc_conf_get(setid);
 		f_out("%s = %s", fnc_conf_enum2str(setid), v ? v : "default");
 		fsl_free(v);
 	}
@@ -7146,18 +7152,28 @@ fnc_conf_ls_settings(bool all)
 		SETTINGS(GEN_ENUM)
 	};
 	char	*value = NULL;
-	int	 idx;
+	int	 idx, last = 0;
 	size_t	 maxlen = 0;
 
-	for (idx = FNC_START_SETTINGS + 1; idx < FNC_EOF_SETTINGS; ++idx)
+	for (idx = FNC_START_SETTINGS + 1; idx < FNC_EOF_SETTINGS; ++idx) {
+		last = fnc_conf_get(idx) ? idx : last;
 		maxlen = MAX(fsl_strlen(fnc_settings[idx]), maxlen);
+	}
+
+	if (!last && !all) {
+		f_out("No user-defined settings: "
+		    "'%s config' for list of available settings.",
+		    fcli_progname());
+		return 0;
+	}
 
 	for (idx = FNC_START_SETTINGS + 1;  idx < FNC_EOF_SETTINGS;  ++idx) {
-		value = fnc_conf_get(idx, true);
+		value = fnc_conf_get(idx);
 		if (value || all)
 			f_out("%-*s%s%s%c", maxlen + 2, fnc_settings[idx],
 			    value ? " = " : "", value ? value : "",
-			    idx + 1 < FNC_EOF_SETTINGS ? '\n' : '\0');
+			    all ? (idx + 1 < FNC_EOF_SETTINGS ? '\n' : '\0') :
+			    idx < last ? '\n' : '\0');
 		fsl_free(value);
 		value = NULL;
 	}
@@ -7322,7 +7338,7 @@ init_colour(enum fnc_colour_obj envvar)
 	char	*val = NULL;
 	int	 rc = 0;
 
-	val = fnc_conf_get(envvar, false);
+	val = fnc_conf_get(envvar);
 	if (val == NULL) {
 		const char *ev = NULL;
 		switch (envvar) {
@@ -7395,7 +7411,7 @@ init_colour(enum fnc_colour_obj envvar)
  * by the caller. If not found, return NULL.
  */
 static char *
-fnc_conf_get(enum fnc_colour_obj id, bool ls)
+fnc_conf_get(enum fnc_colour_obj id)
 {
 	fsl_cx	*f = NULL;
 	fsl_db	*db = NULL;
