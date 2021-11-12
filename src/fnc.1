@@ -158,24 +158,11 @@ will display a list of all configurable settings.  Alternatively, see
 .Sx ENVIRONMENT
 for a detailed list of available settings
 used in the display or processing of data.  When no value is found for a given
-setting in the local repository,
-.Nm
-will search the
-.Xr fossil 1
-global configuration database in
-.Pa $HOME/.fossil
-before checking environment variables.  If still not found, default values will
-be used.  Options for
+setting in the local repository, environment variables will be searched.
+If still not found, default values will be used.  Options for
 .Cm fnc config
 are as follows:
 .Bl -tag -width Ds
-.It Fl g , -global
-Configure the specified
-.Ar setting
-in the global
-.Xr fossil 1
-.Pa $HOME/.fossil
-configuration database rather than the local repository.
 .It Fl h , -help
 Display config command help and usage information then exit.
 .It Fl -ls
@@ -785,25 +772,23 @@ identified below can be defined by either exporting environment variables
 .Pc ,
 or with
 .Nm Cm config
-as documented previously.  At startup,
+as documented above.  At startup,
 .Nm
 will search for user-defined colours in the following order:
 .Bl -column " environment variables " description -offset Ds
 .It 1. repository settings Ta Pa repo.fossil
-.It 2. global settings Ta Pa $HOME/.fossil
 .It 3. environment variables Ta Sy shell
 .El
 .Pp
 This enables setting per-project colours to visually distinguish the current
-repository being viewed in
-.Nm .
-If none are found, the default colour scheme will be displayed.  Colours
-supported in
+repository being viewed, and globally changing the colour scheme for all
+repositories with no local settings.  If none are found, the default colour
+scheme will be displayed.  Colours supported in
 .Nm
 are:
 .Bl -column "black" "yellow" "magenta" "default" -offset indent-two
-.It Sq black Ta Sq green Ta Sq blue Ta Sq cyan
-.It Sq red Ta Sq yellow Ta Sq magenta Ta Sq default
+.It So black Sc Ta So green Sc Ta So blue Sc Ta So cyan Sc
+.It So red Sc Ta So yellow Sc Ta So magenta Sc Ta So default Sc
 .El
 .Pp
 Where

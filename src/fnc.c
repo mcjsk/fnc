@@ -200,7 +200,6 @@ static struct fnc_setup {
 	bool		 noprivate;	/* Don't show private branches. */
 
 	/* Config options. */
-	bool		 global;	/* (Un)set fossil(1) global db. */
 	bool		 lsconf;	/* List all defined settings. */
 	bool		 unset;		/* Unset the specified setting. */
 
@@ -213,7 +212,7 @@ static struct fnc_setup {
 	fcli_cliflag	  cliflags_tree[4];		/* Tree options. */
 	fcli_cliflag	  cliflags_blame[6];		/* Blame options. */
 	fcli_cliflag	  cliflags_branch[10];		/* Branch options. */
-	fcli_cliflag	  cliflags_config[5];		/* Config options. */
+	fcli_cliflag	  cliflags_config[4];		/* Config options. */
 } fnc_init = {
 	NULL,		/* cmdarg copy of argv[1] to aid usage/error report. */
 	NULL,		/* sym(bolic name) of commit to open defaults to tip. */
@@ -240,7 +239,6 @@ static struct fnc_setup {
 	false,		/* closed only branches is off (defaults to all). */
 	false,		/* open only branches is off by (defaults to all). */
 	false,		/* noprivate is off (default to show private branch). */
-	false,		/* default to local—not global—config for settings. */
 	false,		/* do not list all defined settings by default. */
 	false,		/* default to set—not unset—the specified setting. */
 
@@ -434,9 +432,6 @@ static struct fnc_setup {
 	}, /* End cliflags_blame. */
 
 	{ /* cliflags_config config command related options. */
-	    FCLI_FLAG_BOOL("g", "global", &fnc_init.global,
-	    "Set or unset the specified setting from global rather than local\n"
-	    "    configuration."),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
 	    "Display config command help and usage."),
 	    FCLI_FLAG_BOOL(NULL, "ls", &fnc_init.lsconf,
@@ -1049,8 +1044,7 @@ static int		 set_colour_scheme(fsl_list *, const int (*)[2],
 static int		 init_colour(enum fnc_colour_obj);
 static char		*fnc_conf_get(enum fnc_colour_obj, bool);
 static int		 default_colour(enum fnc_colour_obj);
-static int		 fnc_conf_set(enum fnc_colour_obj, const char *, bool,
-			    bool);
+static int		 fnc_conf_set(enum fnc_colour_obj, const char *, bool);
 static int		 match_colour(const void *, const void *);
 static bool		 fnc_home(struct fnc_view *);
 static int		 fnc_conf_ls_settings(bool);
@@ -5586,7 +5580,7 @@ static void
 usage_config(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " usage: %s config [-g|--global] [-h|--help] [--ls] [-u|--unset] "
+	    " usage: %s config [-h|--help] [--ls] [-u|--unset] "
 	    "[setting [value]]\n"
 	    "  e.g.: %s config FNC_DIFF_COMMIT blue\n\n" ,
 	    fcli_progname(), fcli_progname());
@@ -7128,12 +7122,10 @@ cmd_config(const fcli_command *argv)
 			return RC(FSL_RC_MISUSE,
 			    "\n--unset %s or set %s to %s?", set, set, value);
 		char *prev = fnc_conf_get(setid, true);
-		rc = fnc_conf_set(setid, value, fnc_init.unset,
-		    fnc_init.global);
+		rc = fnc_conf_set(setid, value, fnc_init.unset);
 		if (!rc)
-			f_out("%s: %s -> %s %s", fnc_conf_enum2str(setid),
-			    prev ? prev : "default", value ? value : "default",
-			    fnc_init.global ? "(global)" : "(local)");
+			f_out("%s: %s -> %s", fnc_conf_enum2str(setid),
+			    prev ? prev : "default", value ? value : "default");
 		fsl_free(prev);
 	} else {
 		char *v = fnc_conf_get(setid, true);
@@ -7398,20 +7390,15 @@ init_colour(enum fnc_colour_obj envvar)
 }
 
 /*
- * Lookup setting id from the repository db. If not found, search the global
- * config db. If found, return a dynamically allocated string obtained from
- * fsl_db_g_text(), which must be disposed of by the caller. Alternatively, if
- * ls is set, search both local and global config for id and, if set in at least
- * one config db, dynamically allocate and return a formatted string for pretty
- * printing the current state of id, which the caller must free. In either case,
- * if not found, return NULL.
+ * Lookup setting id from the repository db. If found, return a dynamically
+ * allocated string obtained from fsl_db_g_text(), which must be disposed of
+ * by the caller. If not found, return NULL.
  */
 static char *
 fnc_conf_get(enum fnc_colour_obj id, bool ls)
 {
 	fsl_cx	*f = NULL;
 	fsl_db	*db = NULL;
-	char	*colour = NULL, *colour_g = NULL;
 
 	f = fcli_cx();
 	db = fsl_needs_repo(f);
@@ -7422,27 +7409,8 @@ fnc_conf_get(enum fnc_colour_obj id, bool ls)
 		return NULL;
 	}
 
-	colour = fsl_db_g_text(db, NULL,
+	return fsl_db_g_text(db, NULL,
 	    "SELECT value FROM config WHERE name=%Q", fnc_conf_enum2str(id));
-
-	if (colour == NULL || ls) {
-		if (fsl_config_open(f, NULL))
-			RC(FSL_RC_DB, "%s", "fsl_config_open");
-		colour_g = fsl_config_get_text(f, FSL_CONFDB_GLOBAL,
-		    fnc_conf_enum2str(id), NULL);
-	}
-
-	if (ls && (colour || colour_g)) {
-		char *colour_ls = fsl_mprintf("%s%s%s%s%s",
-		    colour ? colour : "", colour ? " (local)" : "",
-		    colour && colour_g ? ", " : "",
-		    colour_g ? colour_g : "", colour_g ? " (global)" : "");
-		fsl_free(colour);
-		fsl_free(colour_g);
-		colour = colour_ls;
-	}
-
-	return ls ? colour : (colour ? colour : colour_g);
 }
 
 static int
@@ -7475,34 +7443,14 @@ default_colour(enum fnc_colour_obj obj)
 }
 
 static int
-fnc_conf_set(enum fnc_colour_obj id, const char *val, bool unset, bool global)
+fnc_conf_set(enum fnc_colour_obj id, const char *val, bool unset)
 {
 	fsl_cx	*f = NULL;
 	fsl_db	*db = NULL;
 
 	f = fcli_cx();
-
-	if (global) {
-		int rc = 0;
-		rc = fsl_config_open(f, NULL);
-		if (rc)
-			return RC(rc, "%s", "fsl_config_open");
-		if (unset)
-			rc = fsl_config_unset(f, FSL_CONFDB_GLOBAL,
-			    fnc_conf_enum2str(id));
-		else
-			rc = fsl_config_set_text(f, FSL_CONFDB_GLOBAL,
-			    fnc_conf_enum2str(id), val);
-		/*
-		 * fnc_conf_set() is only called from cmd_config(), thus no
-		 * other db is attached with potential open statements, so we
-		 * can safely close the global config database now.
-		 */
-		rc = fsl_config_close(f);
-		return rc;
-	}
-
 	db = fsl_needs_repo(f);
+
 	if (!db)  /* Theoretically, this shouldn't happen. */
 		return RC(FSL_RC_DB, "%s", "fsl_needs_repo");
 
