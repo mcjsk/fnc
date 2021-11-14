@@ -7263,7 +7263,7 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 
 	}
 	case FNC_VIEW_TREE: {
-		static const char *regexp_tree[] = {"@$", "/$", "\\*$", "^$"};
+		static const char *regexp_tree[] = {"@ ->", "/$", "\\*$", "^$"};
 		const int pairs_tree[][2] = {
 		    {FNC_COLOUR_TREE_LINK, init_colour(FNC_COLOUR_TREE_LINK)},
 		    {FNC_COLOUR_TREE_DIR, init_colour(FNC_COLOUR_TREE_DIR)},
