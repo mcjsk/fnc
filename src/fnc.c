@@ -2305,20 +2305,20 @@ draw_commits(struct fnc_view *view)
 	werase(view->window);
 
 	if (screen_is_shared(view))
-		wstandout(view->window);
+		wattron(view->window, A_REVERSE);
 	if (s->colour)
 		c = get_colour(&s->colours, FNC_COLOUR_COMMIT);
 	if (c)
 		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 	waddwstr(view->window, wcstr);
-	if (c)
-		wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
 	while (wstrlen < view->ncols) {
 		waddch(view->window, ' ');
 		++wstrlen;
 	}
+	if (c)
+		wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
 	if (screen_is_shared(view))
-		wstandend(view->window);
+		wattroff(view->window, A_REVERSE);
 	fsl_free(wcstr);
 	if (view->nlines <= 1)
 		goto end;
@@ -4891,14 +4891,16 @@ write_diff(struct fnc_view *view, char *headln)
 			return rc;
 
 		if (screen_is_shared(view))
-			wstandout(view->window);
+			wattron(view->window, A_REVERSE);
 		waddwstr(view->window, wcstr);
 		fsl_free(wcstr);
 		wcstr = NULL;
+		while (wstrlen < view->ncols) {
+			waddch(view->window, ' ');
+			++wstrlen;
+		}
 		if (screen_is_shared(view))
-			wstandend(view->window);
-		if (wstrlen <= view->ncols - 1)
-			waddch(view->window, '\n');
+			wattroff(view->window, A_REVERSE);
 
 		if (max_lines <= 1)
 			return rc;
@@ -6391,20 +6393,22 @@ draw_tree(struct fnc_view *view, const char *treepath)
 	if (rc)
 		return rc;
 	if (screen_is_shared(view))
-		wstandout(view->window);
+		wattron(view->window, A_REVERSE);
 	if (s->colour)
 		c = get_colour(&s->colours, FNC_COLOUR_COMMIT);
 	if (c)
 		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 	waddwstr(view->window, wcstr);
+	while (wstrlen < view->ncols) {
+		waddch(view->window, ' ');
+		++wstrlen;
+	}
 	if (c)
 		wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
 	if (screen_is_shared(view))
-		wstandend(view->window);
+		wattroff(view->window, A_REVERSE);
 	fsl_free(wcstr);
 	wcstr = NULL;
-	if (wstrlen < view->ncols - 1)
-		waddch(view->window, '\n');
 	if (--limit <= 0)
 		return rc;
 
@@ -8019,16 +8023,20 @@ draw_blame(struct fnc_view *view)
 	if (rc)
 		return rc;
 	if (screen_is_shared(view))
-		wstandout(view->window);
+		wattron(view->window, A_REVERSE);
 	if (s->colour)
 		c = get_colour(&s->colours, FNC_COLOUR_COMMIT);
 	if (c)
 		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 	waddwstr(view->window, wcstr);
+	while (width < view->ncols) {
+		waddch(view->window, ' ');
+		++width;
+	}
 	if (c)
 		wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
 	if (screen_is_shared(view))
-		wstandend(view->window);
+		wattroff(view->window, A_REVERSE);
 	fsl_free(wcstr);
 	wcstr = NULL;
 	if (width < view->ncols - 1)
@@ -8958,10 +8966,14 @@ show_branch_view(struct fnc_view *view)
 		return rc;
 	}
 	if (screen_is_shared(view))
-		wstandout(view->window);
+		wattron(view->window, A_REVERSE);
 	waddwstr(view->window, wline);
+	while (width < view->ncols) {
+		waddch(view->window, ' ');
+		++width;
+	}
 	if (screen_is_shared(view))
-		wstandend(view->window);
+		wattroff(view->window, A_REVERSE);
 	fsl_free(wline);
 	wline = NULL;
 	fsl_free(line);
