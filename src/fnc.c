@@ -1072,7 +1072,9 @@ main(int argc, const char **argv)
 		fsl_fprintf(stderr, "[!] Warning: Can't set locale.\n");
 
 	fnc_init.cmdarg = argv[1];	/* Which cmd to show usage if needed. */
+#if DEBUG
 	fcli.clientFlags.verbose = 2;	/* Verbose error reporting. */
+#endif
 	fcli.cliFlags = fnc_init.cliflags_global;
 	fcli.appHelp = &fnc_init.fnc_help;
 	rc = fcli_setup(argc, argv);
