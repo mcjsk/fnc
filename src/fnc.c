@@ -1154,7 +1154,7 @@ cmd_timeline(fcli_command const *argv)
 	struct fnc_view	*v;
 	fsl_cx		*f = fcli_cx();
 	char		*path = NULL;
-	fsl_id_t	 rid = -1;
+	fsl_id_t	 rid = 0;
 	int		 rc = 0;
 
 	rc = fcli_process_flags(argv->flags);
@@ -1168,7 +1168,7 @@ cmd_timeline(fcli_command const *argv)
 
 	if (fnc_init.sym != NULL) {
 		rc = fsl_sym_to_rid(f, fnc_init.sym, FSL_SATYPE_CHECKIN, &rid);
-		if (rc || rid < 0)
+		if (rc || !rid)
 			return RC(FSL_RC_TYPE,
 			    "artifact [%s] not resolvable to a commit",
 			    fnc_init.sym);
@@ -1535,7 +1535,7 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 	TAILQ_INIT(&s->commits.head);
 	s->commits.ncommits = 0;
 
-	if (rid != -1)
+	if (rid)
 		startdate = fsl_mprintf("(SELECT mtime FROM event "
 		    "WHERE objid=%d)", rid);
 	else
@@ -1548,9 +1548,12 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 	 */
 	if (s->curr_ckout_uuid == NULL && path[1]) {
 		fsl_deck d = fsl_deck_empty;
+		fsl_uuid_str id = NULL;
 		bool ispath = false;
+		if (rid)
+			id = fsl_rid_to_uuid(f, rid);
 		rc = fsl_deck_load_sym(f, &d, fnc_init.sym ? fnc_init.sym :
-		    "tip", FSL_SATYPE_CHECKIN);
+		    id ? id : "tip", FSL_SATYPE_CHECKIN);
 		fsl_deck_F_rewind(&d);
 		if (fsl_deck_F_search(&d, path + 1 /* Slash */) == NULL) {
 			const fsl_card_F *cf;
@@ -1566,6 +1569,7 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 		} else
 			ispath = true;
 		fsl_deck_finalize(&d);
+		fsl_free(id);
 		if (!ispath)
 			return RC(FSL_RC_NOT_FOUND, "'%s' invalid path in [%s]",
 			    path + 1, fnc_init.sym ? fnc_init.sym : "tip");
@@ -6657,6 +6661,8 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		if (view_is_parent(view))
 			start_col = view_split_start_col(view->start_col);
 		rc = timeline_tree_entry(&timeline_view, start_col, s);
+		if (rc)
+			return rc;
 		view->active = false;
 		timeline_view->active = true;
 		if (view_is_parent(view)) {
