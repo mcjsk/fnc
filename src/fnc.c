@@ -5636,30 +5636,14 @@ cmd_diff(fcli_command const *argv)
 	 */
 	if (!fsl_sym_to_rid(f, fcli_next_arg(false), FSL_SATYPE_ANY, &prid)) {
 		artifact1 = fcli_next_arg(true);
-		if (!fsl_rid_is_a_checkin(f, prid)) {
-			if (fsl_rid_to_artifact_uuid(f, prid, FSL_SATYPE_ANY)
-			    != NULL) {
-				rc = RC(FSL_RC_TYPE,
-				    "artifact [%s] not resolvable to a checkin",
-				    artifact1);
-				goto end;
-			}
+		if (!fsl_rid_is_a_checkin(f, prid))
 			++blob;
-		}
 		if (!fsl_sym_to_rid(f, fcli_next_arg(false), FSL_SATYPE_ANY,
 		    &rid)) {
 			artifact2 = fcli_next_arg(true);
 			diff_type = FNC_DIFF_COMMIT;
-			if (!fsl_rid_is_a_checkin(f, rid)) {
-				if (fsl_rid_to_artifact_uuid(f,
-				    prid, FSL_SATYPE_ANY) != NULL) {
-					rc = RC(FSL_RC_TYPE, "artifact [%s] "
-					    "not resolvable to a checkin",
-					    artifact2);
-					goto end;
-				}
+			if (!fsl_rid_is_a_checkin(f, rid))
 				++blob;
-			}
 		}
 	}
 	if (fcli_error()->code == FSL_RC_NOT_FOUND) {
@@ -5696,8 +5680,10 @@ cmd_diff(fcli_command const *argv)
 			++path;
 		if (rc) {
 			if (rc != FSL_RC_NOT_FOUND ||
-			    (!fsl_strcmp(artifact1, "current") && !artifact2))
+			    (!fsl_strcmp(artifact1, "current") && !artifact2)) {
+				rc = RC(rc, "invalid artifact hash: %s", path);
 				goto end;
+			}
 			rc = 0;
 			fcli_err_reset();
 			/* Path may be valid in tree of specified commit(s). */
