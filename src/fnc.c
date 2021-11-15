@@ -1136,7 +1136,7 @@ end:
 		if (rc == FCLI_RC_HELP)
 			rc = 0;
 		else if (rc == FSL_RC_BREAK) {
-			fsl_cx *f = fcli_cx();
+			const fsl_cx *const f = fcli_cx();
 			const char *errstr;
 			fsl_error_get(&f->error, &errstr, NULL);
 			fsl_fprintf(stdout, "%s", errstr);
@@ -1152,7 +1152,7 @@ static int
 cmd_timeline(fcli_command const *argv)
 {
 	struct fnc_view	*v;
-	fsl_cx		*f = fcli_cx();
+	fsl_cx		*const f = fcli_cx();
 	char		*path = NULL;
 	fsl_id_t	 rid = 0;
 	int		 rc = 0;
@@ -1503,7 +1503,7 @@ static int
 open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 {
 	struct fnc_tl_view_state	*s = &view->state.timeline;
-	fsl_cx				*f = fcli_cx();
+	fsl_cx				*const f = fcli_cx();
 	fsl_db				*db = fsl_cx_db_repo(f);
 	fsl_buffer			 sql = fsl_buffer_empty;
 	char				*startdate = NULL;
@@ -2075,7 +2075,7 @@ build_commits(struct fnc_tl_thread_cx *cx)
 static int
 commit_builder(struct fnc_commit_artifact **ptr, fsl_id_t rid, fsl_stmt *q)
 {
-	fsl_cx				*f = fcli_cx();
+	fsl_cx				*const f = fcli_cx();
 	fsl_db				*db = fsl_needs_repo(f);
 	struct fnc_commit_artifact	*commit = NULL;
 	fsl_buffer			 buf = fsl_buffer_empty;
@@ -3889,7 +3889,7 @@ end:
 static int
 create_changeset(struct fnc_commit_artifact *commit)
 {
-	fsl_cx		*f = fcli_cx();
+	fsl_cx		*const f = fcli_cx();
 	fsl_stmt	*st = NULL;
 	fsl_list	 changeset = fsl_list_empty;
 	int		 rc = 0;
@@ -4134,7 +4134,7 @@ static int
 diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
     int context, int sbs, struct fnc_pathlist_head *paths)
 {
-	fsl_cx			*f = fcli_cx();
+	fsl_cx			*const f = fcli_cx();
 	const fsl_card_F	*fc1 = NULL;
 	const fsl_card_F	*fc2 = NULL;
 	fsl_deck		 d1 = fsl_deck_empty;
@@ -4252,7 +4252,7 @@ static int
 diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
     int sbs, struct fnc_pathlist_head *paths)
 {
-	fsl_cx		*f = fcli_cx();
+	fsl_cx		*const f = fcli_cx();
 	fsl_stmt	*st = NULL;
 	fsl_buffer	 sql, abspath, bminus;
 	fsl_uuid_str	 xminus = NULL;
@@ -4527,7 +4527,7 @@ diff_file(fsl_buffer *buf, fsl_buffer *bminus, const char *zminus,
     fsl_uuid_str xminus, const char *abspath, enum fsl_ckout_change_e change,
     int diff_flags, int context, bool sbs)
 {
-	fsl_cx		*f = fcli_cx();
+	fsl_cx		*const f = fcli_cx();
 	fsl_buffer	 bplus = fsl_buffer_empty;
 	fsl_buffer	 xplus = fsl_buffer_empty;
 	const char	*zplus = NULL;
@@ -4623,7 +4623,7 @@ static int
 diff_non_checkin(fsl_buffer *buf, struct fnc_commit_artifact *commit,
     int diff_flags, int context, int sbs)
 {
-	fsl_cx		*f = fcli_cx();
+	fsl_cx		*const f = fcli_cx();
 	fsl_buffer	 wiki = fsl_buffer_empty;
 	fsl_buffer	 pwiki = fsl_buffer_empty;
 	fsl_id_t	 prid = 0;
@@ -4737,7 +4737,7 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
     fsl_id_t vid2, const fsl_card_F *b, enum fsl_ckout_change_e change,
     int diff_flags, int context, int sbs, enum fnc_diff_type diff_type)
 {
-	fsl_cx		*f = fcli_cx();
+	fsl_cx		*const f = fcli_cx();
 	fsl_stmt	 stmt = fsl_stmt_empty;
 	fsl_buffer	 fbuf1 = fsl_buffer_empty;
 	fsl_buffer	 fbuf2 = fsl_buffer_empty;
@@ -5601,7 +5601,7 @@ usage_config(void)
 static int
 cmd_diff(fcli_command const *argv)
 {
-	fsl_cx				*f = fcli_cx();
+	fsl_cx				*const f = fcli_cx();
 	struct fnc_view			*view;
 	struct fnc_commit_artifact	*commit = NULL;
 	struct fnc_pathlist_head	 paths;
@@ -5823,7 +5823,7 @@ browse_commit_tree(struct fnc_view **new_view, int start_col,
 static int
 cmd_tree(fcli_command const *argv)
 {
-	fsl_cx		*f = fcli_cx();
+	fsl_cx		*const f = fcli_cx();
 	struct fnc_view	*view;
 	char		*path = NULL;
 	fsl_id_t	 rid;
@@ -5894,7 +5894,7 @@ end:
 static int
 open_tree_view(struct fnc_view *view, const char *path, fsl_id_t rid)
 {
-	fsl_cx				*f = fcli_cx();
+	fsl_cx				*const f = fcli_cx();
 	struct fnc_tree_view_state	*s = &view->state.tree;
 	int				 rc = 0;
 
@@ -6040,7 +6040,7 @@ static int
 create_repository_tree(struct fnc_repository_tree **repo, fsl_uuid_str *id,
     fsl_id_t rid)
 {
-	fsl_cx				*f = fcli_cx();
+	fsl_cx				*const f = fcli_cx();
 	struct fnc_repository_tree	*ptr;
 	fsl_deck			 d = fsl_deck_empty;
 	const fsl_card_F		*cf = NULL;
@@ -6051,7 +6051,7 @@ create_repository_tree(struct fnc_repository_tree **repo, fsl_uuid_str *id,
 		return RC(FSL_RC_ERROR, "%s", "fsl_malloc");
 	memset(ptr, 0, sizeof(struct fnc_repository_tree));
 
-	rc = fsl_deck_load_rid(fcli_cx(), &d, rid, FSL_SATYPE_CHECKIN);
+	rc = fsl_deck_load_rid(f, &d, rid, FSL_SATYPE_CHECKIN);
 	if (rc)
 		return RC(rc, "fsl_deck_load_rid(%d) [%s]", rid, id);
 	rc = fsl_deck_F_rewind(&d);
@@ -6191,7 +6191,6 @@ static int
 link_tree_node(struct fnc_repository_tree *tree, const char *path,
     const char *uuid, fsl_time_t mtime)
 {
-	fsl_cx				*f = fcli_cx();
 	struct fnc_repo_tree_node	*parent_dir;
 	fsl_buffer			 buf = fsl_buffer_empty;
 	struct stat			 s;
@@ -6265,8 +6264,8 @@ link_tree_node(struct fnc_repository_tree *tree, const char *path,
 		parent_dir = tn;
 
 		/* Stat path for tree display features. */
-		rc = fsl_file_canonical_name2(f->ckout.dir, tn->path, &buf,
-		    false);
+		rc = fsl_file_canonical_name2(fcli_cx()->ckout.dir, tn->path,
+		    &buf, false);
 		if (rc)
 			goto end;
 		if (lstat(fsl_buffer_cstr(&buf), &s) == -1) {
@@ -7433,10 +7432,9 @@ init_colour(enum fnc_colour_obj envvar)
 static char *
 fnc_conf_get(enum fnc_colour_obj id)
 {
-	fsl_cx	*f = NULL;
+	fsl_cx	*const f = fcli_cx();
 	fsl_db	*db = NULL;
 
-	f = fcli_cx();
 	db = fsl_needs_repo(f);
 
 	if (!db) {
@@ -7481,10 +7479,9 @@ default_colour(enum fnc_colour_obj obj)
 static int
 fnc_conf_set(enum fnc_colour_obj id, const char *val, bool unset)
 {
-	fsl_cx	*f = NULL;
+	fsl_cx	*const f = fcli_cx();
 	fsl_db	*db = NULL;
 
-	f = fcli_cx();
 	db = fsl_needs_repo(f);
 
 	if (!db)  /* Theoretically, this shouldn't happen. */
@@ -7542,7 +7539,7 @@ fnc_home(struct fnc_view *view)
 static int
 cmd_blame(fcli_command const *argv)
 {
-	fsl_cx		*f = fcli_cx();
+	fsl_cx		*const f = fcli_cx();
 	struct fnc_view	*view;
 	char		*path = NULL;
 	fsl_uuid_str	 commit_id = NULL;
@@ -7673,7 +7670,7 @@ open_blame_view(struct fnc_view *view, char *path, fsl_uuid_str commit_id,
 static int
 run_blame(struct fnc_view *view)
 {
-	fsl_cx				*f = fcli_cx();
+	fsl_cx				*const f = fcli_cx();
 	struct fnc_blame_view_state	*s = &view->state.blame;
 	struct fnc_blame		*blame = &s->blame;
 	fsl_deck			 d = fsl_deck_empty;
@@ -7927,6 +7924,7 @@ show_blame_view(struct fnc_view *view)
 static void *
 blame_thread(void *state)
 {
+	fsl_cx				*const f = fcli_cx();
 	struct fnc_blame_thread_cx	*cx = state;
 	int				 rc0, rc;
 
@@ -7934,8 +7932,8 @@ blame_thread(void *state)
 	if (rc)
 		return (void *)(intptr_t)rc;
 
-	rc = fsl_annotate(fcli_cx(), &cx->blame_opt);
-	if (rc && fsl_cx_err_get_e(fcli_cx())->code == FSL_RC_BREAK) {
+	rc = fsl_annotate(f, &cx->blame_opt);
+	if (rc && fsl_cx_err_get_e(f)->code == FSL_RC_BREAK) {
 		fcli_err_reset();
 		rc = 0;
 	}
@@ -8248,7 +8246,7 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		if (id == NULL)
 			break;
 		if (ch == 'p') {
-			fsl_cx		*f = fcli_cx();
+			fsl_cx		*const f = fcli_cx();
 			fsl_db		*db = fsl_needs_repo(f);
 			fsl_deck	 d = fsl_deck_empty;
 			fsl_id_t	 rid = fsl_uuid_to_rid(f, id);
@@ -8357,7 +8355,7 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		break;
 	case KEY_ENTER:
 	case '\r': {
-		fsl_cx				*f = fcli_cx();
+		fsl_cx				*const f = fcli_cx();
 		struct fnc_commit_artifact	*commit = NULL;
 		fsl_stmt			*q = NULL;
 		fsl_uuid_cstr			 id = NULL;
