@@ -618,9 +618,9 @@ struct fnc_tl_thread_cx {
 	 * thread functions while pinging between, but before we join, threads?
 	 */
 	int			  rc;
-	bool			  tree_open;
 	bool			  endjmp;
 	bool			  timeline_end;
+	bool			 *needs_reset;
 	sig_atomic_t		 *quit;
 	pthread_cond_t		  commit_consumer;
 	pthread_cond_t		  commit_producer;
@@ -1153,8 +1153,8 @@ cmd_timeline(fcli_command const *argv)
 {
 	struct fnc_view	*v;
 	fsl_cx		*f = fcli_cx();
-	fsl_id_t	 rid = -1;
 	char		*path = NULL;
+	fsl_id_t	 rid = -1;
 	int		 rc = 0;
 
 	rc = fcli_process_flags(argv->flags);
@@ -1510,6 +1510,8 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 	fsl_id_t			 idtag = 0;
 	int				 idx, rc = 0;
 
+	f->clientState.state = &s->thread_cx;
+
 	if (path != s->path) {
 		fsl_free(s->path);
 		s->path = fsl_strdup(path);
@@ -1722,6 +1724,8 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 	s->thread_cx.search_status = &view->search_status;
 	s->thread_cx.regex = &view->regex;
 	s->thread_cx.path = s->path;
+	s->thread_cx.needs_reset = malloc(sizeof(bool));
+	*s->thread_cx.needs_reset = false;
 
 	if (s->colour)
 		set_colours(&s->colours, FNC_VIEW_TIMELINE);
@@ -1982,17 +1986,18 @@ block_main_thread_signals(void)
 static int
 build_commits(struct fnc_tl_thread_cx *cx)
 {
-	int		 rc = 0;
+	int	rc = 0;
 
-	if (cx->tree_open) {
+	if (*cx->needs_reset) {
 		/*
-		 * XXX If a tree has been opened with the 't' key binding, the
-		 * commit builder statement needs to be reset otherwise one of
-		 * the SQLite3 APIs down the fsl_stmt_step() call stack fails,
-		 * irrespective of whether fsl_db_prepare_cached() is called.
+		 * XXX If a {tree,branch} view has been opened with the '{t,b}'
+		 * key binding, there may be cached statements that necessitate
+		 * the commit builder statement being reset otherwise one of the
+		 * SQLite3 APIs down the fsl_stmt_step() call stack fails. This
+		 * is irrespective of whether fsl_db_prepare_cached() was used.
 		 */
 		fsl_size_t loaded = cx->q->rowCount;
-		cx->tree_open = false;
+		*cx->needs_reset = false;
 		rc = fsl_stmt_reset(cx->q);
 		if (rc)
 			return RC(rc, "%s", "fsl_stmt_reset");
@@ -3157,6 +3162,7 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			view_close(branch_view);
 			return rc;
 		}
+		*s->thread_cx.needs_reset = true;
 		view->active = false;
 		branch_view->active = true;
 		if (view_is_parent(view)) {
@@ -3195,7 +3201,7 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		    s->selected_commit, s->path);
 		if (rc)
 			break;
-		s->thread_cx.tree_open = true;
+		*s->thread_cx.needs_reset = true;
 		view->active = false;
 		tree_view->active = true;
 		if (view_is_parent(view)) {
@@ -3559,6 +3565,7 @@ close_timeline_view(struct fnc_view *view)
 	fnc_free_commits(&s->commits);
 	fsl_list_clear(&s->colours, fsl_list_object_free, &st);
 	regfree(&view->regex);
+	fsl_free(s->thread_cx.needs_reset);
 	fsl_free(s->path);
 	s->path = NULL;
 
@@ -6607,6 +6614,7 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 {
 	struct fnc_view			*branch_view, *timeline_view;
 	struct fnc_tree_view_state	*s = &view->state.tree;
+	struct fnc_tl_thread_cx		*tcx = NULL;
 	struct fnc_tree_entry		*te;
 	int				 n, start_col = 0, rc = 0;
 
@@ -6624,6 +6632,8 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			view_close(branch_view);
 			return rc;
 		}
+		tcx = fcli_cx()->clientState.state;
+		*tcx->needs_reset = true;
 		view->active = false;
 		branch_view->active = true;
 		if (view_is_parent(view)) {
