@@ -1016,7 +1016,7 @@ static int		 branch_search_init(struct fnc_view *);
 static int		 match_branchlist_entry(struct fnc_branchlist_entry *,
 			    regex_t *);
 static int		 close_branch_view(struct fnc_view *);
-static void		 fnc_free_branches(struct fnc_branch_view_state *);
+static void		 fnc_free_branches(struct fnc_branchlist_head *);
 static void		 fnc_branch_close(struct fnc_branch *);
 static void		 view_set_child(struct fnc_view *, struct fnc_view *);
 static int		 view_close_child(struct fnc_view *);
@@ -8693,7 +8693,8 @@ cmd_branch(fcli_command const *argv)
 
 	rc = view_loop(view);
 end:
-	fnc_free_branches(&view->state.branch);
+	if (rc)
+		fnc_free_branches(&view->state.branch.branches);
 	fsl_free(glob);
 	return rc;
 }
@@ -8769,9 +8770,16 @@ fnc_load_branches(struct fnc_branch_view_state *s)
 		char *like = fsl_mprintf("%%%%%s%%%%", s->branch_glob);
 		rc = fsl_buffer_appendf(&sql, " AND name LIKE %Q", like);
 		fsl_free(like);
+		if (rc)
+			goto end;
 	}
-	if (FLAG_CHK(s->branch_flags, BRANCH_LS_NO_PRIVATE))
+
+	if (FLAG_CHK(s->branch_flags, BRANCH_LS_NO_PRIVATE)) {
 		rc = fsl_buffer_append(&sql, " AND NOT isprivate", -1);
+		if (rc)
+			goto end;
+	}
+
 	if (FLAG_CHK(s->branch_flags, BRANCH_SORT_MTIME))
 		rc = fsl_buffer_append(&sql, " ORDER BY -mtime", -1);
 	else if (FLAG_CHK(s->branch_flags, BRANCH_SORT_STATUS))
@@ -8779,15 +8787,20 @@ fnc_load_branches(struct fnc_branch_view_state *s)
 	else
 		rc = fsl_buffer_append(&sql, " ORDER BY name COLLATE nocase",
 		    -1);
-
-	if (!rc && (FLAG_CHK(s->branch_flags, BRANCH_SORT_REVERSE)))
+	if (!rc && FLAG_CHK(s->branch_flags, BRANCH_SORT_REVERSE))
 		rc = fsl_buffer_append(&sql," DESC", -1);
+	if (rc)
+		goto end;
 
 	stmt = fsl_stmt_malloc();
-	if (stmt == NULL)
+	if (stmt == NULL) {
+		rc = RC(FSL_RC_ERROR, "%s", "fsl_stmt_malloc");
 		goto end;
-	if (!rc)
-		rc = fsl_cx_prepare(f, stmt, fsl_buffer_cstr(&sql));
+	}
+
+	rc = fsl_cx_prepare(f, stmt, fsl_buffer_cstr(&sql));
+	if (rc)
+		goto end;
 
 	fsl_ckout_version_info(f, &ckoutrid, NULL);
 	curr_branch = fsl_db_g_text(fsl_needs_repo(f), NULL,
@@ -8797,15 +8810,19 @@ fnc_load_branches(struct fnc_branch_view_state *s)
 		struct fnc_branch *new_branch;
 		struct fnc_branchlist_entry *be;
 		const char *brname = fsl_stmt_g_text(stmt, 0, NULL);
-		bool private = (curr_branch && fsl_stmt_g_int32(stmt, 1) == 1);
+		bool priv = (curr_branch && fsl_stmt_g_int32(stmt, 1) == 1);
 		bool open = fsl_stmt_g_int32(stmt, 2) == 0;
 		double mtime = fsl_stmt_g_int64(stmt, 3);
 		bool curr = curr_branch && !fsl_strcmp(curr_branch, brname);
 		if ((s->when > 0 && mtime < s->dateline) ||
 		    (s->when < 0 && mtime > s->dateline))
 			continue;
-		alloc_branch(&new_branch, brname, mtime, open, private, curr);
-		fnc_branchlist_insert(&be, &s->branches, new_branch);
+		rc = alloc_branch(&new_branch, brname, mtime, open, priv, curr);
+		if (rc)
+			goto end;
+		rc = fnc_branchlist_insert(&be, &s->branches, new_branch);
+		if (rc)
+			goto end;
 		if (be)
 			be->idx = s->nbranches++;
 	}
@@ -9148,7 +9165,7 @@ branch_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		break;
 	case CTRL('l'):
 	case 'R':
-		fnc_free_branches(s);
+		fnc_free_branches(&s->branches);
 		s->branch_glob = NULL; /* Shared pointer. */
 		s->when = 0;
 		s->branch_flags = BRANCH_LS_OPEN_CLOSED;
@@ -9343,21 +9360,18 @@ match_branchlist_entry(struct fnc_branchlist_entry *be, regex_t *regex)
 static int
 close_branch_view(struct fnc_view *view)
 {
-	struct fnc_branch_view_state *s = &view->state.branch;
-
-	fnc_free_branches(s);
-
+	fnc_free_branches(&view->state.branch.branches);
 	return 0;
 }
 
 static void
-fnc_free_branches(struct fnc_branch_view_state *s)
+fnc_free_branches(struct fnc_branchlist_head *branches)
 {
 	struct fnc_branchlist_entry *be;
 
-	while (!TAILQ_EMPTY(&s->branches)) {
-		be = TAILQ_FIRST(&s->branches);
-		TAILQ_REMOVE(&s->branches, be, entries);
+	while (!TAILQ_EMPTY(branches)) {
+		be = TAILQ_FIRST(branches);
+		TAILQ_REMOVE(branches, be, entries);
 		fnc_branch_close(be->branch);
 		fsl_free(be);
 	}
