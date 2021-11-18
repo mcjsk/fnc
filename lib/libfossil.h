@@ -1497,8 +1497,8 @@ FSL_EXPORT int fsl_buffer_compare_O1(fsl_buffer const * lhs, fsl_buffer const * 
    either pointer is NULL or invalid. Returns 0 on success,
    FSL_RC_OOM on allocation error.
 */
-FSL_EXPORT int fsl_buffer_copy( fsl_buffer const * src, fsl_buffer * dest );
-
+FSL_EXPORT int fsl_buffer_copy( fsl_buffer * const dest,
+                                fsl_buffer const * const src );
 
 /**
    Apply the delta in pDelta to the original content pOriginal to
@@ -5967,10 +5967,17 @@ FSL_CX_F_ALLOW_WINDOWS_RESERVED_NAMES = 0x04,
 /**
    If on (the default) then an internal cache will be used for
    artifact loading to speed up operations which do lots of that.
-   Disabling this will save memory but will hurt performance badly for
+   Disabling this will save memory but may hurt performance for
    certain operations.
 */
 FSL_CX_F_MANIFEST_CACHE = 0x08,
+
+/**
+   If on (the default) then fsl_content_get() will use an internal
+   cache to speed up loading of repeatedly-fetched artifacts.
+   Disabling this can be costly.
+*/
+FSL_CX_F_BLOB_CACHE = 0x10,
 
 /**
    Internal use only to prevent duplicate initialization of some
@@ -5981,7 +5988,7 @@ FSL_CX_F_IS_OPENING_CKOUT = 0x100,
 /**
    Default flags for all fsl_cx instances.
 */
-FSL_CX_F_DEFAULTS = FSL_CX_F_MANIFEST_CACHE
+FSL_CX_F_DEFAULTS = FSL_CX_F_MANIFEST_CACHE | FSL_CX_F_BLOB_CACHE
 
 };
 typedef enum fsl_cx_flags_e fsl_cx_flags_e;
@@ -6263,6 +6270,12 @@ FSL_RC_DIFF_BINARY,
 FSL_RC_DIFF_WS_ONLY,
 
 /**
+   Intended to be used with fsl_cx_interrupt() by signal handlers
+   and UI threads.
+*/
+FSL_RC_INTERRUPTED,
+
+/**
    Must be the final entry in the enum. Used for creating client-side
    result codes which are guaranteed to live outside of this one's
    range.
@@ -6526,19 +6539,19 @@ FSL_EXPORT int fsl_cx_flags_get( fsl_cx const * const f );
    As a special case, if code is 0 (the non-error value) then fmt is
    ignored and any error state is cleared.
 */
-FSL_EXPORT int fsl_cx_err_set( fsl_cx * f, int code, char const * fmt, ... );
+FSL_EXPORT int fsl_cx_err_set( fsl_cx * const f, int code, char const * fmt, ... );
 
 /**
    va_list counterpart to fsl_cx_err_set().
 */
-FSL_EXPORT int fsl_cx_err_setv( fsl_cx * f, int code, char const * fmt,
+FSL_EXPORT int fsl_cx_err_setv( fsl_cx * const f, int code, char const * fmt,
                                 va_list args );
 
 /**
    Fetches the error state from f. See fsl_error_get() for the semantics
    of the parameters and return value.
 */
-FSL_EXPORT int fsl_cx_err_get( fsl_cx * f, char const ** str, fsl_size_t * len );
+FSL_EXPORT int fsl_cx_err_get( fsl_cx * const f, char const ** str, fsl_size_t * len );
 
 /**
    Returns f's error state object. This pointer is guaranteed by the
@@ -6558,7 +6571,7 @@ FSL_EXPORT fsl_error const * fsl_cx_err_get_e(fsl_cx const * f);
    recovered. This function might keep error string memory around
    for re-use later on.
 */
-FSL_EXPORT void fsl_cx_err_reset(fsl_cx * f);
+FSL_EXPORT void fsl_cx_err_reset(fsl_cx * const f);
 
 /**
    Replaces f's error state with the contents of err, taking over
@@ -6568,7 +6581,7 @@ FSL_EXPORT void fsl_cx_err_reset(fsl_cx * f);
    NULL then f's error state is cleared and 0 is returned. err's
    error state is cleared by this call.
 */
-FSL_EXPORT int fsl_cx_err_set_e( fsl_cx * f, fsl_error * err );
+FSL_EXPORT int fsl_cx_err_set_e( fsl_cx * const f, fsl_error * const err );
 
 /**
    If f has error state then it outputs its error state to its
@@ -7301,6 +7314,22 @@ FSL_EXPORT int fsl_cx_preparev( fsl_cx * const f, fsl_stmt * const tgt,
                                 char const * sql, va_list args );
 
 /**
+   Convenience form of fsl_db_prepare_cached() which uses f's main db.
+   Returns 0 on success. On preparation error, any db error state is
+   uplifted from the db object to the fsl_cx object.  Returns
+   FSL_RC_MISUSE if f has no db opened (should never happen) or !sql,
+   FSL_RC_RANGE if !*sql.
+*/
+FSL_EXPORT int fsl_cx_prepare_cached( fsl_cx * const f, fsl_stmt ** tgt,
+                                      char const * sql, ... );
+
+/**
+   va_list counterpart of fsl_cx_prepare_cached().
+*/
+FSL_EXPORT int fsl_cx_preparev_cached( fsl_cx * const f, fsl_stmt ** tgt,
+                                       char const * sql, va_list args );
+
+/**
    Convenience form of fsl_db_exec() which uses f's main db handle.
    Returns 0 on success. On statement preparation or execution error,
    the db's error state is uplifted into f and that result is
@@ -7798,8 +7827,37 @@ FSL_EXPORT void fsl_cx_confirmer_get(fsl_cx const * f, fsl_confirmer * dest);
    @see fsl_confirm_callback_f
    @see fsl_cx_confirmer()
 */
-FSL_EXPORT int fsl_cx_confirm(fsl_cx *f, fsl_confirm_detail const * detail,
+FSL_EXPORT int fsl_cx_confirm(fsl_cx * const f, fsl_confirm_detail const * detail,
                               fsl_confirm_response *outAnswer);
+
+/**
+   Sets f's is-interrupted flag. This error flag is separate from f's
+   normal error state and is _not_ cleared by fsl_cx_err_reset(). To
+   clear the interrupted flag, pass 0 as the 2nd argument and NULL as
+   the 3rd. This flag _is_ fetched by fsl_cx_err_get() but does not
+   have an associated error message.
+
+   Returns code.
+
+   Results are undefined if this function is called twice
+   concurrently.  i.e. all calls must come from a single
+   thread. Results are also undefined if it is called while f is in
+   its finalization phase.
+
+   ACHTUNG: this is new as of 2021-11-18 and is not yet widely honored
+   within the API.
+
+   @see fsl_cx_interrupted()
+*/
+FSL_EXPORT int fsl_cx_interrupt(fsl_cx * const f, int code);
+
+/**
+   If f's is-interrupted flag is set, this function returns its
+   value. Note that there is inherently a race condition when calling
+   fsl_cx_interrupt() (to set the flag) from another thread (e.g.  a
+   UI thread while showing a progress indicator).
+*/
+FSL_EXPORT int fsl_cx_interrupted(fsl_cx const * const f);
 
 #if 0
 /**
@@ -9668,7 +9726,7 @@ FSL_EXPORT int fsl_stmt_bind_fmtv( fsl_stmt * const st, char const * fmt,
    2) If binding succeeds then it steps the given statement a single
    time.
 
-   3) If the result is NOT FSL_RC_STEP_ROW then it also resets the
+   3) If the result is _NOT_ FSL_RC_STEP_ROW then it also resets the
    statement before returning. It does not do so for FSL_RC_STEP_ROW
    because doing so would remove the fetched columns (and this is why
    it resets in step (1)).
@@ -11686,7 +11744,7 @@ FSL_EXPORT int fsl_deck_save( fsl_deck * const d, bool isPrivate );
 
    Error result codes include:
 
-   - FSL_RC_MISUSE if any pointer argument is NULL.
+   - FSL_RC_MISUSE if any pointer argument is NULL or d->f is NULL.
 
    - FSL_RC_SYNTAX on syntax errors.
 
@@ -12839,7 +12897,7 @@ FSL_EXPORT int fsl_tag_sym( fsl_cx * f, fsl_tagtype_e tagType,
    marked as private.
 
 */
-FSL_EXPORT int fsl_tag_an_rid( fsl_cx * f, fsl_tagtype_e tagType,
+FSL_EXPORT int fsl_tag_an_rid( fsl_cx * const f, fsl_tagtype_e tagType,
                  fsl_id_t artifactRidToTag, char const * tagName,
                  char const * tagValue, char const * userName,
                  double mtime, fsl_id_t * newId );
@@ -12852,7 +12910,7 @@ FSL_EXPORT int fsl_tag_an_rid( fsl_cx * f, fsl_tagtype_e tagType,
     negative value on error. On db-level error, f's error state is
     updated.
 */
-FSL_EXPORT fsl_id_t fsl_tag_id( fsl_cx * f, char const * tag, bool create );
+FSL_EXPORT fsl_id_t fsl_tag_id( fsl_cx * const f, char const * tag, bool create );
 
 
 /**
@@ -17021,8 +17079,8 @@ FSL_EXPORT void fsl_vpath_reverse(fsl_vpath * path);
 extern "C" {
 #endif
 
-typedef struct fsl__acache fsl__acache;
-typedef struct fsl__acache_line fsl__acache_line;
+typedef struct fsl__bccache fsl__bccache;
+typedef struct fsl__bccache_line fsl__bccache_line;
 typedef struct fsl__pq fsl__pq;
 typedef struct fsl__pq_entry fsl__pq_entry;
 
@@ -17097,9 +17155,9 @@ fsl_id_t fsl__pq_extract(fsl__pq *p, void **pp);
 
 /** @internal
 
-    Holds one "line" of a fsl__acache cache.
+    Holds one "line" of a fsl__bccache cache.
 */
-struct fsl__acache_line {
+struct fsl__bccache_line {
   /**
      RID of the cached record.
   */
@@ -17115,9 +17173,9 @@ struct fsl__acache_line {
 };
 /** @internal
 
-    Empty-initialized fsl__acache_line structure.
+    Empty-initialized fsl__bccache_line structure.
 */
-#define fsl__acache_line_empty_m { 0,0,fsl_buffer_empty_m }
+#define fsl__bccache_line_empty_m { 0,0,fsl_buffer_empty_m }
 
 
 /** @internal
@@ -17137,20 +17195,20 @@ struct fsl__acache_line {
     non-structural artifacts (i.e. opaque client blobs).
 
     Potential TODO: the limits of the cache size are hard-coded in
-    fsl__acache_insert. Those really should be part of this struct.
+    fsl__bccache_insert. Those really should be part of this struct.
 */
-struct fsl__acache {
+struct fsl__bccache {
   /**
      Total amount of buffer memory (in bytes) used by cached content.
      This does not account for memory held by this->list.
   */
-  fsl_size_t szTotal;
+  unsigned szTotal;
   /**
      Limit on the (approx.) amount of memory (in bytes) which can be
      taken up by the cached buffers at one time. Fossil's historical
      value is 50M.
   */
-  fsl_size_t szLimit;
+  unsigned szLimit;
   /**
      Number of entries "used" in this->list.
   */
@@ -17174,41 +17232,52 @@ struct fsl__acache {
   /**
      List of cached content, ordered by age.
   */
-  fsl__acache_line * list;
+  fsl__bccache_line * list;
   /**
-     All artifacts currently in the cache.
+     RIDs of all artifacts currently in the cache.
   */
   fsl_id_bag inCache;
   /**
-     Cache of known-missing content.
+     RIDs of known-missing content.
   */
   fsl_id_bag missing;
   /**
-     Cache of of known-existing content.
+     RIDs of known-existing content (not necessarily in
+     the cache).
   */
   fsl_id_bag available;
+
+  /**
+     Metrics solely for internal use in looking for
+     optimizations. These are only updated by fsl_content_get().
+  */
+  struct {
+    unsigned hits;
+    unsigned misses;
+  } metrics;
 };
 /** @internal
 
-    Empty-initialized fsl__acache structure, intended
+    Empty-initialized fsl__bccache structure, intended
     for const-copy initialization.
 */
-#define fsl__acache_empty_m {                \
-  0/*szTotal*/,                             \
-  20000000/*szLimit. Historical fossil value=50M*/, \
-  0/*used*/,300U/*usedLimit. Historical fossil value=500*/,\
+#define fsl__bccache_empty_m {                \
+  0U/*szTotal*/,                             \
+  20000000U/*szLimit. Historical fossil value=50M*/, \
+  0U/*used*/,300U/*usedLimit. Historical fossil value=500*/,\
   0/*capacity*/,                            \
   0/*nextAge*/,NULL/*list*/,                \
   fsl_id_bag_empty_m/*inCache*/,            \
   fsl_id_bag_empty_m/*missing*/,            \
-  fsl_id_bag_empty_m/*available*/           \
+  fsl_id_bag_empty_m/*available*/,        \
+  {/*metrics*/ 0U/*hits*/,0U/*misses*/} \
 }
 /** @internal
 
-    Empty-initialized fsl__acache structure, intended
+    Empty-initialized fsl__bccache structure, intended
     for copy initialization.
 */
-extern const fsl__acache fsl__acache_empty;
+extern const fsl__bccache fsl__bccache_empty;
 
 /** @internal
 
@@ -17243,7 +17312,7 @@ struct fsl__mcache {
      copy).
 
      Array sizes of 6 and 10 do not appreciably change the hit rate
-     compared to 4, at least not for current (2021-11-01) uses.
+     compared to 4, at least not for current (2021-11-18) uses.
   */
   fsl_deck decks[4];
 };
@@ -17255,7 +17324,7 @@ typedef struct fsl__mcache fsl__mcache;
     const-copy initialization. */
 #define fsl__mcache_empty_m {\
   0,                  \
-  {0,0,0,0},\
+  {0,0,0,0},       \
   0,0, \
   {fsl_deck_empty_m,fsl_deck_empty_m,fsl_deck_empty_m,   \
   fsl_deck_empty_m} \
@@ -17509,6 +17578,13 @@ struct fsl_cx {
   int flags;
 
   /**
+     Error flag which is intended to be set via signal handlers or a
+     UI thread to tell this context to cancel any currently
+     long-running operation. Not all operations honor this check.
+  */
+  volatile int interrupted;
+
+  /**
      List of callbacks for deck crosslinking purposes.
   */
   fsl_xlinker_list xlinkers;
@@ -17618,9 +17694,9 @@ struct fsl_cx {
     fsl_id_t rcvId;
     
     /**
-       Artifact cache used during processing of manifests.
+       fsl_content_get() cache.
     */
-    fsl__acache arty;
+    fsl__bccache blobContent;
     /**
        Used during manifest parsing to keep track of artifacts we have
        seen. Whether that's really necessary or is now an unnecessary
@@ -17776,6 +17852,7 @@ struct fsl_cx {
     },                                            \
     fsl_cx_config_empty_m /*cxConfig*/,           \
     FSL_CX_F_DEFAULTS/*flags*/,                   \
+    0/*interrupted*/,                             \
     fsl_xlinker_list_empty_m/*xlinkers*/,         \
     {/*cache*/                                    \
       false/*caseInsensitive*/,                  \
@@ -17789,7 +17866,7 @@ struct fsl_cx {
       -1/*searchIndexExists*/,                  \
       -1/*manifestSetting*/,\
       0/*rcvId*/,                               \
-      fsl__acache_empty_m/*arty*/,               \
+      fsl__bccache_empty_m/*blobContent*/,               \
       fsl_id_bag_empty_m/*mfSeen*/,           \
       fsl_id_bag_empty_m/*leafCheck*/,        \
       fsl_id_bag_empty_m/*toVerify*/,         \
@@ -17833,7 +17910,7 @@ extern const fsl_cx fsl_cx_empty;
     Expires the single oldest entry in c. Returns true if it removes
     an item, else false.
 */
-bool fsl__acache_expire_oldest(fsl__acache * c);
+bool fsl__bccache_expire_oldest(fsl__bccache * const c);
 
 /** @internal
 
@@ -17852,18 +17929,19 @@ bool fsl__acache_expire_oldest(fsl__acache * c);
     blob is normally semantically illegal but is not strictly illegal
     for this cache's purposes.
 */
-int fsl__acache_insert(fsl__acache * c, fsl_id_t rid, fsl_buffer *pBlob);
+int fsl__bccache_insert(fsl__bccache * const c, fsl_id_t rid,
+                       fsl_buffer * const pBlob);
 
 /** @internal
 
     Frees all memory held by c, and clears out c's state, but does
     not free c. Results are undefined if !c.
 */
-void fsl__acache_clear(fsl__acache * c);
+void fsl__bccache_clear(fsl__bccache * const c);
 
 /** @internal
 
-    Checks f->cache.arty to see if rid is available in the
+    Checks f->cache.blobContent to see if rid is available in the
     repository opened by f.
 
     Returns 0 if the content for the given rid is available in the
@@ -17876,7 +17954,7 @@ void fsl__acache_clear(fsl__acache * c);
     assert() in debug builds and returns FSL_RC_CONSISTENCY in
     non-debug builds. That doesn't happen in real life, though.
 */
-int fsl__acache_check_available(fsl_cx * f, fsl_id_t rid);
+int fsl__bccache_check_available(fsl_cx * const f, fsl_id_t rid);
 
 /** @internal
 
@@ -18053,7 +18131,7 @@ int fsl__repo_leafdo_pending_checks(fsl_cx *f);
 /** @internal
 
     Inserts a tag into f's repo db. It does not create the related
-    control artifact - use fsl_tag_add_artifact() for that.
+    control artifact - use fsl_tag_an_rid() for that.
 
     rid is the artifact to which the tag is being applied.
 
@@ -18077,13 +18155,13 @@ int fsl__repo_leafdo_pending_checks(fsl_cx *f);
     codes.
 */
 int fsl__tag_insert( fsl_cx * const f,
-                    fsl_tagtype_e tagtype,
-                    char const * zTag,
-                    char const * zValue,
-                    fsl_id_t srcId,
-                    double mtime,
-                    fsl_id_t rid,
-                    fsl_id_t *outRid );
+                     fsl_tagtype_e tagtype,
+                     char const * zTag,
+                     char const * zValue,
+                     fsl_id_t srcId,
+                     double mtime,
+                     fsl_id_t rid,
+                     fsl_id_t *outRid );
 /** @internal
 
     Propagate all propagatable tags in artifact pid to the children of
@@ -21155,10 +21233,21 @@ FSL_EXPORT void fcli_diff_colors(fsl_diff_opt * const tgt,
    dumps the current state of cached SQL statements to fcli_printf().
 
    Normally its output detail level is determined by
-   fcli_is_verbose(), but if forceVerbose is true then it cranks up
-   the detail all the way.
+   fcli_is_verbose(), but if forceVerbose is true then it cranks the
+   detail all the way up.
  */
 FSL_EXPORT void fcli_dump_stmt_cache(bool forceVerbose);
+
+/** @internal
+
+    This pseudo-internal function causes fcli to dump any
+    library-level caching metrics it knows about. This function exists
+    primarily to keep fcli client code from having to access the
+    related internal members directly. This is a no-op if fcli has
+    not been initialized.
+*/
+FSL_EXPORT void fcli_dump_cache_metrics(void);
+
 
 #if defined(__cplusplus)
 } /*extern "C"*/

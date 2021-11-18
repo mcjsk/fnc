@@ -4773,7 +4773,7 @@ diff_non_checkin(fsl_buffer *buf, struct fnc_commit_artifact *commit,
 		if (d->P.used > 0)
 			commit->puuid = fsl_strdup(d->P.list[0]);
 		else {
-			fsl_buffer_copy(&wiki, buf);
+			fsl_buffer_copy(buf, &wiki);
 			goto end;
 		}
 	}

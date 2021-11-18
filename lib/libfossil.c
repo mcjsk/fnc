@@ -39,7 +39,7 @@
   Please keep all fsl_XXX_empty initializers in one place (here)
   and lexically sorted.
 */
-const fsl__acache fsl__acache_empty = fsl__acache_empty_m;
+const fsl__bccache fsl__bccache_empty = fsl__bccache_empty_m;
 const fsl_branch_opt fsl_branch_opt_empty = fsl_branch_opt_empty_m;
 const fsl_buffer fsl_buffer_empty = fsl_buffer_empty_m;
 const fsl_card_F fsl_card_F_empty = fsl_card_F_empty_m;
@@ -260,6 +260,7 @@ char const * fsl_rc_cstr(int rc){
     STR(DIFF_WS_ONLY);
     STR(end);
     STR(ERROR);
+    STR(INTERRUPTED);
     STR(IO);
     STR(MISSING_INFO);
     STR(MISUSE);
@@ -2042,10 +2043,12 @@ static int spech_urldecode( fsl_output_f pf, void * pfArg,
   char ch2 = 0;
   char xbuf[4];
   int decoded;
-  if( ! str ) return 0;
+  char const * end = str + pfLen;
+  if( !str || !pfLen ) return 0;
   ch = *str;
-  while( 0==rc && ch ){
+  while(0==rc && ch && str<end){
     if( ch == '%' ){
+      if(str+2>=end) goto outro/*invalid partial encoding - simply skip it*/;
       ch = *(++str);
       ch2 = *(++str);
       if( isxdigit((int)ch) &&
@@ -2074,6 +2077,7 @@ static int spech_urldecode( fsl_output_f pf, void * pfArg,
       ch = *(++str);
       continue;
     }
+    outro:
     xbuf[0] = ch;
     xbuf[1] = 0;
     rc = pf( pfArg, xbuf, 1 );
@@ -2109,8 +2113,13 @@ static int spech_sqlstring( int xtype, fsl_output_f pf,
                 || xtype==etBLOBSQL
                 || xtype==etSQLESCAPE3);
   if( isnull ){
-    escarg = (xtype==etSQLESCAPE2||xtype==etSQLESCAPE3)
-      ? "NULL" : "(NULL)";
+    if(xtype==etSQLESCAPE2||xtype==etSQLESCAPE3){
+      escarg = "NULL";
+      pfLen = 4;
+    }else{
+      escarg = "(NULL)";;
+      pfLen = 6;
+    }
   }
   if( needQuote ) buf[j++] = q;
   for(i=0; (ch=escarg[i])!=0 && i<pfLen; ++i){
@@ -3003,7 +3012,7 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
         bufpt = va_arg(ap,char*);
         length = bufpt ? (int)fsl_strlen(bufpt) : 0;
         pfrc = spech_string_to_html( pfAppend, pfAppendArg,
-                                     (precision<length) ? precision : length,
+                                     (precision>=0 && precision<length) ? precision : length,
                                      bufpt );
         bufpt = NULL;
         FSLPRINTF_CHECKERR;
@@ -3014,7 +3023,7 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
         bufpt = va_arg(ap,char*);
         length = bufpt ? (int)fsl_strlen(bufpt) : 0;
         pfrc = spech_urlencode( pfAppend, pfAppendArg,
-                                (precision<length) ? precision : length,
+                                (precision>=0 && precision<length) ? precision : length,
                                 bufpt );
         bufpt = NULL;
         FSLPRINTF_CHECKERR;
@@ -3022,12 +3031,13 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
         break;
       }
       case etURLDECODE:{
+
         bufpt = va_arg(ap,char*);
         length = bufpt ? (int)fsl_strlen(bufpt) : 0;
-        bufpt = NULL;
         pfrc = spech_urldecode( pfAppend, pfAppendArg,
-                                (precision<length) ? precision : length,
+                                (precision>=0 && precision<length) ? precision : length,
                                 bufpt );
+        bufpt = NULL;
         FSLPRINTF_CHECKERR;
         length = 0;
         break;
@@ -3051,7 +3061,7 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
           length = bufpt ? (int)strlen(bufpt) : 0;
         }
         pfrc = spech_sqlstring( xtype, pfAppend, pfAppendArg,
-                                (precision<length) ? precision : length,
+                                (precision>=0 && precision<length) ? precision : length,
                                 bufpt );
         FSLPRINTF_CHECKERR;
         length = 0;
@@ -4009,7 +4019,8 @@ void fsl_buffer_swap_free( fsl_buffer * left, fsl_buffer * right, int clearWhich
   if(0 != clearWhich) fsl_buffer_reserve((clearWhich<0) ? left : right, 0);
 }
 
-int fsl_buffer_copy( fsl_buffer const * src, fsl_buffer * dest ){
+int fsl_buffer_copy( fsl_buffer * const dest,
+                     fsl_buffer const * const src ){
   fsl_buffer_reuse(dest);
   return src->used
     ? fsl_buffer_append( dest, src->mem, src->used )
@@ -4345,7 +4356,7 @@ int fsl_buffer_append_tcl_literal(fsl_buffer * const b,
     printf pfexp;                                                   \
   } while(0)
 
-bool fsl__acache_expire_oldest(fsl__acache * c){
+bool fsl__bccache_expire_oldest(fsl__bccache * const c){
   static uint16_t const sentinel = 0xFFFF;
   uint16_t i;
   fsl_int_t mnAge = c->nextAge;
@@ -4366,13 +4377,13 @@ bool fsl__acache_expire_oldest(fsl__acache * c){
   return sentinel!=mn;
 }
 
-int fsl__acache_insert(fsl__acache * c, fsl_id_t rid, fsl_buffer *pBlob){
-  fsl__acache_line *p;
+int fsl__bccache_insert(fsl__bccache * const c, fsl_id_t rid, fsl_buffer * const pBlob){
+  fsl__bccache_line *p;
   if( c->used>c->usedLimit || c->szTotal>c->szLimit ){
     fsl_size_t szBefore;
     do{
       szBefore = c->szTotal;
-      fsl__acache_expire_oldest(c);
+      fsl__bccache_expire_oldest(c);
     }while( c->szTotal>c->szLimit && c->szTotal<szBefore );
   }
   if((!c->usedLimit || !c->szLimit)
@@ -4388,14 +4399,14 @@ int fsl__acache_insert(fsl__acache * c, fsl_id_t rid, fsl_buffer *pBlob){
     assert((c->capacity && cap<c->capacity) ? !"Numeric overflow" : 1);
     if(c->capacity && cap<c->capacity){
         fsl__fatal(FSL_RC_RANGE,"Numeric overflow. Bump "
-                  "fsl__acache::capacity to a larger int type.");
+                  "fsl__bccache::capacity to a larger int type.");
     }
     if(!remem){
       fsl_buffer_clear(pBlob) /* for consistency */;
       return FSL_RC_OOM;
     }
     c->capacity = cap;
-    c->list = (fsl__acache_line*)remem;
+    c->list = (fsl__bccache_line*)remem;
   }
   p = &c->list[c->used++];
   p->rid = rid;
@@ -4407,9 +4418,9 @@ int fsl__acache_insert(fsl__acache * c, fsl_id_t rid, fsl_buffer *pBlob){
 }
 
 
-void fsl__acache_clear(fsl__acache * c){
+void fsl__bccache_clear(fsl__bccache * const c){
 #if 0
-  while(fsl__acache_expire_oldest(c)){}
+  while(fsl__bccache_expire_oldest(c)){}
 #else
   fsl_size_t i;
   for(i=0; i<c->used; i++){
@@ -4420,16 +4431,16 @@ void fsl__acache_clear(fsl__acache * c){
   fsl_id_bag_clear(&c->missing);
   fsl_id_bag_clear(&c->available);
   fsl_id_bag_clear(&c->inCache);
-  *c = fsl__acache_empty;
+  *c = fsl__bccache_empty;
 }
 
 
-int fsl__acache_check_available(fsl_cx * f, fsl_id_t rid){
+int fsl__bccache_check_available(fsl_cx * const f, fsl_id_t rid){
   fsl_id_t srcid;
   int depth = 0;  /* Limit to recursion depth */
   static const int limit = 10000000 /* historical value */;
   int rc;
-  fsl__acache * c = &f->cache.arty;
+  fsl__bccache * const c = &f->cache.blobContent;
   assert(f);
   assert(c);
   assert(rid>0);
@@ -9826,6 +9837,20 @@ void fcli_dump_stmt_cache(bool forceVerbose){
   }
 }
 
+void fcli_dump_cache_metrics(void){
+  fsl_cx * const f = fcli.f;
+  if(!f) return;
+  f_out("fsl_cx::cache::mcache hits = %u misses = %u\n",
+        f->cache.mcache.hits,
+        f->cache.mcache.misses);
+  f_out("fsl_cx::cache::blobContent hits = %u misses = %u. "
+        "Entry count=%u totaling %u byte(s)\n",
+        f->cache.blobContent.metrics.hits,
+        f->cache.blobContent.metrics.misses,
+        f->cache.blobContent.used,
+        f->cache.blobContent.szTotal);
+}
+
 #undef FCLI_V3
 #undef fcli_empty_m
 #undef fcli__error
@@ -9888,19 +9913,19 @@ bool fsl_content_is_available(fsl_cx * f, fsl_id_t rid){
   fsl_id_t srcid = 0;
   int rc = 0, depth = 0 /* Limit delta recursion depth */;
   while( depth++ < 100000 ){
-    if( fsl_id_bag_contains(&f->cache.arty.missing, rid) ){
+    if( fsl_id_bag_contains(&f->cache.blobContent.missing, rid) ){
       return false;
-    }else if( fsl_id_bag_contains(&f->cache.arty.available, rid) ){
+    }else if( fsl_id_bag_contains(&f->cache.blobContent.available, rid) ){
       return true;
     }else if( fsl_content_size(f, rid)<0 ){
-      fsl_id_bag_insert(&f->cache.arty.missing, rid)
+      fsl_id_bag_insert(&f->cache.blobContent.missing, rid)
         /* ignore possible OOM error */;
       return false;
     }
     rc = fsl_delta_src_id(f, rid, &srcid);
     if(rc) break;
     else if( 0==srcid ){
-      fsl_id_bag_insert(&f->cache.arty.available, rid);
+      fsl_id_bag_insert(&f->cache.blobContent.available, rid);
       return true;
     }
     rid = srcid;
@@ -9915,7 +9940,7 @@ bool fsl_content_is_available(fsl_cx * f, fsl_id_t rid){
 
 
 
-int fsl_content_blob( fsl_cx * f, fsl_id_t blobRid, fsl_buffer * tgt ){
+int fsl_content_blob( fsl_cx * const f, fsl_id_t blobRid, fsl_buffer * const tgt ){
   fsl_db * const dbR = fsl_cx_db_repo(f);
   if(blobRid<=0) return FSL_RC_RANGE;
   else if(!dbR) return FSL_RC_NOT_A_REPO;
@@ -9996,7 +10021,7 @@ int fsl_content_get( fsl_cx * const f, fsl_id_t rid,
     int rc;
     bool gotIt = 0;
     fsl_id_t nextRid;
-    fsl__acache * const ac = &f->cache.arty;
+    fsl__bccache * const ac = &f->cache.blobContent;
     fsl_buffer_reuse(tgt);
     if(fsl_id_bag_contains(&ac->missing, rid)){
       /* Early out if we know the content is not available */
@@ -10004,19 +10029,21 @@ int fsl_content_get( fsl_cx * const f, fsl_id_t rid,
     }
 
     /* Look for the artifact in the cache first */
-    if( fsl_id_bag_contains(&ac->inCache, rid) ){
+    if(0!=(FSL_CX_F_BLOB_CACHE & f->flags)
+       && fsl_id_bag_contains(&ac->inCache, rid) ){
       fsl_size_t i;
-      fsl__acache_line * line;
+      fsl__bccache_line * line;
       for(i=0; i<ac->used; ++i){
         line = &ac->list[i];
         if( line->rid==rid ){
-          rc = fsl_buffer_copy(&line->content, tgt);
+          ++ac->metrics.hits;
+          rc = fsl_buffer_copy(tgt, &line->content);
           line->age = ac->nextAge++;
           return rc;
         }
       }
     }
-
+    ++ac->metrics.misses;
     nextRid = 0;
     rc = fsl_delta_src_id(f, rid, &nextRid);
     /* MARKER(("rc=%d, nextRid=%"FSL_ID_T_PFMT"\n", rc, nextRid)); */
@@ -10115,7 +10142,7 @@ int fsl_content_get( fsl_cx * const f, fsl_id_t rid,
         //MARKER(("nAlloc=%d\n", (int)nAlloc));
         if( (mx-n)%8==0 ){
           //MARKER(("Caching artifact %d\n", (int)a[n+1]));
-          rc = fsl__acache_insert( ac, a[n+1], tgt );
+          rc = fsl__bccache_insert( ac, a[n+1], tgt );
           if(rc){
             fsl_buffer_clear(&next);
             goto end_delta;
@@ -10138,8 +10165,8 @@ int fsl_content_get( fsl_cx * const f, fsl_id_t rid,
 
     if(!rc){
       rc = fsl_id_bag_insert(gotIt
-                             ? &f->cache.arty.available
-                             : &f->cache.arty.missing,
+                             ? &f->cache.blobContent.available
+                             : &f->cache.blobContent.missing,
                              rid);
     }
     return rc;
@@ -10163,7 +10190,7 @@ int fsl_content_get_sym( fsl_cx * const f, char const * sym,
     missing is now available. Returns 0 on success. f must have
     an opened repo and rid must be valid.
  */
-static int fsl_content_mark_available(fsl_cx * f, fsl_id_t rid){
+static int fsl_content_mark_available(fsl_cx * const f, fsl_id_t rid){
   fsl_id_bag pending = fsl_id_bag_empty;
   int rc;
   fsl_stmt * st = NULL;
@@ -10171,14 +10198,14 @@ static int fsl_content_mark_available(fsl_cx * f, fsl_id_t rid){
   assert(f);
   assert(db);
   assert(rid>0);
-  if( fsl_id_bag_contains(&f->cache.arty.available, rid) ) return 0;
+  if( fsl_id_bag_contains(&f->cache.blobContent.available, rid) ) return 0;
   rc = fsl_id_bag_insert(&pending, rid);
   if(rc) goto end;
-  while( (rid = fsl_id_bag_first(&pending))!=0 ){
+  while( 0==rc && (rid = fsl_id_bag_first(&pending))!=0 ){
     fsl_id_bag_remove(&pending, rid);
-    rc = fsl_id_bag_insert(&f->cache.arty.available, rid);
+    rc = fsl_id_bag_insert(&f->cache.blobContent.available, rid);
     if(rc) goto end;
-    fsl_id_bag_remove(&f->cache.arty.missing, rid);
+    fsl_id_bag_remove(&f->cache.blobContent.missing, rid);
     if(!st){
       rc = fsl_db_prepare_cached(db, &st,
                                  "SELECT rid FROM delta "
@@ -10192,7 +10219,6 @@ static int fsl_content_mark_available(fsl_cx * f, fsl_id_t rid){
       assert(nx>0);
       rc = fsl_id_bag_insert(&pending, nx);
     }
-
   }
   end:
   if(st) fsl_stmt_cached_yield(st);
@@ -10498,7 +10524,7 @@ int fsl__content_put_ex( fsl_cx * const f,
                        "WHERE rid=%"FSL_ID_T_PFMT, rid
                        /* FIXME? use cached statement? */);
       if( !rc && (srcId==0 ||
-                  0==fsl__acache_check_available(f, srcId)) ){
+                  0==fsl__bccache_check_available(f, srcId)) ){
         isDephantomize = true;
         rc = fsl_content_mark_available(f, rid);
       }
@@ -10558,8 +10584,8 @@ int fsl__content_put_ex( fsl_cx * const f,
     if(rc) goto end;
   }
   if( !isDephantomize
-      && fsl_id_bag_contains(&f->cache.arty.missing, rid) && 
-      (srcId==0 || (0==fsl__acache_check_available(f,srcId)))){
+      && fsl_id_bag_contains(&f->cache.blobContent.missing, rid) && 
+      (srcId==0 || (0==fsl__bccache_check_available(f,srcId)))){
     /*
       TODO: document what this is for.
       TODO: figure out what that is.
@@ -10687,7 +10713,7 @@ int fsl__content_new( fsl_cx * f, fsl_uuid_cstr uuid, bool isPrivate,
     }
   }
 
-  if(!rc) rc = fsl_id_bag_insert(&f->cache.arty.missing, rid);
+  if(!rc) rc = fsl_id_bag_insert(&f->cache.blobContent.missing, rid);
   
   end:
   if(rc){
@@ -12510,7 +12536,7 @@ static volatile long sg_autoregctr = 0;
    Results are undefined if !f or f's memory has not been properly
    initialized.
 */
-static void fsl_cx_reset( fsl_cx * const f, bool closeDatabases );
+static void fsl__cx_reset( fsl_cx * const f, bool closeDatabases );
 
 
 int fsl_cx_init( fsl_cx ** tgt, fsl_cx_init_opt const * param ){
@@ -12528,7 +12554,7 @@ int fsl_cx_init( fsl_cx ** tgt, fsl_cx_init_opt const * param ){
   }
   if(*tgt){
     void const * allocStamp = (*tgt)->allocStamp;
-    fsl_cx_reset(*tgt, true) /* just to be safe */;
+    fsl__cx_reset(*tgt, true) /* just to be safe */;
     f = *tgt;
     *f = fsl_cx_empty;
     f->allocStamp = allocStamp;
@@ -12601,7 +12627,7 @@ int fsl_cx_init( fsl_cx ** tgt, fsl_cx_init_opt const * param ){
   return rc;
 }
 
-static void fsl_cx_mcache_clear(fsl_cx *f){
+static void fsl__cx_mcache_clear(fsl_cx *f){
   const unsigned cacheLen =
     (unsigned)(sizeof(fsl__mcache_empty.aAge)
                /sizeof(fsl__mcache_empty.aAge[0]));
@@ -12611,7 +12637,7 @@ static void fsl_cx_mcache_clear(fsl_cx *f){
   f->cache.mcache = fsl__mcache_empty;
 }
 
-static void fsl_cx_reset(fsl_cx * const f, bool closeDatabases){
+static void fsl__cx_reset(fsl_cx * const f, bool closeDatabases){
   fsl_checkin_discard(f);
 #define SFREE(X) fsl_free(X); X = NULL
   if(closeDatabases){
@@ -12635,13 +12661,14 @@ static void fsl_cx_reset(fsl_cx * const f, bool closeDatabases){
   SFREE(f->cache.projectCode);
 #undef SFREE
   fsl_error_clear(&f->error);
+  f->interrupted = 0;
   fsl__card_J_list_free(&f->ticket.customFields, 1);
   fsl_buffer_clear(&f->fileContent);
   for(int i = 0; i < FSL_CX_NSCRATCH; ++i){
     fsl_buffer_clear(&f->scratchpads.buf[i]);
     f->scratchpads.used[i] = false;
   }
-  fsl__acache_clear(&f->cache.arty);
+  fsl__bccache_clear(&f->cache.blobContent);
   fsl_id_bag_clear(&f->cache.leafCheck);
   fsl_id_bag_clear(&f->cache.toVerify);
   fsl__cx_clear_mf_seen(f, true);
@@ -12657,7 +12684,7 @@ static void fsl_cx_reset(fsl_cx * const f, bool closeDatabases){
   GLOBL(crnl);
 #undef GLOBL
 #undef SLIST
-  fsl_cx_mcache_clear(f);
+  fsl__cx_mcache_clear(f);
   f->cache = fsl_cx_empty.cache;
 }
 
@@ -12676,7 +12703,7 @@ void fsl_cx_finalize( fsl_cx * const f ){
   }
   f->clientState = fsl_state_empty;
   f->output = fsl_outputer_empty;
-  fsl_cx_reset(f, true);
+  fsl__cx_reset(f, true);
   fsl_db_close(&f->dbMem);
   *f = fsl_cx_empty;
   if(&fsl_cx_empty == allocStamp){
@@ -12701,7 +12728,7 @@ void fsl_cx_finalize( fsl_cx * const f ){
 #endif
 }
 
-void fsl_cx_err_reset(fsl_cx * f){
+void fsl_cx_err_reset(fsl_cx * const f){
   if(f){
     fsl_error_reset(&f->error);
     fsl_db_err_reset(&f->dbMem);
@@ -12711,7 +12738,7 @@ void fsl_cx_err_reset(fsl_cx * f){
   }
 }
 
-int fsl_cx_err_set_e( fsl_cx * f, fsl_error * err ){
+int fsl_cx_err_set_e( fsl_cx * const f, fsl_error * const err ){
   if(!f) return FSL_RC_MISUSE;
   else if(!err){
     return fsl_cx_err_set(f, 0, NULL);
@@ -12722,14 +12749,14 @@ int fsl_cx_err_set_e( fsl_cx * f, fsl_error * err ){
   }
 }
 
-int fsl_cx_err_setv( fsl_cx * f, int code, char const * fmt,
+int fsl_cx_err_setv( fsl_cx * const f, int code, char const * fmt,
                      va_list args ){
   return f
     ? fsl_error_setv( &f->error, code, fmt, args )
     : FSL_RC_MISUSE;
 }
 
-int fsl_cx_err_set( fsl_cx * f, int code, char const * fmt,
+int fsl_cx_err_set( fsl_cx * const f, int code, char const * fmt,
                     ... ){
   if(!f) return FSL_RC_MISUSE;
   else{
@@ -12742,10 +12769,17 @@ int fsl_cx_err_set( fsl_cx * f, int code, char const * fmt,
   }
 }
 
-int fsl_cx_err_get( fsl_cx * f, char const ** str, fsl_size_t * len ){
-  return f
-    ? fsl_error_get( &f->error, str, len )
-    : FSL_RC_MISUSE;
+int fsl_cx_err_get( fsl_cx * const f, char const ** str, fsl_size_t * len ){
+#if 1
+  return fsl_error_get( &f->error, str, len );
+#else
+  /* For the docs: 
+   If fsl_cx_interrupted() has been called with an error code and the
+   context has no other pending error state, that code is returned.
+  */
+  int const rc = fsl_error_get( &f->error, str, len );
+  return rc ? rc : f->interrupted;
+#endif
 }
 
 fsl_id_t fsl_cx_last_insert_id(fsl_cx * const f){
@@ -13118,6 +13152,25 @@ int fsl_cx_prepare( fsl_cx * const f, fsl_stmt * const tgt, char const * sql,
   va_end(args);
   return rc;
 }
+
+int fsl_cx_preparev_cached( fsl_cx * const f, fsl_stmt ** tgt, char const * sql,
+                            va_list args ){
+  int const rc = (f->dbMain && tgt)
+    ? fsl_db_preparev_cached(f->dbMain, tgt, sql, args)
+    : FSL_RC_MISUSE;
+  return rc ? fsl_cx_uplift_db_error2(f, f->dbMain, rc) : 0;
+}
+
+int fsl_cx_prepare_cached( fsl_cx * const f, fsl_stmt ** tgt, char const * sql,
+                           ... ){
+  int rc;
+  va_list args;
+  va_start(args,sql);
+  rc = fsl_cx_preparev_cached( f, tgt, sql, args );
+  va_end(args);
+  return rc;
+}
+
 
 /**
     Passes the fsl_schema_config() SQL code through a new/truncated
@@ -14141,7 +14194,7 @@ void fsl_cx_confirmer_get(fsl_cx const * f, fsl_confirmer * dest){
   *dest = f->confirmer;
 }
 
-int fsl_cx_confirm(fsl_cx *f, fsl_confirm_detail const * detail,
+int fsl_cx_confirm(fsl_cx * const f, fsl_confirm_detail const * detail,
                    fsl_confirm_response *outAnswer){
   if(f->confirmer.callback){
     return f->confirmer.callback(detail, outAnswer,
@@ -14436,6 +14489,13 @@ bool fsl_cx_has_ckout(fsl_cx const * const f ){
   return f->ckout.dir ? true : false;
 }
 
+int fsl_cx_interrupt(fsl_cx * const f, int code){
+  return f->interrupted = code;
+}
+
+int fsl_cx_interrupted(fsl_cx const * const f){
+  return f->interrupted;
+}
 
 #if 0
 struct tm * fsl_cx_localtime( fsl_cx const * f, const time_t * clock ){
@@ -17045,7 +17105,7 @@ FSL_CARD_F_LIST_NEEDS_SORT = 0x01
 
    If manifest caching is disabled for f, d is immediately finalized.
 */
-static void fsl_cx_mcache_insert(fsl_cx *f, fsl_deck * d){
+static void fsl__cx_mcache_insert(fsl_cx *f, fsl_deck * d){
   if(!(f->flags & FSL_CX_F_MANIFEST_CACHE)){
     fsl_deck_finalize(d);
     return;
@@ -17097,9 +17157,12 @@ static void fsl_cx_mcache_insert(fsl_cx *f, fsl_deck * d){
    If manifest caching is disabled for f, false is immediately
    returned without causing side effects.
 */
-static bool fsl_cx_mcache_search(fsl_cx * const f, fsl_id_t rid,
+static bool fsl__cx_mcache_search(fsl_cx * const f, fsl_id_t rid,
                                  fsl_deck * const tgt){
-  if(!(f->flags & FSL_CX_F_MANIFEST_CACHE)) return false;
+  if(!(f->flags & FSL_CX_F_MANIFEST_CACHE)){
+    ++f->cache.mcache.misses;
+    return false;
+  }
   static const unsigned cacheLen =
     (int)(sizeof(fsl__mcache_empty.aAge)
           /sizeof(fsl__mcache_empty.aAge[0]));
@@ -17121,7 +17184,7 @@ static bool fsl_cx_mcache_search(fsl_cx * const f, fsl_id_t rid,
 
 /**
    Code duplication reducer for fsl_deck_parse2() and
-   fsl_deck_load_rid(). Checks fsl_cx_mcache_search() for rid.  If
+   fsl_deck_load_rid(). Checks fsl__cx_mcache_search() for rid.  If
    found, overwrites tgt with its contents and returns true.  If not
    found, returns false. If an entry is found and type!=FSL_SATYPE_ANY
    and the found deck->type differs from type then false is returned,
@@ -17129,12 +17192,12 @@ static bool fsl_cx_mcache_search(fsl_cx * const f, fsl_id_t rid,
    with a description of the problem. In all other case *rc is set to
    0.
  */
-static bool fsl_cx_mcache_search2(fsl_cx * const f, fsl_id_t rid,
+static bool fsl__cx_mcache_search2(fsl_cx * const f, fsl_id_t rid,
                                   fsl_deck * const tgt,
                                   fsl_satype_e type,
                                   int * const rc){
   *rc = 0;
-  if(fsl_cx_mcache_search(f, rid, tgt)){
+  if(fsl__cx_mcache_search(f, rid, tgt)){
     assert(f == tgt->f);
     if(type!=FSL_SATYPE_ANY && type!=tgt->type){
       *rc = fsl_cx_err_set(f, FSL_RC_TYPE,
@@ -17142,7 +17205,7 @@ static bool fsl_cx_mcache_search2(fsl_cx * const f, fsl_id_t rid,
                            "to a different artifact type (%d) "
                            "than requested (%d).",
                            tgt->type, type);
-      fsl_cx_mcache_insert(f, tgt);
+      fsl__cx_mcache_insert(f, tgt);
       assert(!tgt->f);
       return false;
     }else{
@@ -20088,7 +20151,7 @@ static int fsl_mlink_add( fsl_cx * const f,
     otherRid = pmid;
   }
 
-  if(otherRid && !fsl_cx_mcache_search(f, otherRid, &dOther)){
+  if(otherRid && !fsl__cx_mcache_search(f, otherRid, &dOther)){
     rc = fsl_content_get(f, otherRid, &otherContent);
     if(rc){
       /* fossil(1) simply ignores errors here and returns. We'll ignore
@@ -20131,7 +20194,7 @@ static int fsl_mlink_add( fsl_cx * const f,
     if(!fsl_db_exists(db,"SELECT 1 FROM blob WHERE uuid=%Q AND size>0",
                       (char const *)pChild->P.list[0])){
       rc = 0;
-      fsl_cx_mcache_insert(f, &dOther);
+      fsl__cx_mcache_insert(f, &dOther);
       goto end;
     }
   }
@@ -20279,7 +20342,7 @@ F src/org/fossil_scm/libfossil/Checkout.java 6e58a47089d3f4911c9386c25bac36c8e98
     if(rc) goto end;
   }
 
-  fsl_cx_mcache_insert(f, &dOther);
+  fsl__cx_mcache_insert(f, &dOther);
   
   /* If pParent is the primary parent of pChild, also run this analysis
   ** for all merge parents of pChild */
@@ -21217,6 +21280,11 @@ static int fsl__deck_crosslink_cluster(fsl_deck * const d){
   fsl_cx * const f = d->f;
   fsl_db * const db = fsl_cx_db_repo(f);
 
+  assert(d->rid>0);
+  rc = fsl__tag_insert(f, FSL_TAGTYPE_ADD, "cluster", NULL,
+                       d->rid, d->D, d->rid, NULL);
+  if(rc) return rc;
+  
   rc = fsl_db_prepare_cached(db, &st,
                              "DELETE FROM unclustered WHERE rid=?"
                              "/*%s()*/",__func__);
@@ -21383,7 +21451,7 @@ static int fsl__deck_crosslink_ticket(fsl_deck * const d){
 
 int fsl__deck_crosslink_one( fsl_deck * const d ){
   int rc;
-  if(!d->f) return FSL_RC_MISUSE;
+  assert(d->f && "API misuse:fsl_deck::f == NULL");
   rc = fsl__crosslink_begin(d->f);
   if(rc) return rc;
   rc = fsl__deck_crosslink(d);
@@ -21577,6 +21645,8 @@ static void fsl__remove_pgp_signature(unsigned char const **pz, fsl_size_t *pn){
   *pz = z;
   for(i=n-1; i>=0; i--){
     if( z[i]=='\n' && memcmp(&z[i],"\n-----BEGIN PGP SIGNATURE-", 25)==0 ){
+      // valgrind warns on ^^^^ this ^^^^ line:
+      // Conditional jump or move depends on uninitialised value(s)
       n = i+1;
       break;
     }
@@ -21755,8 +21825,11 @@ int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_id_t rid){
   if(rid>0){
     d->rid = rid;
 #if 1
-    if(fsl_cx_mcache_search2(f, rid, d, FSL_SATYPE_ANY, &rc) || rc){
-      if(0==rc) fsl_buffer_clear(src);
+    if(fsl__cx_mcache_search2(f, rid, d, FSL_SATYPE_ANY, &rc) || rc){
+      if(0==rc){
+        assert(d->rid == rid);
+        fsl_buffer_clear(src);
+      }
       return rc;
     }
 #endif
@@ -21792,8 +21865,7 @@ int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_id_t rid){
     control artifact.
   */
   if( !fsl_might_be_artifact(src) ){
-    ERROR(FSL_RC_SYNTAX, "Content does not look like "
-          "a structural artifact");
+    SYNTAX("Content does not look like a structural artifact");
   }
 
   /*
@@ -21880,7 +21952,7 @@ int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_id_t rid){
       case 'A':{
         unsigned char * name, * src;
         if(1<SEEN(A)){
-          ERROR(FSL_RC_RANGE,"Multiple A-cards");
+          SYNTAX("Multiple A-cards");
         }
         TOKEN(1);
         TOKEN_EXISTS("Missing filename for A-card");
@@ -22030,7 +22102,7 @@ int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_id_t rid){
             case 'l': perm = FSL_FILE_PERM_LINK; break;
             default:
               /*MARKER(("Unmatched perms string character: %d / %c !", (int)*perms, *perms));*/
-              ERROR(FSL_RC_SYNTAX,"Invalid perms string character");
+              SYNTAX("Invalid perms string character");
           }
           TOKEN(0);
           if(token) priorName = (char *)token;
@@ -22200,7 +22272,7 @@ int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_id_t rid){
       */
       case 'N':{
         if(1<SEEN(N)){
-          ERROR(FSL_RC_RANGE,"Multiple N-cards");
+          SYNTAX("Multiple N-cards");
         }
         TOKEN(0);
         TOKEN_EXISTS("Missing UUID on N-card");
@@ -22218,7 +22290,7 @@ int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_id_t rid){
       */
       case 'P':{
         if(1<SEEN(P)){
-          ERROR(FSL_RC_RANGE,"More than one P-card");
+          SYNTAX("More than one P-card");
         }
         TOKEN(0);
 #if 0
@@ -22276,7 +22348,7 @@ int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_id_t rid){
       */
       case 'R':{
         if(1<SEEN(R)){
-          ERROR(FSL_RC_RANGE,"More than one R-card");
+          SYNTAX("More than one R-card");
         }
         TOKEN(0);
         TOKEN_EXISTS("Missing MD5 token in R-card");
@@ -22379,7 +22451,7 @@ int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_id_t rid){
         TOKEN_EXISTS("Missing size token for W-card");
         wlen = fsl_str_to_size((char const *)token);
         if((fsl_size_t)-1==wlen){
-          ERROR(FSL_RC_RANGE,"Wiki size token is invalid");
+          SYNTAX("Wiki size token is invalid");
         }
         if( (&x.z[wlen+1]) > x.zEnd){
           SYNTAX("Not enough content after W-card");
@@ -22562,7 +22634,7 @@ int fsl_deck_load_rid( fsl_cx * const f, fsl_deck * const d,
   }
   fsl_deck_clean(d);
   d->f = f;
-  if(fsl_cx_mcache_search2(f, rid, d, type, &rc) || rc){
+  if(fsl__cx_mcache_search2(f, rid, d, type, &rc) || rc){
     return rc;
   }
   rc = fsl_content_get(f, rid, &buf);
@@ -37010,7 +37082,7 @@ fsl_card_T * fsl_card_T_malloc(fsl_tagtype_e tagType,
   return t;
 }
 
-fsl_id_t fsl_tag_id( fsl_cx * f, char const * tag, bool create ){
+fsl_id_t fsl_tag_id( fsl_cx * const f, char const * tag, bool create ){
   fsl_db * db = fsl_cx_db_repo(f);
   int64_t id = 0;
   int rc;
@@ -37195,7 +37267,7 @@ int fsl__tag_insert( fsl_cx * const f, fsl_tagtype_e tagtype,
   char const * zCol;
   if(!f || !zTag) return FSL_RC_MISUSE;
   else if(!db) return FSL_RC_NOT_A_REPO;
-  tagid = fsl_tag_id(f, zTag, 1);
+  tagid = fsl_tag_id(f, zTag, true);
   if(tagid<0){
     assert(f->error.code);
     return f->error.code;
@@ -37315,12 +37387,8 @@ int fsl__tag_insert( fsl_cx * const f, fsl_tagtype_e tagtype,
   rc = fsl__tag_propagate(f, tagtype, rid, tagid,
                          rid, zValue, mtime);
   end:
-  if(rc){
-    fsl_stmt_finalize(&q);
-  }else{
-    assert(!q.stmt);
-    if(outRid) *outRid = tagid;
-  }
+  fsl_stmt_finalize(&q);
+  if(0==rc && outRid) *outRid = tagid;
   return rc;
 }
 
@@ -37332,7 +37400,7 @@ int fsl_tag_sym( fsl_cx * f,
                  char const * userName,
                  double mtime,
                  fsl_id_t * outId ){
-  if(!f || !tagName || !symToTag || !userName) return FSL_RC_MISUSE;
+  if(!tagName || !symToTag || !userName) return FSL_RC_MISUSE;
   else if(!*tagName || !*userName || !*symToTag) return FSL_RC_RANGE;
   else{
     fsl_id_t resolvedRid = 0;
@@ -37348,7 +37416,7 @@ int fsl_tag_sym( fsl_cx * f,
   }
 }
 
-int fsl_tag_an_rid( fsl_cx * f,
+int fsl_tag_an_rid( fsl_cx * const f,
                     fsl_tagtype_e tagType,
                     fsl_id_t idToTag,
                     char const * tagName,
@@ -37356,7 +37424,7 @@ int fsl_tag_an_rid( fsl_cx * f,
                     char const * userName,
                     double mtime,
                     fsl_id_t * outId ){
-  fsl_db * dbR = f ? fsl_cx_db_repo(f) : NULL;
+  fsl_db * const dbR = fsl_cx_db_repo(f);
   fsl_deck c = fsl_deck_empty;
   char * resolvedUuid = NULL;
   fsl_buffer mfout = fsl_buffer_empty;
