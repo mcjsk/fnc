@@ -3,7 +3,7 @@
 #define FSL_AUX_SCHEMA "2015-01-24"
 #define FSL_CONTENT_SCHEMA "2"
 #define FSL_PACKAGE_NAME "libfossil"
-#define FSL_LIBRARY_VERSION "0.0.1-alphabeta"
+#define FSL_LIBRARY_VERSION "0.5-ish"
 /* Tweak the following for your system... */
 #if !defined(HAVE_COMPRESS)
 #  define HAVE_COMPRESS 1
@@ -83,9 +83,9 @@
 /* _WIN32 */
 
 
-#define FSL_LIB_VERSION_HASH "acbd39275f0d573a74d996caea7918afafff2ff7"
-#define FSL_LIB_VERSION_TIMESTAMP "2021-10-08 03:15:51.855 UTC"
-#define FSL_LIB_CONFIG_TIME "2021-10-08 04:07 GMT"
+#define FSL_LIB_VERSION_HASH "2b136fe2e70cdf010287df214f4939b2b08a5661"
+#define FSL_LIB_VERSION_TIMESTAMP "2021-11-18 09:44:16.017 UTC"
+#define FSL_LIB_CONFIG_TIME "2021-11-18 13:24 GMT"
 #if defined(_MSC_VER)
 #define FSL_PLATFORM_OS "windows"
 #define FSL_PLATFORM_IS_WINDOWS 1

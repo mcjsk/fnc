@@ -4359,7 +4359,7 @@ int fsl_buffer_append_tcl_literal(fsl_buffer * const b,
 bool fsl__bccache_expire_oldest(fsl__bccache * const c){
   static uint16_t const sentinel = 0xFFFF;
   uint16_t i;
-  fsl_int_t mnAge = c->nextAge;
+  fsl_uint_t mnAge = c->nextAge;
   uint16_t mn = sentinel;
   for(i=0; i<c->used; i++){
     if( c->list[i].age<mnAge ){
@@ -4369,7 +4369,7 @@ bool fsl__bccache_expire_oldest(fsl__bccache * const c){
   }
   if( mn<sentinel ){
     fsl_id_bag_remove(&c->inCache, c->list[mn].rid);
-    c->szTotal -= (uint32_t)c->list[mn].content.capacity;
+    c->szTotal -= (unsigned)c->list[mn].content.capacity;
     fsl_buffer_clear(&c->list[mn].content);
     --c->used;
     c->list[mn] = c->list[c->used];
@@ -4398,8 +4398,8 @@ int fsl__bccache_insert(fsl__bccache * const c, fsl_id_t rid, fsl_buffer * const
       : fsl_malloc( cap*sizeof(c->list[0]) );
     assert((c->capacity && cap<c->capacity) ? !"Numeric overflow" : 1);
     if(c->capacity && cap<c->capacity){
-        fsl__fatal(FSL_RC_RANGE,"Numeric overflow. Bump "
-                  "fsl__bccache::capacity to a larger int type.");
+      fsl__fatal(FSL_RC_RANGE,"Numeric overflow. Bump "
+                 "fsl__bccache::capacity to a larger int type.");
     }
     if(!remem){
       fsl_buffer_clear(pBlob) /* for consistency */;
@@ -4408,13 +4408,18 @@ int fsl__bccache_insert(fsl__bccache * const c, fsl_id_t rid, fsl_buffer * const
     c->capacity = cap;
     c->list = (fsl__bccache_line*)remem;
   }
-  p = &c->list[c->used++];
-  p->rid = rid;
-  p->age = c->nextAge++;
-  c->szTotal += pBlob->capacity;
-  p->content = *pBlob /* Transfer ownership */;
-  *pBlob = fsl_buffer_empty;
-  return fsl_id_bag_insert(&c->inCache, rid);
+  int const rc = fsl_id_bag_insert(&c->inCache, rid);
+  if(0==rc){
+    p = &c->list[c->used++];
+    p->rid = rid;
+    p->age = c->nextAge++;
+    c->szTotal += pBlob->capacity;
+    p->content = *pBlob /* Transfer ownership */;
+    *pBlob = fsl_buffer_empty;
+  }else{
+    fsl_buffer_clear(pBlob);
+  }
+  return rc;
 }
 
 
@@ -4423,7 +4428,7 @@ void fsl__bccache_clear(fsl__bccache * const c){
   while(fsl__bccache_expire_oldest(c)){}
 #else
   fsl_size_t i;
-  for(i=0; i<c->used; i++){
+  for(i=0; i<c->used; ++i){
     fsl_buffer_clear(&c->list[i].content);
   }
 #endif
@@ -4432,6 +4437,21 @@ void fsl__bccache_clear(fsl__bccache * const c){
   fsl_id_bag_clear(&c->available);
   fsl_id_bag_clear(&c->inCache);
   *c = fsl__bccache_empty;
+}
+
+void fsl__bccache_reset(fsl__bccache * const c){
+  static const fsl__bccache_line line_empty = fsl__bccache_line_empty_m;
+  fsl_size_t i;
+  for(i=0; i<c->used; ++i){
+    fsl_buffer_clear(&c->list[i].content);
+    c->list[i] = line_empty;
+  }
+  c->used = 0;
+  c->szTotal = 0;
+  c->nextAge = 0;
+  fsl_id_bag_reset(&c->missing);
+  fsl_id_bag_reset(&c->available);
+  fsl_id_bag_reset(&c->inCache);
 }
 
 
@@ -10136,18 +10156,19 @@ int fsl_content_get( fsl_cx * const f, fsl_id_t rid,
 
            We shave another 0.5s if we always cache instead of using
            this mysterious (mx-n)%8 heuristic.
+
+           Later testing with f-rebuild gives much different results:
+           the (mx-n)%8 heuristic provides the best results of the
+           variations tested, including always caching.
         */
         //MARKER(("mx=%d, n=%d, (mx-n)%%8=%d\n",
         //(int)mx, (int)n, (int)(mx-n)%8));
         //MARKER(("nAlloc=%d\n", (int)nAlloc));
         if( (mx-n)%8==0 ){
           //MARKER(("Caching artifact %d\n", (int)a[n+1]));
-          rc = fsl__bccache_insert( ac, a[n+1], tgt );
-          if(rc){
-            fsl_buffer_clear(&next);
-            goto end_delta;
-          }
-          assert(!tgt->mem && "Passed to artifact cache.");
+          fsl__bccache_insert( ac, a[n+1], tgt )
+            /*Ignoring error (OOM) - it's not (yet) fatal. */;
+          assert(!tgt->mem && "Passed to artifact cache (even on failure).");
         }else{
           fsl_buffer_clear(tgt);
         }
@@ -12627,7 +12648,7 @@ int fsl_cx_init( fsl_cx ** tgt, fsl_cx_init_opt const * param ){
   return rc;
 }
 
-static void fsl__cx_mcache_clear(fsl_cx *f){
+static void fsl__cx_mcache_clear(fsl_cx * const f){
   const unsigned cacheLen =
     (unsigned)(sizeof(fsl__mcache_empty.aAge)
                /sizeof(fsl__mcache_empty.aAge[0]));
@@ -12669,6 +12690,7 @@ static void fsl__cx_reset(fsl_cx * const f, bool closeDatabases){
     f->scratchpads.used[i] = false;
   }
   fsl__bccache_clear(&f->cache.blobContent);
+  fsl__cx_mcache_clear(f);
   fsl_id_bag_clear(&f->cache.leafCheck);
   fsl_id_bag_clear(&f->cache.toVerify);
   fsl__cx_clear_mf_seen(f, true);
@@ -12684,7 +12706,6 @@ static void fsl__cx_reset(fsl_cx * const f, bool closeDatabases){
   GLOBL(crnl);
 #undef GLOBL
 #undef SLIST
-  fsl__cx_mcache_clear(f);
   f->cache = fsl_cx_empty.cache;
 }
 
@@ -12729,13 +12750,12 @@ void fsl_cx_finalize( fsl_cx * const f ){
 }
 
 void fsl_cx_err_reset(fsl_cx * const f){
-  if(f){
-    fsl_error_reset(&f->error);
-    fsl_db_err_reset(&f->dbMem);
-    fsl_db_err_reset(&f->repo.db);
-    fsl_db_err_reset(&f->config.db);
-    fsl_db_err_reset(&f->ckout.db);
-  }
+  //f->interrupted = 0;
+  fsl_error_reset(&f->error);
+  fsl_db_err_reset(&f->dbMem);
+  fsl_db_err_reset(&f->repo.db);
+  fsl_db_err_reset(&f->config.db);
+  fsl_db_err_reset(&f->ckout.db);
 }
 
 int fsl_cx_err_set_e( fsl_cx * const f, fsl_error * const err ){
@@ -16120,8 +16140,7 @@ int fsl_db_open( fsl_db * db, char const * dbFile,
                           "DB file [%s] appears to be a fossil "
                           "repsitory, but is out-of-date and needs "
                           "a rebuild.",
-                          dbFile)
-          ;
+                          dbFile);
         assert(rc == db->error.code);
         goto end;
       }
@@ -16373,8 +16392,7 @@ int fsl_db_transaction_end(fsl_db * const db, bool doRollback){
        continuing so that if we return due to a non-0 beginCount
        that the rollback flag propagates through the
        transaction's stack.
-    */
-    ;
+    */;
   if(--db->beginCount > 0) return 0;
   assert(0==db->beginCount && "The commit-hook check relies on this.");
   assert(db->doRollback>=0);
@@ -21641,16 +21659,30 @@ static void fsl__remove_pgp_signature(unsigned char const **pz, fsl_size_t *pn){
   for(i=34; i<n && !fsl_after_blank_line((char const *)(z+i)); i++){}
   if( i>=n ) return;
   z += i;
-  n -= i;
   *pz = z;
+#if 1
+  unsigned char const * bps =
+    (unsigned char const *)strstr((char const *)z, "\n-----BEGIN PGP SIGNATURE-");
+  if(bps){
+    n = (fsl_int_t)(bps - z) + 1 /*newline*/;
+  }
+#else
+  n -= i;
   for(i=n-1; i>=0; i--){
     if( z[i]=='\n' && memcmp(&z[i],"\n-----BEGIN PGP SIGNATURE-", 25)==0 ){
-      // valgrind warns on ^^^^ this ^^^^ line:
-      // Conditional jump or move depends on uninitialised value(s)
+      /** valgrind warns on ^^^^ this ^^^^ line:
+          Conditional jump or move depends on uninitialised value(s)
+
+          It affects at least 2 artifacts in the libfossil repo:
+
+          240deb757b12bf953b5dbf5c087c80f60ae68934
+          f4e5795f9ec7df587756f08ea875c8be259b7917
+      */
       n = i+1;
       break;
     }
   }
+#endif
   *pn = (fsl_size_t)n;
   return;
 }
@@ -30046,7 +30078,7 @@ bool fsl_rid_is_version(fsl_cx * const f, fsl_id_t rid){
                            " AND type='ci'", rid);
 }
 
-int fsl__repo_leafcheck(fsl_cx * f, fsl_id_t rid){
+int fsl__repo_leafcheck(fsl_cx * const f, fsl_id_t rid){
   fsl_db * const db = f ? fsl_cx_db_repo(f) : NULL;
   if(!db || !db->dbh) return FSL_RC_MISUSE;
   else if(rid<=0) return FSL_RC_RANGE;
@@ -30077,7 +30109,7 @@ int fsl__repo_leafcheck(fsl_cx * f, fsl_id_t rid){
   }
 }
 
-int fsl__repo_leafeventually_check( fsl_cx * f, fsl_id_t rid){
+int fsl__repo_leafeventually_check( fsl_cx * const f, fsl_id_t rid){
   fsl_db * db = f ? fsl_cx_db_repo(f) : NULL;
   if(!f) return FSL_RC_MISUSE;
   else if(rid<=0) return FSL_RC_RANGE;
@@ -30103,14 +30135,14 @@ int fsl__repo_leafeventually_check( fsl_cx * f, fsl_id_t rid){
 }
 
 
-int fsl__repo_leafdo_pending_checks(fsl_cx *f){
+int fsl__repo_leafdo_pending_checks(fsl_cx * const f){
   fsl_id_t rid;
   int rc = 0;
   for(rid=fsl_id_bag_first(&f->cache.leafCheck);
       !rc && rid; rid=fsl_id_bag_next(&f->cache.leafCheck,rid)){
     rc = fsl__repo_leafcheck(f, rid);
   }
-  fsl_id_bag_clear(&f->cache.leafCheck);
+  fsl_id_bag_reset(&f->cache.leafCheck);
   return rc;
 }
 
@@ -30147,10 +30179,11 @@ int fsl_leaves_compute(fsl_cx * f, fsl_id_t vid,
     rc = fsl_id_bag_insert(&pending, vid);
     if(rc) goto cleanup;
 
-    /* This query returns all non-branch-merge children of check-in :rid.
+    /* This query returns all non-branch-merge children of check-in
+    ** RID (?1).
     **
     ** If a child is a merge of a fork within the same branch, it is
-    ** returned.  Only merge children in different branches are excluded.
+    ** returned. Only merge children in different branches are excluded.
     */
     rc = fsl_db_prepare(db, &q1,
       "SELECT cid FROM plink"
@@ -30166,9 +30199,8 @@ int fsl_leaves_compute(fsl_cx * f, fsl_id_t vid,
       FSL_TAGID_BRANCH, FSL_TAGID_BRANCH
     );
     if(rc) goto cleanup;
-    /* This query returns a single row if check-in :rid is the first
-    ** check-in of a new branch.
-    */
+    /* This query returns a single row if check-in RID (?1) is the
+    ** first check-in of a new branch. */
     rc = fsl_db_prepare(db, &isBr,
        "SELECT 1 FROM tagxref"
        " WHERE rid=?1 AND tagid=%d AND tagtype=2"
@@ -30177,8 +30209,7 @@ int fsl_leaves_compute(fsl_cx * f, fsl_id_t vid,
     );
     if(rc) goto cleanup;
 
-    /* This statement inserts check-in :rid into the LEAVES table.
-    */
+    /* This statement inserts check-in RID (?1) into the LEAVES table.*/
     rc = fsl_db_prepare(db, &ins,
                         "INSERT OR IGNORE INTO leaves VALUES(?1)");
     if(rc) goto cleanup;
@@ -31924,7 +31955,7 @@ static fsl_id_t fsl_youngest_ancestor_in_branch(fsl_cx * f, fsl_id_t rid,
 
    So that we can distinguish "not found" from OOM errors.
 */
-static char * fsl_branch_of_rid(fsl_cx *f, fsl_int_t rid){
+static char * fsl_branch_of_rid(fsl_cx * const f, fsl_int_t rid){
   char *zBr = 0;
   fsl_db * const db = fsl_cx_db_repo(f);
   fsl_stmt * st = 0;
@@ -31946,6 +31977,7 @@ static char * fsl_branch_of_rid(fsl_cx *f, fsl_int_t rid){
   fsl_stmt_cached_yield(st);
   if( !rc && zBr==0 ){
     zBr = fsl_config_get_text(f, FSL_CONFDB_REPO, "main-branch", 0);
+    if(!zBr) zBr = fsl_strdup("trunk");
   }
   return zBr;
 }
@@ -32073,7 +32105,10 @@ static fsl_id_t fsl_start_of_branch(fsl_cx * f, fsl_id_t rid,
   }
   return ans;
   oom:
-  fsl_cx_err_set(f, FSL_RC_OOM, NULL);
+  if(!f->error.code){
+    fsl_cx_err_set(f, FSL_RC_OOM, NULL);
+  }/* Else assume the OOM is really a misleading
+      side-effect of another failure. */
   return -1;
 }
 

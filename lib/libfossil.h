@@ -1032,20 +1032,20 @@ FSL_EXPORT int fsl_error_setv( fsl_error * const err, int code,
                                char const * fmt, va_list args );
 
 /**
-   Fetches the error state from err. If !err it returns
-   FSL_RC_MISUSE without side-effects, else it returns err's current
-   error code.
+   Fetches the error state from err. Returns err's current error code.
 
    If str is not NULL then *str will be assigned to the raw
    (NUL-terminated) error string (which might be empty or even
    NULL). The memory for the string is owned by err and may be
-   invalidated by any calls which take err as a non-const parameter
-   OR which might modify it indirectly through a container object,
-   so the client is required to copy it if it is needed for later
-   reference.
+   invalidated by any calls which take err as a non-const parameter OR
+   which might modify it indirectly through a container object, so the
+   client is required to copy it if it is needed for later
+   reference. As a special case, if the error object has no message
+   then the returned string is set to NULL, as opposed to an empty
+   string.
 
    If len is not NULL then *len will be assigned to the length of
-   the returned string (in bytes).
+   the (*str) string (in bytes).
 
    @see fsl_error_set()
    @see fsl_error_clear()
@@ -3144,11 +3144,11 @@ FSL_EXPORT int fsl_delta_apply( unsigned char const *zSrc, fsl_size_t lenSrc,
    fsl_delta_apply().
 */
 FSL_EXPORT int fsl_delta_apply2( unsigned char const *zSrc,
-                      fsl_size_t lenSrc,
-                      unsigned char const *zDelta,
-                      fsl_size_t lenDelta,
-                      unsigned char *zOut,
-                      fsl_error * pErr);
+                                 fsl_size_t lenSrc,
+                                 unsigned char const *zDelta,
+                                 fsl_size_t lenDelta,
+                                 unsigned char *zOut,
+                                 fsl_error * pErr);
 /*
   Calculates the size (in bytes) of the output from applying a the
   given delta. On success 0 is returned and *appliedSize will be
@@ -3157,15 +3157,15 @@ FSL_EXPORT int fsl_delta_apply2( unsigned char const *zSrc,
   format emitted by fsl_delta_create(). It is legal for appliedSize
   to point to the same memory as the 2nd argument.
 
-  Returns FSL_RC_MISUSE if any pointer argument is NULL. Returns
-  FSL_RC_RANGE if lenDelta is too short to be a delta. Returns
-  FSL_RC_DELTA_INVALID_TERMINATOR if the delta's encoded length
-  is not properly terminated.
+  Returns FSL_RC_RANGE if lenDelta is too short to be a delta. Returns
+  FSL_RC_DELTA_INVALID_TERMINATOR if the delta's encoded length is not
+  properly terminated.
 
-  This routine is provided so that an procedure that is able to
-  call fsl_delta_apply() can learn how much space is required for
-  the output and hence allocate nor more space that is really
-  needed.
+  Results are undefined if any pointer argument is NULL.
+
+  This routine is provided so that an procedure that is able to call
+  fsl_delta_apply() can learn how much space is required for the
+  output and hence allocate no more space that is really needed.
 
   TODO?: consolidate 2nd and 3rd parameters into one i/o parameter?
 
@@ -3173,8 +3173,8 @@ FSL_EXPORT int fsl_delta_apply2( unsigned char const *zSrc,
   @see fsl_delta_create()
 */
 FSL_EXPORT int fsl_delta_applied_size(unsigned char const *zDelta,
-                           fsl_size_t lenDelta,
-                           fsl_size_t * appliedSize);
+                                      fsl_size_t lenDelta,
+                                      fsl_size_t * appliedSize);
 
 /**
    "Fossilizes" the first len bytes of the given input string. If
@@ -6564,12 +6564,13 @@ FSL_EXPORT fsl_error const * fsl_cx_err_get_e(fsl_cx const * f);
 
 /**
    Resets's f's error state, basically equivalent to
-   fsl_cx_err_set(f,0,NULL). Is a no-op if f is NULL.  This may be
-   necessary for apps if they rely on looking at fsl_cx_err_get()
-   at the end of their app/routine, because error state survives
-   until it is cleared, even if the error held there was caught and
-   recovered. This function might keep error string memory around
-   for re-use later on.
+   fsl_cx_err_set(f,0,NULL). This may be necessary for apps if they
+   rely on looking at fsl_cx_err_get() at the end of their
+   app/routine, because error state survives until it is cleared, even
+   if the error held there was caught and recovered. This function
+   might keep error string memory around for re-use later on.
+
+   This does NOT reset the fsl_cx_interrupted() flag!
 */
 FSL_EXPORT void fsl_cx_err_reset(fsl_cx * const f);
 
@@ -17165,7 +17166,7 @@ struct fsl__bccache_line {
   /**
      Age. Newer is larger.
   */
-  fsl_int_t age;
+  fsl_uint_t age;
   /**
      Content of the artifact.
   */
@@ -17180,13 +17181,10 @@ struct fsl__bccache_line {
 
 /** @internal
 
-    A cache for tracking the existence of artifacts while the
-    internal goings-on of control artifacts are going on.
+    A cache for tracking the existence of blobs while the internal
+    goings-on of fsl_content_get() and friends are going on.
 
-    Currently the artifact cache is unused because it costs much
-    more than it gives us. Once the library supports certain
-    operations (like rebuild and sync) caching will become more
-    useful.
+    "bc" ==> blob cache. 
 
     Historically fossil caches artifacts as their blob content, but
     libfossil will likely (at some point) to instead cache fsl_deck
@@ -17194,8 +17192,9 @@ struct fsl__bccache_line {
     It cost more memory, though. That approach also precludes caching
     non-structural artifacts (i.e. opaque client blobs).
 
-    Potential TODO: the limits of the cache size are hard-coded in
-    fsl__bccache_insert. Those really should be part of this struct.
+    Potential TODO: the limits of the cache size are currently
+    hard-coded and changing them "by hand" won't have much effect.
+    We should possibly have an API to tweak these limits.
 */
 struct fsl__bccache {
   /**
@@ -17217,8 +17216,9 @@ struct fsl__bccache {
      Approximate upper limit on the number of entries in this->list.
      This limit may be violated slightly.
 
-     This number should ideally be relatively small: 3 digits or less.
-     Fossil's historical value is 500.
+     This list gets searched linearly so this number should ideally be
+     relatively small: 3 digits or less. Fossil's historical value is
+     500.
   */
   uint16_t usedLimit;
   /**
@@ -17228,7 +17228,7 @@ struct fsl__bccache {
   /**
      Next cache counter age. Higher is newer.
   */
-  fsl_int_t nextAge;
+  fsl_uint_t nextAge;
   /**
      List of cached content, ordered by age.
   */
@@ -17246,7 +17246,6 @@ struct fsl__bccache {
      the cache).
   */
   fsl_id_bag available;
-
   /**
      Metrics solely for internal use in looking for
      optimizations. These are only updated by fsl_content_get().
@@ -17287,7 +17286,7 @@ extern const fsl__bccache fsl__bccache_empty;
    crosslinking. This type is intended only to be embedded in fsl_cx.
 
    The routines for managing this cache are static in deck.c:
-   fsl_cx_mcache_insert() and fsl_cx_mcache_search().
+   fsl__cx_mcache_insert() and fsl__cx_mcache_search().
 
    The array members in this struct MUST have the same length
    or results are undefined.
@@ -17295,14 +17294,14 @@ extern const fsl__bccache fsl__bccache_empty;
 struct fsl__mcache {
   /** Next age value. No clue how the cache will react once this
       overflows. */
-  unsigned nextAge;
-  /** The virtual age of each deck in the cache. They get evicted
-      oldest first. */
-  unsigned aAge[4];
+  fsl_uint_t nextAge;
   /** Counts the number of cache hits. */
   unsigned hits;
   /** Counts the number of cache misses. */
   unsigned misses;
+  /** The virtual age of each deck in the cache. They get evicted
+      oldest first. */
+  fsl_uint_t aAge[4];
   /**
      Stores bitwise copies of decks. Storing a fsl_deck_malloc() deck
      into the cache requires bitwise-copying is contents, wiping out
@@ -17322,12 +17321,11 @@ typedef struct fsl__mcache fsl__mcache;
 
 /** Initialized-with-defaults fsl__mcache structure, intended for
     const-copy initialization. */
-#define fsl__mcache_empty_m {\
-  0,                  \
-  {0,0,0,0},       \
-  0,0, \
-  {fsl_deck_empty_m,fsl_deck_empty_m,fsl_deck_empty_m,   \
-  fsl_deck_empty_m} \
+#define fsl__mcache_empty_m { \
+  0,0,0,                      \
+  {/*aAge*/0,0,0,0},          \
+  {fsl_deck_empty_m,fsl_deck_empty_m, \
+   fsl_deck_empty_m, fsl_deck_empty_m}\
 }
 
 /** Initialized-with-defaults fsl__mcache structure, intended for
@@ -17922,7 +17920,7 @@ bool fsl__bccache_expire_oldest(fsl__bccache * const c);
 
     If the cache cannot add the entry due to cache-internal
     constraints, as opposed to allocation errors, it clears the buffer
-    (for consistency's sake) and returned 0.
+    (for consistency's sake) and returns 0.
 
     Returns 0 on success, FSL_RC_OOM on allocation error. Has undefined
     behaviour if !c, rid is not semantically valid, !pBlob. An empty
@@ -17938,6 +17936,15 @@ int fsl__bccache_insert(fsl__bccache * const c, fsl_id_t rid,
     not free c. Results are undefined if !c.
 */
 void fsl__bccache_clear(fsl__bccache * const c);
+
+/** @internal
+
+    Resets all bags associated with the given cache and frees all
+    cached buffer memory, but keeps any fsl_id_bag memory intact for
+    re-use. This does not reset the hit/miss metrics.
+*/
+void fsl__bccache_reset(fsl__bccache * const c);
+
 
 /** @internal
 
@@ -18112,21 +18119,21 @@ int fsl__content_new( fsl_cx * f, fsl_uuid_cstr uuid, bool isPrivate,
     (e.g. FSL_RC_DB) may indicate that db is not a repo. On error
     db's error state may be updated.
 */
-int fsl__repo_leafcheck(fsl_cx * f, fsl_id_t pid);  
+int fsl__repo_leafcheck(fsl_cx * const f, fsl_id_t pid);  
 
 /** @internal
 
     Schedules a leaf check for "rid" and its parents. Returns 0 on
     success.
 */
-int fsl__repo_leafeventually_check( fsl_cx * f, fsl_id_t rid);
+int fsl__repo_leafeventually_check( fsl_cx * const f, fsl_id_t rid);
 
 /** @internal
 
     Perform all pending leaf checks. Returns 0 on success or if it
     has nothing to do.
 */
-int fsl__repo_leafdo_pending_checks(fsl_cx *f);
+int fsl__repo_leafdo_pending_checks(fsl_cx * const f);
 
 /** @internal
 
