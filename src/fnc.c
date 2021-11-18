@@ -182,6 +182,7 @@ static struct fnc_setup {
 	const char	*filter_branch;	/* Only load commits from <branch>. */
 	const char	*filter_user;	/* Only load commits from <user>. */
 	const char	*filter_type;	/* Placeholder for repeatable types. */
+	const char	*glob;		/* Only load commits containing glob */
 	bool		 utc;		/* Display UTC sans user local time. */
 
 	/* Diff options. */
@@ -207,7 +208,7 @@ static struct fnc_setup {
 	fcli_help_info	  fnc_help;			/* Global help. */
 	fcli_cliflag	  cliflags_global[3];		/* Global options. */
 	fcli_command	  cmd_args[7];			/* App commands. */
-	fcli_cliflag	  cliflags_timeline[11];	/* Timeline options. */
+	fcli_cliflag	  cliflags_timeline[12];	/* Timeline options. */
 	fcli_cliflag	  cliflags_diff[7];		/* Diff options. */
 	fcli_cliflag	  cliflags_tree[4];		/* Tree options. */
 	fcli_cliflag	  cliflags_blame[6];		/* Blame options. */
@@ -227,6 +228,7 @@ static struct fnc_setup {
 	NULL,		/* filter_branch defaults to indiscriminate. */
 	NULL,		/* filter_user defaults to indiscriminate. */
 	NULL,		/* filter_type temporary placeholder. */
+	NULL,		/* glob filter defaults to off; all commits are shown */
 	false,		/* utc defaults to off (i.e., show user local time). */
 	NULL,		/* context defaults to five context lines. */
 	false,		/* ws defaults to acknowledge whitespace. */
@@ -298,6 +300,9 @@ static struct fnc_setup {
 	    "\t{tip,current,prev,next}\n    "
 	    "For a complete list of symbols see Fossil's Check-in Names:\n    "
 	    "https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki"),
+	    FCLI_FLAG_CSTR("f", "filter", "<glob>", &fnc_init.glob,
+	    "Populate the timeline with commits containing <glob> in the commit"
+	    "\n    comment, user, or branch field."),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
 	    "Display timeline command help and usage."),
 	    FCLI_FLAG("n", "limit", "<n>", &fnc_init.nrecords.zlimit,
@@ -845,7 +850,7 @@ static void		 fnc_show_version(void);
 static int		 init_curses(void);
 static struct fnc_view	*view_open(int, int, int, int, enum fnc_view_id);
 static int		 open_timeline_view(struct fnc_view *, fsl_id_t,
-			    const char *);
+			    const char *, const char *);
 static int		 view_loop(struct fnc_view *);
 static int		 show_timeline_view(struct fnc_view *);
 static void		*tl_producer_thread(void *);
@@ -1155,7 +1160,7 @@ cmd_timeline(fcli_command const *argv)
 {
 	struct fnc_view	*v;
 	fsl_cx		*const f = fcli_cx();
-	char		*path = NULL;
+	char		*glob = NULL, *path = NULL;
 	fsl_id_t	 rid = 0;
 	int		 rc = 0;
 
@@ -1176,6 +1181,8 @@ cmd_timeline(fcli_command const *argv)
 			    fnc_init.sym);
 	}
 
+	if (fnc_init.glob)
+		glob = fsl_strdup(fnc_init.glob);
 	if (fnc_init.path)
 		path = fsl_strdup(fnc_init.path);
 	else
@@ -1186,13 +1193,14 @@ cmd_timeline(fcli_command const *argv)
 		goto end;
 	v = view_open(0, 0, 0, 0, FNC_VIEW_TIMELINE);
 	if (v == NULL) {
-		RC(FSL_RC_ERROR, "%s", "view_open");
+		rc = RC(FSL_RC_ERROR, "%s", "view_open");
 		goto end;
 	}
-	rc = open_timeline_view(v, rid, path);
+	rc = open_timeline_view(v, rid, path, glob);
 	if (!rc)
 		rc = view_loop(v);
 end:
+	fsl_free(glob);
 	fsl_free(path);
 	return rc;
 }
@@ -1502,7 +1510,8 @@ view_open(int nlines, int ncols, int start_ln, int start_col,
 }
 
 static int
-open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
+open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path,
+    const char *glob)
 {
 	struct fnc_tl_view_state	*s = &view->state.timeline;
 	fsl_cx				*const f = fcli_cx();
@@ -1657,6 +1666,26 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 		    fnc_init.filter_user)))
 		goto end;
 
+	if (glob) {
+		/* Filter commits on comment, user, and branch name. */
+		char *like = fsl_mprintf("%%%%%s%%%%", glob);
+		idtag = fsl_db_g_id(db, 0,
+		    "SELECT tagid FROM tag WHERE tagname LIKE 'sym-%q'",
+		    like);
+		rc = fsl_buffer_appendf(&sql,
+		    " AND (coalesce(ecomment, comment) LIKE %Q "
+		    " OR coalesce(euser, user) LIKE %Q%c",
+		    like, like, idtag ? ' ' : ')');
+		if (!rc && idtag > 0)
+			rc = fsl_buffer_appendf(&sql,
+			    " OR EXISTS(SELECT 1 FROM tagxref"
+			    " WHERE tagid=%"FSL_ID_T_PFMT
+			    " AND tagtype > 0 AND rid=blob.rid))", idtag);
+		fsl_free(like);
+		if (rc)
+			goto end;
+	}
+
 	if (startdate) {
 		fsl_buffer_appendf(&sql, " AND event.mtime <= %s", startdate);
 		fsl_free(startdate);
@@ -1737,7 +1766,7 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path)
 end:
 	fsl_buffer_clear(&sql);
 	if (rc) {
-		close_timeline_view(view);
+		view_close(view);
 		if (db->error.code)
 			rc = fsl_cx_uplift_db_error(f, db);
 	}
@@ -2778,6 +2807,7 @@ help(struct fnc_view *view)
 	    {"  >,.              ", "  ❬>❭❬.❭          "},
 	    {"  Enter,Space      ", "  ❬Enter❭❬Space❭  "},
 	    {"  b                ", "  ❬b❭             "},
+	    {"  F                ", "  ❬F❭             "},
 	    {"  t                ", "  ❬t❭             "},
 	    {""},
 	    {""}, /* Diff */
@@ -2840,6 +2870,7 @@ help(struct fnc_view *view)
 	    "Move selection cursor down one commit",
 	    "Open diff view of the selected commit",
 	    "Open and populate branch view with all repository branches",
+	    "Open prompt to enter term with which to filter new timeline view",
 	    "Display a tree reflecting the state of the selected commit",
 	    "",
 	    "Diff",
@@ -3182,6 +3213,55 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case 'c':
 		s->colour = !s->colour;
 		break;
+	case 'F': {
+		struct fnc_view *new;
+		char glob[BUFSIZ];
+		int retval;
+		mvwaddstr(view->window, view->start_ln + view->nlines - 1, 0,
+		    "/");
+		wclrtoeol(view->window);
+		nocbreak();
+		echo();
+		retval = wgetnstr(view->window, glob, sizeof(glob));
+		cbreak();
+		noecho();
+		if (retval == ERR)
+			return rc;
+		if (view_is_parent(view))
+			start_col = view_split_start_col(view->start_col);
+		new = view_open(view->nlines, view->ncols, view->start_ln,
+		    start_col, FNC_VIEW_TIMELINE);
+		if (new == NULL)
+			return RC(FSL_RC_ERROR, "%s", "view_open");
+		rc = open_timeline_view(new, 0, "/", glob);
+		if (rc) {
+			if (rc != FSL_RC_BREAK)
+				return rc;
+			wattr_on(view->window, A_BOLD, NULL);
+			mvwaddstr(view->window,
+			    view->start_ln + view->nlines - 1, 0,
+			    "-- no matching commits --");
+			wclrtoeol(view->window);
+			wattr_off(view->window, A_BOLD, NULL);
+			fcli_err_reset();
+			rc = 0;
+			update_panels();
+			doupdate();
+			sleep(1);
+			break;
+		}
+		view->active = false;
+		new->active = true;
+		if (view_is_parent(view)) {
+			rc = view_close_child(view);
+			if (rc)
+				return rc;
+			view_set_child(view, new);
+			view->focus_child = true;
+		} else
+			*new_view = new;
+		break;
+	}
 	case 't':
 		if (s->selected_commit == NULL)
 			break;
@@ -5542,8 +5622,8 @@ usage_timeline(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
 	    " usage: %s timeline [-C|--no-colour] [-T tag] [-b branch] "
-	    "[-c commit] [-h|--help] [-n n] [-t type] [-u user] [-z|--utc] "
-	    "[path]\n"
+	    "[-c commit] [-f glob] [-h|--help] [-n n] [-t type] [-u user] "
+	    "[-z|--utc] [path]\n"
 	    "  e.g.: %s timeline --type ci -u jimmy src/frobnitz.c\n\n",
 	    fcli_progname(), fcli_progname());
 }
@@ -6822,10 +6902,8 @@ timeline_tree_entry(struct fnc_view **new_view, int start_col,
 	if (rc)
 		return rc;
 
-	rc = open_timeline_view(timeline_view, s->rid, path);
-	if (rc)
-		view_close(timeline_view);
-	else
+	rc = open_timeline_view(timeline_view, s->rid, path, NULL);
+	if (!rc)
 		*new_view = timeline_view;
 
 	fsl_free(path);
@@ -9197,16 +9275,11 @@ tl_branch_entry(struct fnc_view **new_view, int start_col,
 		return RC(rc, "%s", "fsl_uuid_to_rid");
 
 	timeline_view = view_open(0, 0, 0, start_col, FNC_VIEW_TIMELINE);
-	if (timeline_view == NULL) {
-		rc = RC(FSL_RC_ERROR, "%s", "view_open");
-		goto end;
-	}
+	if (timeline_view == NULL)
+		return RC(FSL_RC_ERROR, "%s", "view_open");
 
-	rc = open_timeline_view(timeline_view, rid, "/");
-end:
-	if (rc)
-		view_close(timeline_view);
-	else
+	rc = open_timeline_view(timeline_view, rid, "/", NULL);
+	if (!rc)
 		*new_view = timeline_view;
 	return rc;
 }

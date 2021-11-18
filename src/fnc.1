@@ -31,6 +31,7 @@
 .Op Fl Cz
 .Op Fl b Ar branch
 .Op Fl c Ar commit
+.Op Fl f Ar glob
 .Op Fl n Ar number
 .Op Fl T Ar tag
 .Op Fl t Ar type
@@ -174,8 +175,9 @@ Clear the specified
 .Tg log
 .It Cm timeline Oo Fl C | -no-colour Oc Oo Fl T | -tag Ar tag Oc \
 Oo Fl b | -branch Ar branch Oc Oo Fl c | -commit Ar commit Oc \
-Oo Fl h | -help Oc  Oo Fl n | -limit Ar n Oc  Oo Fl t | -type Ar type Oc \
-Oo Fl u | -username Ar user Oc Oo Fl z | -utc Oc  Op Ar path
+Oo Fl f | -filter Ar glob Oc Oo Fl h | -help Oc  Oo Fl n | -limit Ar n Oc \
+Oo Fl t | -type Ar type Oc Oo Fl u | -username Ar user Oc Oo Fl z | -utc Oc \
+Op Ar path
 .Dl (aliases: Cm log , Cm tl , Cm time , Cm ti )
 Display commit history of a repository.  If
 .Ar path
@@ -222,6 +224,18 @@ will open the timeline to the latest leaf on the repository tree.  For a
 complete list of valid arguments this option accepts, see
 .Lk https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki \
 "Fossil's Check-in Names".
+.It Fl f , -filter Ar glob
+Filter timeline by commits containing
+.Ar glob
+in any of the commit comment, user, or branch fields.  Pattern matching depends
+on the
+.Xr sqlite3 1
+.B
+LIKE
+operator, which only folds case for the ASCII character set.  Filtering can also
+be performed in-session with the
+.Sy F
+timeline view key binding as documented below.
 .It Fl h , -help
 Display timeline command help and usage information then exit.
 .It Fl n , -limit Ar n
@@ -299,6 +313,10 @@ Open and populate branch view with all repository branches.
 Toggle colourised timeline. On supported terminals,
 .Nm
 will default to displaying the timeline in colour.
+.It Cm F
+Prompt to enter a search term to filter a new timeline view by commits with
+comment, user, or branch fields that match the entered pattern.  If no commits
+match, a message is displayed on screen.
 .It Cm t
 Display the tree of the repository corresponding to the currently selected
 commit.
