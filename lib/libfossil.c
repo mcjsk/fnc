@@ -9243,6 +9243,36 @@ fsl_realloc_f_failing,
 NULL/*state*/
 };
 
+#if !defined(FCLI_USE_SIGACTION)
+#  if (defined(_POSIX_C_SOURCE) || defined(sa_sigaction/*BSD*/)) \
+  && defined(HAVE_SIGACTION)
+/* ^^^ on Linux, sigaction() is only available in <signal.h>
+   if _POSIX_C_SOURCE is set */
+#    define FCLI_USE_SIGACTION HAVE_SIGACTION
+#  else
+#    define FCLI_USE_SIGACTION 0
+#  endif
+#endif
+
+#if FCLI_USE_SIGACTION
+#include <signal.h> /* sigaction(), if our feature macros are set right */
+/**
+   SIGINT handler which calls fsl_cx_interrupt().
+*/
+static void fcli__sigc_handler(int s){
+  static fsl_cx * f = 0;
+  if(f) return/*disable concurrent interruption*/;
+  f = fcli_cx();
+  if(f && !fsl_cx_interrupted(f)){
+    //f_out("^C\n"); // no - this would interfere with curses apps
+    fsl_cx_interrupt(f, FSL_RC_INTERRUPTED,
+                     "Interrupted by signal #%d.", s);
+    f = NULL;
+  }
+}
+#endif
+/* ^^^ FCLI_USE_SIGACTION */
+
 void fcli_pre_setup(void){
   static int run = 0;
   if(run++) return;
@@ -9251,6 +9281,13 @@ void fcli_pre_setup(void){
     /* This MUST be done BEFORE the fsl API allocates
        ANY memory! */;
   atexit(fcli_shutdown);
+#if FCLI_USE_SIGACTION
+  struct sigaction sigIntHandler;
+  sigIntHandler.sa_handler = fcli__sigc_handler;
+  sigemptyset(&sigIntHandler.sa_mask);
+  sigIntHandler.sa_flags = 0;
+  sigaction(SIGINT, &sigIntHandler, NULL);
+#endif
 }
 /**
    oldMode must be true if fcli.cliFlags is NULL, else false.
@@ -9397,6 +9434,10 @@ int fcli_err_report2(bool clear, char const * file, int line){
   int errRc = 0;
   char const * msg = NULL;
   errRc = fsl_error_get( fcli__error, &msg, NULL );
+  if(!errRc && fcli.f && fcli.f->interrupted){
+    errRc = fcli.f->interrupted;
+    msg = "Interrupted.";
+  }
   if(FCLI_RC_HELP==errRc){
     errRc = 0;
   }else if(errRc || msg){
@@ -9409,7 +9450,10 @@ int fcli_err_report2(bool clear, char const * file, int line){
                   fcli.appName, errRc, fsl_rc_cstr(errRc), msg);
     }
   }
-  if(clear) fcli_err_reset();
+  if(clear){
+    fcli_err_reset();
+    if(fcli.f) fsl_cx_interrupt(fcli.f, 0, NULL);
+  }
   return errRc;
 }
 
@@ -9864,7 +9908,7 @@ void fcli_dump_cache_metrics(void){
         f->cache.mcache.hits,
         f->cache.mcache.misses);
   f_out("fsl_cx::cache::blobContent hits = %u misses = %u. "
-        "Entry count=%u totaling %u byte(s)\n",
+        "Entry count=%u totaling %u byte(s).\n",
         f->cache.blobContent.metrics.hits,
         f->cache.blobContent.metrics.misses,
         f->cache.blobContent.used,
@@ -9875,6 +9919,7 @@ void fcli_dump_cache_metrics(void){
 #undef fcli_empty_m
 #undef fcli__error
 #undef MARKER
+#undef FCLI_USE_SIGACTION
 /* end of file cli.c */
 /* start of file content.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
@@ -12750,7 +12795,7 @@ void fsl_cx_finalize( fsl_cx * const f ){
 }
 
 void fsl_cx_err_reset(fsl_cx * const f){
-  //f->interrupted = 0;
+  //f->interrupted = 0; // No! ONLY modify this via fsl_cx_interrupt()
   fsl_error_reset(&f->error);
   fsl_db_err_reset(&f->dbMem);
   fsl_db_err_reset(&f->repo.db);
@@ -14509,8 +14554,21 @@ bool fsl_cx_has_ckout(fsl_cx const * const f ){
   return f->ckout.dir ? true : false;
 }
 
-int fsl_cx_interrupt(fsl_cx * const f, int code){
-  return f->interrupted = code;
+int fsl_cx_interruptv(fsl_cx * const f, int code, char const * fmt, va_list args){
+  f->interrupted = code;
+  if(code && NULL!=fmt){
+    code = fsl_cx_err_setv(f, code, fmt, args);
+  }
+  return code;
+}
+
+int fsl_cx_interrupt(fsl_cx * const f, int code, char const * fmt, ...){
+  int rc;
+  va_list args;
+  va_start(args,fmt);
+  rc = fsl_cx_interruptv(f, code, fmt, args);
+  va_end(args);
+  return rc;
 }
 
 int fsl_cx_interrupted(fsl_cx const * const f){

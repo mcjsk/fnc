@@ -7832,25 +7832,57 @@ FSL_EXPORT int fsl_cx_confirm(fsl_cx * const f, fsl_confirm_detail const * detai
                               fsl_confirm_response *outAnswer);
 
 /**
-   Sets f's is-interrupted flag. This error flag is separate from f's
-   normal error state and is _not_ cleared by fsl_cx_err_reset(). To
-   clear the interrupted flag, pass 0 as the 2nd argument and NULL as
-   the 3rd. This flag _is_ fetched by fsl_cx_err_get() but does not
-   have an associated error message.
+   Sets f's is-interrupted flag and, if the 3rd argument is not NULL,
+   its error state. The
+   is-interrupted flag is separate from f's normal error state and is
+   _not_ cleared by fsl_cx_err_reset(). To clear the interrupted flag,
+   call this function with values of 0 and NULL for the 2nd and 3rd
+   arguments, respective. This flag is _not_ fetched by fsl_cx_err_get()
+   but:
 
-   Returns code.
+   1) If this function is passed a non-NULL 3rd argument, then the
+   normal error state is updated and can be fetched normally.
+
+   2) However, it is possible for any error message provided via this
+   routine to be overwritten or reset by another routine before the
+   interrupted flag can be acted upon, whereas the interrupted flag
+   itself can only be modified by this routine.
+
+   Returns its 2nd argument on success or FSL_RC_OOM if given a
+   formatted string and allocation of it fails. In either case, the
+   interrupted flag, as returned by fsl_cx_interrupted(), is _always_
+   the passed-in code.
+
+   If passed a code of 0, the is-interrupted flag is reset but the
+   general error state is not.
 
    Results are undefined if this function is called twice
-   concurrently.  i.e. all calls must come from a single
+   concurrently. i.e. all calls must come from a single
    thread. Results are also undefined if it is called while f is in
-   its finalization phase.
+   its finalization phase (typically during application shutdown).
 
    ACHTUNG: this is new as of 2021-11-18 and is not yet widely honored
    within the API.
 
+   Library maintenance notes:
+
+   - Long-running actions which honor this flag should, if it is set,
+   clear it before returning its error code. Also, they should prefer
+   to pass on non-interruption errors if one has been set set, in
+   addition to clearing the interruption flag. Only routines which
+   honor this flag, or top-most routines in the application, should
+   ever clear this flag.
+
    @see fsl_cx_interrupted()
+   @see fsl_cx_interruptv()
 */
-FSL_EXPORT int fsl_cx_interrupt(fsl_cx * const f, int code);
+FSL_EXPORT int fsl_cx_interrupt(fsl_cx * const f, int code,
+                                const char * fmt, ...);
+
+/**
+   The va_list counterpart of fsl_cx_interrupt().
+*/
+FSL_EXPORT int fsl_cx_interruptv(fsl_cx * const f, int code, char const * fmt, va_list args);
 
 /**
    If f's is-interrupted flag is set, this function returns its
