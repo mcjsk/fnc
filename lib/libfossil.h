@@ -3354,7 +3354,7 @@ FSL_EXPORT fsl_size_t fsl_htmlize_xlate(int c, char const ** xlate);
    changed without also changing the corresponding code in
    diff.c.
 
-   @deprecated in favor of fsl_diff2_flag_e and fsl_diff_v2()
+   @deprecated Prefer fsl_diff2_flag_e and fsl_diff_v2() instead.
 */
 enum fsl_diff_flag_e {
 /** Ignore end-of-line whitespace */
@@ -3462,7 +3462,8 @@ FSL_EXPORT int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *p
                                        fsl_buffer *pOut, short contextLines,
                                        short sbsWidth, int diffFlags );
 
-/**
+/** @enum fsl_diff2_flag_e
+
    Flags for use with the 2021-era text-diff generation APIs
    (fsl_diff_builder and friends). This set of flags may still change
    considerably.
@@ -7833,33 +7834,34 @@ FSL_EXPORT int fsl_cx_confirm(fsl_cx * const f, fsl_confirm_detail const * detai
 
 /**
    Sets f's is-interrupted flag and, if the 3rd argument is not NULL,
-   its error state. The
-   is-interrupted flag is separate from f's normal error state and is
-   _not_ cleared by fsl_cx_err_reset(). To clear the interrupted flag,
-   call this function with values of 0 and NULL for the 2nd and 3rd
-   arguments, respective. This flag is _not_ fetched by fsl_cx_err_get()
-   but:
+   its error state. The is-interrupted flag is separate from f's
+   normal error state and is _not_ cleared by fsl_cx_err_reset(). To
+   clear the interrupted flag, call this function with values of 0 and
+   NULL for the 2nd and 3rd arguments, respective. This flag is _not_
+   fetched by fsl_cx_err_get() but:
 
    1) If this function is passed a non-NULL 3rd argument, then the
-   normal error state is updated and can be fetched normally.
+   normal error state, as well as the is-interrupted flag, is updated
+   and can be fetched normally via fsl_cx_err_get(). However...
 
-   2) However, it is possible for any error message provided via this
-   routine to be overwritten or reset by another routine before the
+   2) It is possible for any error message provided via this routine
+   to be overwritten or reset by another routine before the
    interrupted flag can be acted upon, whereas the interrupted flag
    itself can only be modified by this routine.
 
    Returns its 2nd argument on success or FSL_RC_OOM if given a
    formatted string and allocation of it fails. In either case, the
    interrupted flag, as returned by fsl_cx_interrupted(), is _always_
-   the passed-in code.
+   assigned to the passed-in code.
 
    If passed a code of 0, the is-interrupted flag is reset but the
-   general error state is not.
+   general error state is not modified.
 
-   Results are undefined if this function is called twice
-   concurrently. i.e. all calls must come from a single
-   thread. Results are also undefined if it is called while f is in
-   its finalization phase (typically during application shutdown).
+   Results are undefined if this function is called twice concurrently
+   with the same fsl_cx object. i.e. all calls for a given fsl_cx must
+   come from a single thread. Results are also undefined if it is
+   called while f is in its finalization phase (typically during
+   application shutdown).
 
    ACHTUNG: this is new as of 2021-11-18 and is not yet widely honored
    within the API.
@@ -11818,7 +11820,7 @@ FSL_EXPORT int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_i
    being 100% certain requires passing the contents to
    fsl_deck_parse() to fully parse them.
 */
-FSL_EXPORT bool fsl_might_be_artifact(fsl_buffer const * src);
+FSL_EXPORT bool fsl_might_be_artifact(fsl_buffer const * const src);
 
 /**
    Loads the content from given rid and tries to parse it as a
@@ -13885,6 +13887,174 @@ extern const fsl_annotate_opt fsl_annotate_opt_empty;
 */
 FSL_EXPORT int fsl_annotate( fsl_cx * const f,
                              fsl_annotate_opt const * const opt );
+
+
+/** Convenience typedef and forward decl. */
+typedef struct fsl_rebuild_opt fsl_rebuild_opt;
+
+/**
+   State for use with the fsl_rebuild_f() callback type.
+*/
+struct fsl_rebuild_step {
+  /**
+     Fossil context for which this rebuild is being performed.
+  */
+  fsl_cx * f;
+  /**
+     The options object used for this invocation of fsl_repo_rebuild().
+  */
+  fsl_rebuild_opt const * opt;
+  /**
+     An _approximate_ upper bound on the number of files
+     fsl_repo_rebuild() will process. This number is very likely
+     somewhat larger than the number of times which opt->callback()
+     will be called, but it is close enough to give some indication of
+     how far along a rebuild is.
+  */
+  uint32_t artifactCount;
+  /**
+     One-based counter of total artifacts processed so far. After
+     rebuilding is finished, opt->callback will be called one final
+     time with this value set to 0. The callback may use the value 0
+     to recognize that this is post-rebuild step and finalize any
+     output or whatever it wants to do.
+  */
+  uint32_t stepNumber;
+
+  /**
+     The `blob.rid` value of the just-processed blob. If stepNumber is 0,
+     this will be 0.
+  */
+  fsl_id_t rid;
+
+  /**
+     The size of the just-processed blob, -1 if it is a phantom
+     blob, or 0 if this->stepNumber is 0.
+  */
+  fsl_int_t blobSize;
+
+  /**
+     Set to FSL_SATYPE_INVALID if the just-processed blob
+     is _not_ a fossil artifact, else false. This will never be
+     set to FSL_SATYPE_ANY.
+  */
+  fsl_satype_e artifactType;
+};
+/** Convenience typedef. */
+typedef struct fsl_rebuild_step fsl_rebuild_step;
+
+/** Initialized-with-defaults fsl_rebuild_step structure, intended for
+    const-copy initialization. */
+#define fsl_rebuild_step_empty_m {NULL,NULL,0,0,-1,false}
+
+/** Initialized-with-defaults fsl_rebuild_step structure, intended for
+    non-const copy initialization. */
+FSL_EXPORT const fsl_rebuild_step fsl_rebuild_step_empty;
+
+/**
+   Callback for use with fsl_repo_rebuild() in order to report
+   progress. It must return 0 on success, and any non-0 results will
+   abort the rebuild and be propagated back to the caller.
+
+   Each time this is called, state->stepNumber will be incremented, starting
+   at 1. After rebuilding is complete, it is called with a stepNumber
+   of 0 to give the callback a chance to do any final bookkeeping or output
+   cleanup or whatever.
+*/
+typedef int (*fsl_rebuild_f)(fsl_rebuild_step const * const state);
+
+/**
+   Options for the rebuild process.
+*/
+struct fsl_rebuild_opt {
+  /**
+     Scan artifacts in a random order (generally only of use in testing
+     the library's code).
+
+     NOT YET IMPLEMENTED.
+  */
+  bool randomize;
+  /**
+     True if clusters should be created.
+
+     NOT YET IMPLEMENTED.
+  */  
+  bool clustering;
+  /**
+     If true, the transaction started by the rebuild process will end
+     in a rollback even on success. In that case, if a transaction is
+     started before the rebuild is initiated, it will be left in the
+     rolling-back state after rebuild completes.
+  */
+  bool dryRun;
+  /**
+     If not NULL, this gets called after each blob table entry is
+     processed so that the client can provide some form of feedback
+     about the rebuild progress.
+  */
+  fsl_rebuild_f callback;
+  /**
+     Optional state for the callback function.
+  */
+  void * callbackState;
+};
+
+/** Initialized-with-defaults fsl_rebuild_opt structure, intended for
+    const-copy initialization. */
+#define fsl_rebuild_opt_empty_m {false,false,false}
+
+/** Initialized-with-defaults fsl_rebuild_opt structure, intended for
+    non-const copy initialization. */
+FSL_EXPORT const fsl_rebuild_opt fsl_rebuild_opt_empty;
+
+
+/**
+   "Rebuilds" the current repository database. This involves _at least_
+   the following:
+
+   - DROPPING all transient repository tables. ALL tables in the db
+     which do not specifically belong to fossil and do not start with
+     the name `fx_` _will be dropped_.
+
+   - Recreating all transient tables from immutable state in the
+     database.
+
+   - Updating the schema, if needed, from "older" versions of the
+     fossil schema to the "current" one. This library does not
+     currently check for updates which need to be made to a decade-old
+     schema, however! That is, schema changes which were introduced
+     10+ years ago are not currently addressed by this library
+     because, frankly, it's not expected that anyone using this
+     library will be using it with such ancient repositories (and
+     those who do can rebuild it once with fossil(1) to update it).
+
+   - Crosslinking all blobs which appear to be artifacts (meaning they
+     can be parsed as such). Any crosslink handlers registered via
+     fsl_xlink_listener() will be called.
+
+
+   Returns 0 on success, non-0 on error (with any number of potential
+   result codes from the db or crosslinking layers). It runs in a
+   transaction and will roll back on non-0, so it "shouldn't" leave a
+   mess on error. If opt->dryRun is true then it also rolls back the
+   transaction but it is not treated as an error.
+
+   During the rebuild process opt->callback will, if it is not NULL,
+   be called to provide feedback on its progress.
+
+   This operation honors interruption via fsl_cx_interrupt() but, due
+   to intricacies of timing, it's possible that a triggered interrupt
+   gets trumped by another error which happens while the check for the
+   interrupt flag is pending. In both cases this function could return
+   a non-0 code, though.
+
+   @todo As of this writing, this library cannot crosslink ticket
+   artifacts, so this routine does _not_ drop and rebuild the
+   ticket-related tables. If the FSL_CX_F_SKIP_UNKNOWN_CROSSLINKS
+   flag is _not_ set on f, this routine _will fail_ if it encounters
+   any ticket artifacts.
+*/
+FSL_EXPORT int fsl_repo_rebuild(fsl_cx * const f, fsl_rebuild_opt const * const opt);
 
 #if defined(__cplusplus)
 } /*extern "C"*/

@@ -83,9 +83,9 @@
 /* _WIN32 */
 
 
-#define FSL_LIB_VERSION_HASH "2b136fe2e70cdf010287df214f4939b2b08a5661"
-#define FSL_LIB_VERSION_TIMESTAMP "2021-11-18 09:44:16.017 UTC"
-#define FSL_LIB_CONFIG_TIME "2021-11-18 13:24 GMT"
+#define FSL_LIB_VERSION_HASH "2a405470c0d32a84f8644de1b5c509635a7e78cb"
+#define FSL_LIB_VERSION_TIMESTAMP "2021-11-18 17:40:56.695 UTC"
+#define FSL_LIB_CONFIG_TIME "2021-11-18 18:02 GMT"
 #if defined(_MSC_VER)
 #define FSL_PLATFORM_OS "windows"
 #define FSL_PLATFORM_IS_WINDOWS 1
@@ -136,6 +136,17 @@
 #define FSL_CHECKOUTDB_NAME "./.fslckout"
 #endif
 
+#if !defined(HAVE_SIGACTION)
+#  if defined(FSL_AMALGAMATION_BUILD)
+#    if defined(FSL_PLATFORM_IS_UNIX)
+#      define HAVE_SIGACTION 1
+#    else
+#      define HAVE_SIGACTION 0
+#    endif
+#  else
+#    define HAVE_SIGACTION 0
+#  endif
+#endif
 
 #endif
 /* _NET_FOSSIL_SCM_FSL_AMALGAMATION_CONFIG_H_INCLUDED_ */

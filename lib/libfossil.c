@@ -75,6 +75,7 @@ const fsl_outputer fsl_outputer_FILE = fsl_outputer_FILE_m;
 const fsl_outputer fsl_outputer_empty = fsl_outputer_empty_m;
 const fsl_pathfinder fsl_pathfinder_empty = fsl_pathfinder_empty_m;
 const fsl__pq fsl__pq_empty = fsl__pq_empty_m;
+const fsl_rebuild_step fsl_rebuild_step_empty = fsl_rebuild_step_empty_m;
 const fsl_repo_create_opt fsl_repo_create_opt_empty =
   fsl_repo_create_opt_empty_m;
 const fsl_repo_extract_opt fsl_repo_extract_opt_empty =
@@ -21858,19 +21859,19 @@ static fsl_satype_e fsl_deck_guess_type( const int * l ){
   return FSL_SATYPE_ANY;
 }
 
-bool fsl_might_be_artifact(fsl_buffer const * src){
+bool fsl_might_be_artifact(fsl_buffer const * const src){
   unsigned const char * z = src->mem;
   fsl_size_t n = src->used;
-  if(n<36) return 0;
+  if(n<36) return false;
   fsl__remove_pgp_signature(&z, &n);
-  if(n<36) return 0;
+  if(n<36) return false;
   else if(z[0]<'A' || z[0]>'Z' || z[1]!=' '
           || z[n-35]!='Z'
           || z[n-34]!=' '
           || !fsl_validate16((const char *)z+n-33, FSL_STRLEN_MD5)){
-    return 0;
+    return false;
   }
-  return 1;
+  return true;
 }
 
 int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_id_t rid){
@@ -33764,23 +33765,551 @@ int fsl_repo_manifest_write(fsl_cx *f,
 }
 
 /**
-   NOT YET IMPLEMENTED. (We have the infrastructure, just need to glue
-   it together.)
-
-   Re-crosslinks all artifacts of the given type (or all artifacts if
-   the 2nd argument is FSL_SATYPE_ANY). This is an expensive
-   operation, involving dropping the contents of any corresponding
-   auxiliary tables, loading and parsing the appropriate artifacts,
-   and re-creating the auxiliary tables.
-
-   TODO: add a way for callers to get some sort of progress feedback
-   and abort the process by returning non-0 from that handler. We can
-   possibly do that via defining an internal-use crosslink listener
-   which carries more state, e.g. for calculating completion progress.
+   Internal state for the rebuild process.
 */
-//FSL_EXPORT int fsl_repo_relink_artifacts(fsl_cx *f, void * someOptionsType);
+struct FslRebuildState {
+  fsl_cx * f;
+  fsl_db * db;
+  fsl_rebuild_opt const * opt;
+  fsl_stmt qDeltas;
+  fsl_stmt qSize;
+  fsl_stmt qChild;
+  fsl_id_bag idsDone;
+  fsl_rebuild_step step;
+};
+typedef struct FslRebuildState FslRebuildState;
+const FslRebuildState FslRebuildState_empty = {
+NULL, NULL, NULL,
+fsl_stmt_empty_m, fsl_stmt_empty_m, fsl_stmt_empty_m,
+fsl_id_bag_empty_m/*idsDone*/,
+fsl_rebuild_step_empty_m
+};
+
+static int fsl__rebuild_update_schema(FslRebuildState * const frs){
+  int rc = 0;
+  char * zBlobSchema = NULL;
+
+  /* Verify that the PLINK table has a new column added by the
+  ** 2014-11-28 schema change.  Create it if necessary.  This code
+  ** can be removed in the future, once all users have upgraded to the
+  ** 2014-11-28 or later schema.
+  */
+  if(!fsl_db_table_has_column(frs->db, "plink", "baseid")){
+    rc = fsl_cx_exec(frs->f,
+                     "ALTER TABLE repository.plink ADD COLUMN baseid");
+    if(rc) goto end;
+
+  }
+
+  /* Verify that the MLINK table has the newer columns added by the
+  ** 2015-01-24 schema change.  Create them if necessary.  This code
+  ** can be removed in the future, once all users have upgraded to the
+  ** 2015-01-24 or later schema.
+  */
+  if( !fsl_db_table_has_column(frs->db,"mlink","isaux") ){
+    rc = fsl_cx_exec_multi(frs->f,
+      "ALTER TABLE repo.mlink ADD COLUMN pmid INTEGER DEFAULT 0;"
+      "ALTER TABLE repo.mlink ADD COLUMN isaux BOOLEAN DEFAULT 0;"
+    );
+    if(rc) goto end;
+  }
+
+  /* We're going to skip several older (2011) schema updates for the
+     time being on the grounds of YAGNI. */
+
+  /**
+     Update the repository schema for Fossil version 2.0.  (2017-02-28)
+     (1) Change the CHECK constraint on BLOB.UUID so that the length
+     is greater than or equal to 40, not exactly equal to 40.
+  */
+  zBlobSchema =
+    fsl_db_g_text(frs->db, NULL, "SELECT sql FROM %!Q.sqlite_schema"
+                  " WHERE name='blob'", fsl_db_role_label(FSL_DBROLE_REPO));
+  if(!zBlobSchema){
+    /* ^^^^ reminder: fossil(1) simply ignores this case, silently
+       doing nothing instead. */
+    rc = fsl_cx_uplift_db_error(frs->f, frs->db);
+    if(!rc){
+      rc = fsl_cx_err_set(frs->f, FSL_RC_DB,
+                          "Unknown error fetching blob table schema.");
+    }
+    goto end;
+  }
+  /* Search for:  length(uuid)==40
+  **              0123456789 12345   */
+  for(int i=10; zBlobSchema[i]; i++){
+    if( zBlobSchema[i]=='='
+        && fsl_strncmp(&zBlobSchema[i-6],"(uuid)==40",10)==0 ){
+      int rc2 = 0;
+      zBlobSchema[i] = '>';
+      sqlite3_db_config(frs->db->dbh, SQLITE_DBCONFIG_DEFENSIVE, 0, &rc2);
+      rc = fsl_cx_exec_multi(frs->f,
+           "PRAGMA writable_schema=ON;"
+           "UPDATE %!Q.sqlite_schema SET sql=%Q WHERE name LIKE 'blob';"
+           "PRAGMA writable_schema=OFF;",
+           fsl_db_role_label(FSL_DBROLE_REPO), zBlobSchema
+      );
+      sqlite3_db_config(frs->db->dbh, SQLITE_DBCONFIG_DEFENSIVE, 1, &rc2);
+      break;
+    }
+  }
+  if(rc) goto end;
+  rc = fsl_cx_exec(frs->f,
+    "CREATE VIEW IF NOT EXISTS "
+    "  %!Q.artifact(rid,rcvid,size,atype,srcid,hash,content) AS "
+    "    SELECT blob.rid,rcvid,size,1,srcid,uuid,content"
+    "      FROM blob LEFT JOIN delta ON (blob.rid=delta.rid);",
+    fsl_db_role_label(FSL_DBROLE_REPO)
+  );
+  
+  end:
+  fsl_free(zBlobSchema);
+  return rc;
+}
+
+#define INTCHECK frs->f->interrupted ? frs->f->interrupted :
+/**
+   Inserts rid into frs->idsDone and calls frs->opt->callback. Returns
+   0 on success.
+*/
+static int fsl__rebuild_step_done(FslRebuildState * const frs, fsl_id_t rid){
+  assert( !fsl_id_bag_contains(&frs->idsDone, rid) );
+  int rc = fsl_id_bag_insert(&frs->idsDone, rid);
+  if(0==rc && frs->opt->callback){
+    ++frs->step.stepNumber;
+    frs->step.rid = rid;
+    rc = frs->opt->callback(&frs->step);
+  }
+  return rc ? rc : (INTCHECK 0);
+}
+
+/**
+   Rebuilds cross-referencing state for the given RID and its content,
+   recursively on all of its descendents. The contents of the input
+   buffer are taken over by this routine.
+
+   If other artifacts are deltas based off of the given artifact, they
+   are processed as well.
+
+   Returns 0 on success.
+*/
+static int fsl__rebuild_step(FslRebuildState * const frs, fsl_id_t rid,
+                             int64_t blobSize, fsl_buffer * const content){
+  fsl_deck deck = fsl_deck_empty;
+  fsl_buffer deckContent = fsl_buffer_empty;
+  fsl_id_bag idsChildren = fsl_id_bag_empty;
+  int rc = frs->f->interrupted;
+  if(rc) goto end;
+  assert(rid>0);
+  if(!frs->qSize.stmt){
+    rc = fsl_cx_prepare(frs->f, &frs->qSize,
+                        "UPDATE blob SET size=?1 WHERE rid=?2/*%s()*/",
+                        __func__);
+    if(rc) goto end;
+  }else{
+    fsl_stmt_reset(&frs->qSize);
+  }
+  if(!frs->qDeltas.stmt){
+    rc = fsl_cx_prepare(frs->f, &frs->qDeltas,
+                        "SELECT rid FROM delta WHERE srcid=?1/*%s()*/",
+                        __func__);
+  }else{
+    fsl_stmt_reset(&frs->qDeltas);
+  }
+  while(0==rc && rid>0){
+    //MARKER(("TODO: %s(rid=%d)\n", __func__, (int)rid));
+    if(blobSize != (int64_t)content->used){
+      /* Fix [blob.size] field if needed. (Why would this ever
+         be needed?) */
+      rc = fsl_stmt_bind_step(&frs->qSize, "IR", (int64_t)content->used, rid);
+      if(rc){
+        fsl_cx_uplift_db_error(frs->f, frs->qSize.db);
+        break;
+      }
+      blobSize = (int64_t)content->used;
+    }
+    /* Find all deltas based off of rid... */
+    rc = fsl_stmt_bind_fmt(&frs->qDeltas, "R", rid);
+    if(rc){
+      fsl_cx_uplift_db_error(frs->f, frs->qDeltas.db);
+      break;
+    }
+    fsl_id_bag_reset(&idsChildren);
+    while(0==rc && FSL_RC_STEP_ROW==fsl_stmt_step(&frs->qDeltas)){
+      fsl_id_t const cid = fsl_stmt_g_id(&frs->qDeltas, 0);
+      if(!fsl_id_bag_contains(&frs->idsDone, cid)){
+        rc = fsl_id_bag_insert(&idsChildren, cid);
+      }
+    }
+    fsl_stmt_reset(&frs->qDeltas);
+    rc = INTCHECK rc;
+    if(rc) break;
+
+    fsl_size_t const nChild = fsl_id_bag_count(&idsChildren);
+    if(fsl_id_bag_contains(&frs->idsDone, rid)){
+      /* Kludge! This check should not be necessary. Testing with the
+         libfossil repo, this check is not required on the main x86
+         dev machine but is on a Raspberry Pi 4, for reasons
+         as-yet-unknown. On the latter, artifact
+         1ee529429e2aa6ffbeffb0cf73bb51a34a8547b8 (an opaque file, not
+         a fossil artifact) makes it into frs->idsDone
+         unexpectedly(?), triggering an assert() in
+         fsl__rebuild_step_done(). */
+      goto doChildren;
+    }
+    if(nChild){
+      /* Parsing the deck will mutate the buffer, so we need a copy of
+         the input content to apply the next delta to. */
+      rc = fsl_buffer_copy(&deckContent, content);
+      if(rc) break;
+    }else{
+      /* We won't be applying any deltas, so use the deck content the
+         user passed in. */
+      fsl_buffer_swap(content, &deckContent);
+      fsl_buffer_clear(content);
+    }
+    frs->step.blobSize = blobSize;
+    /* At this point fossil(1) decides between rebuild and
+       deconstruct, performing different work for each. We're skipping
+       the deconstruct option for now but may want to add it
+       later. See fossil's rebuild.c:rebuild_step(). Note that
+       deconstruct is not a capability intended for normal client
+       use. It's primarily for testing of fossil itself. */
+    fsl_deck_init(frs->f, &deck, FSL_SATYPE_ANY);
+    //MARKER(("rid=%d\n", (int)rid));
+    rc = INTCHECK fsl_deck_parse2(&deck, &deckContent, rid)
+      /* But isn't it okay if rid is not an artifact? */;
+    switch(rc){
+      case FSL_RC_SYNTAX:
+        /* Assume deck is not an artifact. Fall through and continue
+           processing the delta children. */
+        fsl_cx_err_reset(frs->f);
+        rc = 0;
+        frs->step.artifactType = FSL_SATYPE_INVALID;
+        break;
+      case 0:
+        frs->step.artifactType = deck.type;
+        rc = INTCHECK fsl__deck_crosslink(&deck);
+        break;
+      default:
+#if 0
+        MARKER(("err=%s for rid=%d content=\n%.*s\n", fsl_rc_cstr(rc), (int)rid,
+                (int)deckContent.used, (char const *)deckContent.mem));
+#endif
+        break;
+    }
+    fsl_buffer_clear(&deckContent);
+    fsl_deck_finalize(&deck);
+    rc = INTCHECK 0;
+    if(0==rc && 0==(rc = frs->f->interrupted)){
+      rc = fsl__rebuild_step_done( frs, rid );
+    }
+    if(rc) break;
+    /* Process all dependent deltas recursively... */
+    doChildren:
+    rid = 0;
+    fsl_size_t i = 1;
+    for(fsl_id_t cid = fsl_id_bag_first(&idsChildren);
+         0==rc && cid!=0; cid = fsl_id_bag_next(&idsChildren, cid), ++i){
+      int64_t sz;
+      if(!frs->qChild.stmt){
+        rc = fsl_cx_prepare(frs->f, &frs->qChild,
+                            "SELECT content, size "
+                            "FROM blob WHERE rid=?1/*%s()*/",
+                            __func__);
+        if(rc) break;
+      }else{
+        fsl_stmt_reset(&frs->qChild);
+      }
+      fsl_stmt_bind_id(&frs->qChild, 1, cid);
+      if( FSL_RC_STEP_ROW==fsl_stmt_step(&frs->qChild) &&
+          (sz = fsl_stmt_g_int64(&frs->qChild, 1))>=0 ){
+        fsl_buffer next = fsl_buffer_empty;
+        fsl_buffer delta = fsl_buffer_empty;
+        void const * blob = 0;
+        fsl_size_t deltaBlobSize = 0;
+        rc = INTCHECK fsl_stmt_get_blob(&frs->qChild, 0, &blob, &deltaBlobSize)
+          /* Library-level TODO: a heuristic/convention in fsl_buffer
+             APIs which says that if buf.mem is not NULL and buf.capacity
+             is 0 then the memory is owned elsewhere and must be copied
+             if/when it would be modified by the buffer API. That would allow
+             us to emulate some of the buffer-copy optimization which fossil does,
+             e.g. in this very spot.
+           */;
+        if(rc) goto outro;
+        rc = fsl_buffer_append(&delta, blob, (fsl_int_t)deltaBlobSize);
+        fsl_stmt_reset(&frs->qChild);
+        rc = INTCHECK fsl_buffer_uncompress(&delta, &delta);
+        if(rc) goto outro;
+        rc = INTCHECK fsl_buffer_delta_apply(content, &delta, &next);
+        fsl_buffer_clear(&delta);
+        if(rc){
+          if(FSL_RC_OOM!=rc){
+            rc = fsl_cx_err_set(frs->f, rc,
+                                "Error applying delta #%" FSL_ID_T_PFMT
+                                " to parent #%" FSL_ID_T_PFMT, cid, rid);
+          }
+          goto outro;
+        }
+        if(i<nChild){
+          rc = INTCHECK fsl__rebuild_step(frs, cid, sz, &next);
+          assert(!next.mem);
+        }else{
+          /* Tail recursion */
+          rid = cid;
+          blobSize = sz;
+          fsl_buffer_clear(content);
+          *content = next/*transfer ownership*/;
+        }
+        if(0==rc) continue;
+        outro:
+        assert(0!=rc);
+        fsl_stmt_reset(&frs->qChild);
+        fsl_buffer_clear(&delta);
+        fsl_buffer_clear(&next);
+        break;
+      }else{
+        fsl_stmt_reset(&frs->qChild);
+        fsl_buffer_clear(content);
+      }
+    }
+  }
+  end:
+  fsl_deck_finalize(&deck);
+  fsl_buffer_clear(content);
+  fsl_buffer_clear(&deckContent);
+  fsl_id_bag_clear(&idsChildren);
+  return rc ? rc : (INTCHECK 0);
+}
+#undef INTCHECK
+/**
+   Check to see if the "sym-trunk" tag exists.  If not, create it and
+   attach it to the very first check-in. Returns 0 on success.
+*/
+static int fsl__rebuild_tag_trunk(FslRebuildState * const frs){
+  fsl_id_t const tagid =
+    fsl_db_g_id(frs->db, 0,
+                "SELECT 1 FROM tag WHERE tagname='sym-trunk'");
+  if(tagid>0) return 0;
+  fsl_id_t const rid =
+    fsl_db_g_id(frs->db, 0,
+                "SELECT pid FROM plink AS x WHERE NOT EXISTS"
+                "(SELECT 1 FROM plink WHERE cid=x.pid)");
+  if(rid==0) return 0;
+
+  /* Add the trunk tag to the root of the whole tree */
+  int rc = 0;
+  fsl_buffer * const b = fsl__cx_scratchpad(frs->f);
+  rc = fsl_rid_to_uuid2(frs->f, rid, b);
+  switch(rc){
+    case FSL_RC_NOT_FOUND:
+      rc = 0/*fossil ignores this case without an error*/;
+      break;
+    case 0: {
+      fsl_deck d = fsl_deck_empty;
+      char const * zUuid = fsl_buffer_cstr(b);
+      fsl_deck_init(frs->f, &d, FSL_SATYPE_CONTROL);
+      rc = fsl_deck_T_add(&d, FSL_TAGTYPE_PROPAGATING,
+                          zUuid, "sym-trunk", NULL);
+      if(0==rc) rc = fsl_deck_T_add(&d, FSL_TAGTYPE_PROPAGATING,
+                                    zUuid, "branch", "trunk");
+      if(0==rc){
+        char const * userName = fsl_cx_user_guess(frs->f);
+        if(!userName){
+          rc = fsl_cx_err_set(frs->f, FSL_RC_NOT_FOUND,
+                              "Cannot determine user name for "
+                              "control artifact.");
+        }else{
+          rc = fsl_deck_U_set(&d, userName);
+        }
+      }
+      if(0==rc){
+        rc = fsl_deck_save(&d, fsl_content_is_private(frs->f, rid));
+      }
+      fsl_deck_finalize(&d);
+      break;
+    }
+    default: break;
+  }
+  fsl__cx_scratchpad_yield(frs->f, b);
+  return rc;
+}
 
 
+
+#define FSL__REBUILD_SKIP_TICKETS 1 /* remove this once crosslinking does
+                                       something useful with tickets. */
+
+static int fsl__rebuild(fsl_cx * const f, fsl_rebuild_opt const * const opt){
+  fsl_stmt s = fsl_stmt_empty;
+  fsl_stmt q = fsl_stmt_empty;
+  fsl_db * const db = fsl_cx_db_repo(f);
+  int rc;
+  FslRebuildState frs = FslRebuildState_empty;
+  fsl_buffer sql = fsl_buffer_empty;
+  assert(db);
+  frs.f = frs.step.f = f;
+  frs.db = db;
+  frs.opt = frs.step.opt = opt;
+  rc = fsl__rebuild_update_schema(&frs);
+  if(!rc) rc = fsl_buffer_reserve(&sql, 1024 * 4);
+  if(rc) goto end;
+
+  fsl__cx_clear_mf_seen(f, false);
+  rc = fsl_cx_prepare(f, &q,
+     "SELECT name FROM %!Q.sqlite_schema /*scan*/"
+     " WHERE type='table'"
+     " AND name NOT IN ('admin_log', 'blob','delta','rcvfrom','user','alias',"
+                       "'config','shun','private','reportfmt',"
+                       "'concealed','accesslog','modreq',"
+                       "'purgeevent','purgeitem','unversioned',"
+#if FSL__REBUILD_SKIP_TICKETS
+                      "'ticket','ticketchng',"
+#endif
+                       "'subscriber','pending_alert','chat'"
+                      ")"
+     " AND name NOT GLOB 'sqlite_*'"
+     " AND name NOT GLOB 'fx_*'",
+     fsl_db_role_label(FSL_DBROLE_REPO)
+  );
+  while( 0==rc && FSL_RC_STEP_ROW==fsl_stmt_step(&q) ){
+    rc = fsl_buffer_appendf(&sql, "DROP TABLE IF EXISTS %!Q;\n",
+                            fsl_stmt_g_text(&q, 0, NULL));
+  }
+  fsl_stmt_finalize(&q);
+  if(0==rc && fsl_buffer_size(&sql)){
+    rc = fsl_cx_exec_multi(f, "%b", &sql);
+  }
+  if(rc) goto end;
+
+  rc = fsl_cx_exec_multi(f, "%s", fsl_schema_repo2());
+#if !FSL__REBUILD_SKIP_TICKETS
+  if(0==rc) rc = fsl__cx_ticket_create_table(f);
+#endif
+  if(0==rc) rc = fsl__shunned_remove(f);
+  if(0==rc){
+    rc = fsl_cx_exec_multi(f,
+      "INSERT INTO unclustered"
+      " SELECT rid FROM blob EXCEPT SELECT rid FROM private;"
+      "DELETE FROM unclustered"
+      " WHERE rid IN (SELECT rid FROM shun JOIN blob USING(uuid));"
+      "DELETE FROM config WHERE name IN ('remote-code', 'remote-maxid');"
+      "UPDATE user SET mtime=now() WHERE mtime IS NULL;"
+    );  
+  }
+  if(rc) goto end;
+
+  /* The following should be count(*) instead of max(rid). max(rid) is
+  ** an adequate approximation, however, and is much faster for large
+  ** repositories. */
+  if(1){
+    frs.step.artifactCount =
+      (uint32_t)fsl_db_g_id(db, 0, "SELECT count(*) FROM blob");
+  }else{
+    frs.step.artifactCount =
+      (uint32_t)fsl_db_g_id(db, 0, "SELECT max(rid) FROM blob");
+  }
+
+  //totalSize += incrSize*2;
+  rc = fsl_cx_prepare(f, &s,
+     "SELECT rid, size FROM blob /*scan*/"
+     " WHERE NOT EXISTS(SELECT 1 FROM shun WHERE uuid=blob.uuid)"
+     "   AND NOT EXISTS(SELECT 1 FROM delta WHERE rid=blob.rid)"
+  );
+  if(rc) goto end;
+  rc = fsl__crosslink_begin(f)
+    /* Maintenace reminder: if this call succeeds, BE SURE that
+       we do not skip past the fsl__crosslink_end() call via
+       (goto end). Doing so would get the transaction stack out
+       of sync. */;
+  if(rc) goto end /*to skip fsl__crosslink_end() call!*/;
+  while( 0==rc && FSL_RC_STEP_ROW==fsl_stmt_step(&s) ){
+    fsl_id_t const rid = fsl_stmt_g_id(&s, 0);
+    int64_t const size = fsl_stmt_g_int64(&s, 1);
+    if( size>=0 ){
+      fsl_buffer content = fsl_buffer_empty;
+      rc = fsl_content_get(f, rid, &content);
+      if(0==rc){
+        rc = fsl__rebuild_step(&frs, rid, size, &content);
+        assert(!content.mem);
+      }
+      fsl_buffer_clear(&content);
+    }
+  }
+  fsl_stmt_finalize(&s);
+  if(rc) goto crosslink_end;
+  rc = fsl_cx_prepare(f, &s,
+     "SELECT rid, size FROM blob"
+     " WHERE NOT EXISTS(SELECT 1 FROM shun WHERE uuid=blob.uuid)"
+  );
+  while( 0==rc && FSL_RC_STEP_ROW==fsl_stmt_step(&s) ){
+    fsl_id_t const rid = fsl_stmt_g_id(&s, 0);
+    int64_t const size = fsl_stmt_g_int64(&s, 1);
+    if( size>=0 ){
+      if( !fsl_id_bag_contains(&frs.idsDone, rid) ){
+        fsl_buffer content = fsl_buffer_empty;
+        rc = fsl_content_get(f, rid, &content);
+        if(0==rc){
+          rc = fsl__rebuild_step(&frs, rid, size, &content);
+          assert(!content.mem);
+        }
+        fsl_buffer_clear(&content);
+      }
+    }else{
+      rc = fsl_cx_exec_multi(f, "INSERT OR IGNORE INTO phantom "
+                             "VALUES(%" FSL_ID_T_PFMT ")", rid);
+      if(0==rc){
+        frs.step.blobSize = -1;
+        frs.step.artifactType = FSL_SATYPE_INVALID;
+        rc = fsl__rebuild_step_done(&frs, rid);
+      }
+    }
+  }
+  fsl_stmt_finalize(&s);
+  crosslink_end:
+  rc = fsl__crosslink_end(f, rc);
+  if(rc) goto end;
+  rc = fsl__rebuild_tag_trunk(&frs);
+  if(rc) goto end;
+  //if( opt->clustering ) rc = fsl__create_cluster(f);
+  rc = fsl_cx_exec_multi(f,
+     "REPLACE INTO config(name,value,mtime) VALUES('content-schema',%Q,now());"
+      "REPLACE INTO config(name,value,mtime) VALUES('aux-schema',%Q,now());"
+      "REPLACE INTO config(name,value,mtime) VALUES('rebuilt',%Q,now());",
+      FSL_CONTENT_SCHEMA, FSL_AUX_SCHEMA,
+      "libfossil " FSL_LIB_VERSION_HASH " " FSL_LIB_VERSION_TIMESTAMP
+  );
+  end:
+  if(0==rc && frs.opt->callback){
+    frs.step.stepNumber = 0;
+    frs.step.rid = 0;
+    frs.step.blobSize = 0;
+    rc = frs.opt->callback(&frs.step);
+  }
+  fsl_buffer_clear(&sql);
+  fsl_stmt_finalize(&s);
+  fsl_stmt_finalize(&frs.qDeltas);
+  fsl_stmt_finalize(&frs.qSize);
+  fsl_stmt_finalize(&frs.qChild);
+  fsl_id_bag_clear(&frs.idsDone);
+  return rc;
+}
+
+int fsl_repo_rebuild(fsl_cx * const f, fsl_rebuild_opt const * const opt){
+  int rc = 0;
+  fsl_db * const db = fsl_needs_repo(f);
+  if(!db) return rc;
+  rc = fsl_cx_transaction_begin(f);
+  if(0==rc){
+    rc = fsl__rebuild(f, opt);
+    int const rc2 = fsl_cx_transaction_end(f, opt->dryRun || rc!=0);
+    if(0==rc && 0!=rc2) rc = rc2;
+  }
+  fsl_cx_interrupt(f, 0, NULL);
+  return rc;
+}
+
+#undef FSL__REBUILD_SKIP_TICKETS
 #undef MARKER
 /* end of file repo.c */
 /* start of file schema.c */
