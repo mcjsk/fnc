@@ -173,7 +173,7 @@ static struct fnc_setup {
 	struct artifact_types {
 		const char	**values;
 		short		  nitems;
-	} *filter_types;		/* Only load commits of <type>. */
+	} filter_types;			/* Only load commits of <type>. */
 	union {
 		const char	 *zlimit;
 		int		  limit;
@@ -222,12 +222,12 @@ static struct fnc_setup {
 	false,		/* hflag if --help is requested. */
 	false,		/* vflag if --version is requested. */
 	false,		/* reverse branch sort/annotation defaults to off. */
-	NULL,		/* filter_types defaults to indiscriminate. */
+	{NULL, 0},	/* filter_types defaults to indiscriminate. */
 	{0},		/* nrecords defaults to all commits. */
 	NULL,		/* filter_tag defaults to indiscriminate. */
 	NULL,		/* filter_branch defaults to indiscriminate. */
 	NULL,		/* filter_user defaults to indiscriminate. */
-	NULL,		/* filter_type temporary placeholder. */
+	NULL,		/* filter_type temp placeholder for filter_types cb. */
 	NULL,		/* glob filter defaults to off; all commits are shown */
 	false,		/* utc defaults to off (i.e., show user local time). */
 	NULL,		/* context defaults to five context lines. */
@@ -316,6 +316,7 @@ static struct fnc_setup {
 	    "\tt  - ticket\n"
 	    "\te  - technote\n"
 	    "\tf  - forum post\n"
+	    "\tg  - tag artifact\n"
 	    "    n.b. This is a repeatable flag (e.g., -t ci -t w)."),
 	    FCLI_FLAG("u", "username", "<user>", &fnc_init.filter_user,
 	    "Only display commits authored by <username>."),
@@ -1068,11 +1069,6 @@ main(int argc, const char **argv)
 	char		*path = NULL;
 	int		 rc = 0;
 
-	fnc_init.filter_types =
-	    (struct artifact_types *)fsl_malloc(sizeof(struct artifact_types));
-	fnc_init.filter_types->values = fsl_malloc(sizeof(char *));
-	fnc_init.filter_types->nitems = 0;
-
 	if (!setlocale(LC_CTYPE, ""))
 		fsl_fprintf(stderr, "[!] Warning: Can't set locale.\n");
 
@@ -1610,18 +1606,12 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path,
 	    /*6*/"coalesce(ecomment, comment) AS comment FROM event JOIN blob "
 	    "WHERE blob.rid=event.objid", fnc_init.utc ? "" : ", 'localtime'");
 
-	if (fnc_init.filter_types->nitems) {
+	if (fnc_init.filter_types.nitems) {
 		fsl_buffer_appendf(&sql, " AND (");
-		for (idx = 0; idx < fnc_init.filter_types->nitems; ++idx) {
+		for (idx = 0; idx < fnc_init.filter_types.nitems; ++idx)
 			fsl_buffer_appendf(&sql, " eventtype=%Q%s",
-			    fnc_init.filter_types->values[idx], (idx + 1) <
-			    fnc_init.filter_types->nitems ? " OR " : ")");
-			/* This produces a double-free? */
-			/* fsl_free((char *)fnc_init.filter_types->values[idx]); */
-			fnc_init.filter_types->values[idx] = NULL;
-		}
-		fsl_free(fnc_init.filter_types->values);
-		fsl_free(fnc_init.filter_types);
+			    fnc_init.filter_types.values[idx], (idx + 1) <
+			    fnc_init.filter_types.nitems ? " OR " : ")");
 	}
 
 	if (fnc_init.filter_branch) {
@@ -5529,20 +5519,26 @@ view_resize(struct fnc_view *view)
 
 /*
  * Consume repeatable arguments containing artifact type values used in
- * constructing the SQL query to generate commit records of the specified
- * type for the timeline. TODO: Enhance this to generalise processing of
- * various repeatable arguments--paths, usernames, branches, etc.--so we
- * can filter on multiples of these values.
+ * constructing the SQL query to generate commit records of the specified type
+ * for the timeline. n.b. filter_types->values is owned by fcli—do not free.
+ * TODO: Enhance to generalise processing of various repeatable args--paths,
+ * usernames, branches, etc.--so we can filter on multiples of these values.
  */
 static int
 fcli_flag_type_arg_cb(fcli_cliflag const *v)
 {
-	if (fnc_init.filter_types->nitems)
-		fnc_init.filter_types->values =
-		    fsl_realloc(fnc_init.filter_types->values,
-		    (fnc_init.filter_types->nitems + 1) * sizeof(char *));
-	fnc_init.filter_types->values[fnc_init.filter_types->nitems++] =
-	    *((const char **)v->flagValue);
+	struct artifact_types	*ft = &fnc_init.filter_types;
+	const char		*t = *((const char **)v->flagValue);
+
+	if (*t != 'e' && *t != 'f' && *t != 'g' &&
+	    *t != 't' && *t != 'w' && fsl_strcmp(t, "ci")) {
+		fnc_init.err = RC(FSL_RC_TYPE, "invalid type: %s", t);
+		usage();
+		/* NOT REACHED */
+	}
+
+	ft->values = fsl_realloc(ft->values, (ft->nitems + 1) * sizeof(char *));
+	ft->values[ft->nitems++] = t;
 
 	return FCLI_RC_FLAG_AGAIN;
 }
