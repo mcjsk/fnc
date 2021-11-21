@@ -816,10 +816,10 @@ is the current foreground (i.e., text) colour in the terminal.
 User-definable colour objects displayed in various
 .Nm
 views are as follows:
-.Bl -tag -width FNC_COLOUR_DIFF_MINUS
+.Bl -tag -width FNC_COLOUR_BRANCH_PRIVATE
 .It Ev FNC_COLOUR_COMMIT
-The commit hash ID field displayed in all views.  If not defined, the default
-value is
+The commit hash ID field displayed in the timeline, diff, tree, and blame views.
+If not defined, the default value is
 .Qq green .
 .It Ev FNC_COLOUR_USER
 The username field displayed in the timeline and diff views.  If not defined,
@@ -829,10 +829,6 @@ the default value is
 The date field displayed in the timeline and diff views.  If not defined, the
 default value is
 .Qq yellow .
-.It Ev FNC_COLOUR_TAGS
-The tag field displayed in the timeline and diff views.  If not defined, the
-default value is
-.Qq magenta .
 .It Ev FNC_COLOUR_DIFF_MINUS
 Removed lines displayed in the diff view.  If not defined, the default value is
 .Qq magenta .
@@ -849,6 +845,9 @@ displayed in the diff view.  If not defined, the default value is
 .It Ev FNC_COLOUR_DIFF_META
 Metadata displayed in the diff view.  If not defined, the default value is
 .Qq green .
+.It Ev FNC_COLOUR_DIFF_TAGS
+The tag field displayed in the diff view.  If not defined, the default value is
+.Qq magenta .
 .It Ev FNC_COLOUR_TREE_DIR
 Directory entries displayed in the tree view.  If not defined, the default value
 is
@@ -861,6 +860,22 @@ value is
 Symbolic link entries displayed in the tree view.  If not defined, the default
 value is
 .Qq magenta .
+.It Ev FNC_COLOUR_BRANCH_OPEN
+Open branches displayed in the branch view.  If not defined, the default value
+is
+.Qq cyan .
+.It Ev FNC_COLOUR_BRANCH_CLOSED
+Closed branches displayed in the branch view.  If not defined, the default value
+is
+.Qq magenta .
+.It Ev FNC_COLOUR_BRANCH_CURRENT
+The branch corresponding to the current checkout displayed in the branch view.
+If not defined, the default value is
+.Qq green .
+.It Ev FNC_COLOUR_BRANCH_PRIVATE
+Private branches displayed in the branch view.  If not defined, the default
+value is
+.Qq yellow .
 .El
 .Pp
 To clear environment variables, issue

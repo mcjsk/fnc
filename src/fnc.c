@@ -449,11 +449,6 @@ static struct fnc_setup {
 
 };
 
-enum fsl_list_object {
-	FNC_ARTIFACT_OBJ,
-	FNC_COLOUR_OBJ
-};
-
 enum date_string {
 	ISO8601_DATE_ONLY = 10,
 	ISO8601_TIMESTAMP = 20
@@ -485,17 +480,21 @@ enum fnc_search_state {
  * User-definable setting that must map to SETTINGS in "settings.h".
  */
 enum fnc_colour_obj {
-	FNC_COLOUR_DIFF_META = 1,
+	FNC_COLOUR_COMMIT = 1,
+	FNC_COLOUR_USER,
+	FNC_COLOUR_DATE,
+	FNC_COLOUR_DIFF_META,
 	FNC_COLOUR_DIFF_MINUS,
 	FNC_COLOUR_DIFF_PLUS,
 	FNC_COLOUR_DIFF_CHUNK,
+	FNC_COLOUR_DIFF_TAGS,
 	FNC_COLOUR_TREE_LINK,
 	FNC_COLOUR_TREE_DIR,
 	FNC_COLOUR_TREE_EXEC,
-	FNC_COLOUR_COMMIT,
-	FNC_COLOUR_USER,
-	FNC_COLOUR_DATE,
-	FNC_COLOUR_TAGS
+	FNC_COLOUR_BRANCH_OPEN,
+	FNC_COLOUR_BRANCH_CLOSED,
+	FNC_COLOUR_BRANCH_CURRENT,
+	FNC_COLOUR_BRANCH_PRIVATE
 };
 
 enum fnc_diff_type {
@@ -506,13 +505,11 @@ enum fnc_diff_type {
 };
 
 struct fnc_colour {
+	STAILQ_ENTRY(fnc_colour) entries;
 	regex_t	regex;
 	uint8_t	scheme;
 };
-
-struct fsl_list_state {
-	enum fsl_list_object	obj;
-};
+STAILQ_HEAD(fnc_colours, fnc_colour);
 
 struct fnc_commit_artifact {
 	fsl_buffer		 wiki;
@@ -640,7 +637,7 @@ struct fnc_tl_view_state {
 	struct commit_entry	*selected_commit;
 	struct commit_entry	*matched_commit;
 	struct commit_entry	*search_commit;
-	fsl_list		 colours;
+	struct fnc_colours	 colours;
 	const char		*curr_ckout_uuid;
 	char			*path;	     /* Match commits involving path. */
 	int			 selected_idx;
@@ -662,7 +659,7 @@ struct fnc_diff_view_state {
 	struct fnc_commit_artifact	*selected_commit;
 	struct fnc_pathlist_head	*paths;
 	fsl_buffer			 buf;
-	fsl_list			 colours;
+	struct fnc_colours		 colours;
 	FILE				*f;
 	fsl_uuid_str			 id1;
 	fsl_uuid_str			 id2;
@@ -691,7 +688,7 @@ struct fnc_tree_view_state {			  /* Parent trees of the- */
 	struct fnc_tree_entry		*last_entry_onscreen;
 	struct fnc_tree_entry		*selected_entry;
 	struct fnc_tree_entry		*matched_entry;
-	fsl_list			 colours;
+	struct fnc_colours		 colours;
 	char				*tree_label;  /* Headline string. */
 	fsl_uuid_str			 commit_id;
 	fsl_id_t			 rid;
@@ -750,7 +747,7 @@ struct fnc_blame_view_state {
 	struct fnc_commit_id_queue	 blamed_commits;
 	struct fnc_commit_qid		*blamed_commit;
 	struct fnc_commit_artifact	*selected_commit;
-	fsl_list			 colours;
+	struct fnc_colours		 colours;
 	fsl_uuid_str			 commit_id;
 	char				*path;
 	int				 first_line_onscreen;
@@ -786,6 +783,7 @@ struct fnc_branch_view_state {
 	struct fnc_branchlist_entry	*last_branch_onscreen;
 	struct fnc_branchlist_entry	*matched_branch;
 	struct fnc_branchlist_entry	*selected_branch;
+	struct fnc_colours		 colours;
 	const char			*branch_glob;
 	double				 dateline;
 	int				 branch_flags;
@@ -918,7 +916,8 @@ static int		 diff_file_artifact(fsl_buffer *, fsl_id_t,
 			    enum fnc_diff_type);
 static int		 show_diff(struct fnc_view *);
 static int		 write_diff(struct fnc_view *, char *);
-static int		 match_line(const void *, const void *);
+static int		 match_line(const char *, regex_t *, size_t,
+			    regmatch_t *);
 static int		 write_matched_line(int *, const char *, int, int,
 			    WINDOW *, regmatch_t *);
 static void		 draw_vborder(struct fnc_view *);
@@ -1036,7 +1035,7 @@ static void		 fnc_resizeterm(void);
 static int		 join_tl_thread(struct fnc_tl_view_state *);
 static void		 fnc_free_commits(struct commit_queue *);
 static void		 fnc_commit_artifact_close(struct fnc_commit_artifact*);
-static int		 fsl_list_object_free(void *, void *);
+static int		 fsl_file_artifact_free(void *, void *);
 static void		 sigwinch_handler(int);
 static void		 sigpipe_handler(int);
 static void		 sigcont_handler(int);
@@ -1044,19 +1043,21 @@ static int		 strtonumcheck(int *, const char *, const int,
 			    const int);
 static int		 fnc_date_to_mtime(double *, const char *, int);
 static char		*fnc_strsep (char **, const char *);
-static int		 set_colours(fsl_list *, enum fnc_view_id vid);
-static int		 set_colour_scheme(fsl_list *, const int (*)[2],
-			    const char **, int);
+static int		 set_colours(struct fnc_colours *, enum fnc_view_id);
+static int		 set_colour_scheme(struct fnc_colours *,
+			    const int (*)[2], const char **, int);
 static int		 init_colour(enum fnc_colour_obj);
-static char		*fnc_conf_get(enum fnc_colour_obj);
+static char		*fnc_conf_get(enum fnc_colour_obj, bool);
 static int		 default_colour(enum fnc_colour_obj);
 static int		 fnc_conf_set(enum fnc_colour_obj, const char *, bool);
-static int		 match_colour(const void *, const void *);
+static void		 free_colours(struct fnc_colours *);
 static bool		 fnc_home(struct fnc_view *);
 static int		 fnc_conf_ls_settings(bool);
 static int		 fnc_conf_str2enum(const char *);
 static const char	*fnc_conf_enum2str(int);
-static struct fnc_colour	*get_colour(fsl_list *, int);
+static struct fnc_colour	*get_colour(struct fnc_colours *, int);
+static struct fnc_colour	*match_colour(struct fnc_colours *,
+				    const char *);
 static struct fnc_tree_entry	*get_tree_entry(struct fnc_tree_object *,
 				    int);
 static struct fnc_tree_entry	*find_tree_entry(struct fnc_tree_object *,
@@ -1751,8 +1752,10 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path,
 	s->thread_cx.path = s->path;
 	s->thread_cx.needs_reset = false;
 
-	if (s->colour)
-		set_colours(&s->colours, FNC_VIEW_TIMELINE);
+	if (s->colour) {
+		STAILQ_INIT(&s->colours);
+		rc = set_colours(&s->colours, FNC_VIEW_TIMELINE);
+	}
 end:
 	fsl_buffer_clear(&sql);
 	if (rc) {
@@ -3632,13 +3635,12 @@ static int
 close_timeline_view(struct fnc_view *view)
 {
 	struct fnc_tl_view_state	*s = &view->state.timeline;
-	struct fsl_list_state		 st = { FNC_COLOUR_OBJ };
 	int				 rc = 0;
 
 	rc = join_tl_thread(s);
 	fsl_stmt_finalize(s->thread_cx.q);
 	fnc_free_commits(&s->commits);
-	fsl_list_clear(&s->colours, fsl_list_object_free, &st);
+	free_colours(&s->colours);
 	regfree(&view->regex);
 	fsl_free(s->path);
 	s->path = NULL;
@@ -3714,8 +3716,6 @@ fnc_free_commits(struct commit_queue *commits)
 static void
 fnc_commit_artifact_close(struct fnc_commit_artifact *commit)
 {
-	struct fsl_list_state	st = { FNC_ARTIFACT_OBJ };
-
 	if (commit->branch)
 		fsl_free(commit->branch);
 	if (commit->comment)
@@ -3728,36 +3728,20 @@ fnc_commit_artifact_close(struct fnc_commit_artifact *commit)
 		fsl_free(commit->user);
 	fsl_free(commit->uuid);
 	fsl_free(commit->puuid);
-	fsl_list_clear(&commit->changeset, fsl_list_object_free, &st);
+	fsl_list_clear(&commit->changeset, fsl_file_artifact_free, NULL);
 	fsl_list_reserve(&commit->changeset, 0);
 	fsl_free(commit);
 }
 
 static int
-fsl_list_object_free(void *elem, void *state)
+fsl_file_artifact_free(void *elem, void *state)
 {
-	struct fsl_list_state *st = state;
-
-	switch (st->obj) {
-	case FNC_ARTIFACT_OBJ: {
-		struct fsl_file_artifact *ffa = elem;
-		fsl_free(ffa->fc->name);
-		fsl_free(ffa->fc->uuid);
-		fsl_free(ffa->fc->priorName);
-		fsl_free(ffa->fc);
-		fsl_free(ffa);
-		break;
-	}
-	case FNC_COLOUR_OBJ: {
-		struct fnc_colour *c = elem;
-		regfree(&c->regex);
-		fsl_free(c);
-		break;
-	}
-	default:
-		return RC(FSL_RC_MISSING_INFO,
-		    "fsl_list_state.obj missing or invalid: %d", st->obj);
-	}
+	struct fsl_file_artifact *ffa = elem;
+	fsl_free(ffa->fc->name);
+	fsl_free(ffa->fc->uuid);
+	fsl_free(ffa->fc->priorName);
+	fsl_free(ffa->fc);
+	fsl_free(ffa);
 
 	return 0;
 }
@@ -3802,12 +3786,16 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	ignore_ws ? s->diff_flags |= FSL_DIFF_IGNORE_ALLWS : 0;
 	invert ? s->diff_flags |= FSL_DIFF_INVERT : 0;
 	s->timeline_view = timeline_view;
-	s->colours = fsl_list_empty;
 	s->colour = !fnc_init.nocolour && has_colors();
 	s->showmeta = showmeta;
 
-	if (s->colour)
-		set_colours(&s->colours, FNC_VIEW_DIFF);
+	if (s->colour) {
+		STAILQ_INIT(&s->colours);
+		rc = set_colours(&s->colours, FNC_VIEW_DIFF);
+		if (rc)
+			return rc;
+	}
+
 	if (timeline_view && screen_is_split(view))
 		show_timeline_view(timeline_view); /* draw vborder */
 	show_diff_status(view);
@@ -3817,10 +3805,8 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	s->ncols = view->ncols;
 	rc = create_diff(s);
 	if (rc) {
-		if (s->colour) {
-			struct fsl_list_state st = { FNC_COLOUR_OBJ };
-			fsl_list_clear(&s->colours, fsl_list_object_free, &st);
-		}
+		if (s->colour)
+			free_colours(&s->colours);
 		return rc;
 	}
 
@@ -4953,7 +4939,6 @@ write_diff(struct fnc_view *view, char *headln)
 	int				 max_lines = view->nlines;
 	int				 nlines = s->nlines;
 	int				 rc = 0, nprintln = 0;
-	int				 match = -1;
 
 	line_offset = s->line_offsets[s->first_line_onscreen - 1];
 	if (fseeko(s->f, line_offset, SEEK_SET))
@@ -5003,9 +4988,8 @@ write_diff(struct fnc_view *view, char *headln)
 			return rc;
 		}
 
-		if (s->colour && (match = fsl_list_index_of(&s->colours, line,
-		    match_line)) != -1)
-			c = s->colours.list[match];
+		if (s->colour)
+			c = match_colour(&s->colours, line);
 		if (c)
 			wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 		if (s->first_line_onscreen + nprintln == s->matched_line &&
@@ -5026,10 +5010,8 @@ write_diff(struct fnc_view *view, char *headln)
 			fsl_free(wcstr);
 			wcstr = NULL;
 		}
-		if (c) {
+		if (c)
 			wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
-			c = NULL;
-		}
 		if (wstrlen <= view->ncols - 1)
 			waddch(view->window, '\n');
 		++nprintln;
@@ -5054,15 +5036,6 @@ write_diff(struct fnc_view *view, char *headln)
 	}
 
 	return rc;
-}
-
-static int
-match_line(const void *ln, const void *key)
-{
-	struct fnc_colour *c = (struct fnc_colour *)key;
-	const char *line = ln;
-
-	return regexec(&c->regex, line, 0, NULL, 0);
 }
 
 static bool
@@ -5442,7 +5415,6 @@ static int
 close_diff_view(struct fnc_view *view)
 {
 	struct fnc_diff_view_state	*s = &view->state.diff;
-	struct fsl_list_state		st = { FNC_COLOUR_OBJ };
 	int				 rc = 0;
 
 	if (s->f && fclose(s->f) == EOF)
@@ -5452,7 +5424,7 @@ close_diff_view(struct fnc_view *view)
 	fsl_free(s->id2);
 	s->id2 = NULL;
 	fsl_free(s->line_offsets);
-	fsl_list_clear(&s->colours, fsl_list_object_free, &st);
+	free_colours(&s->colours);
 	s->line_offsets = NULL;
 	s->nlines = 0;
 	return rc;
@@ -5689,7 +5661,7 @@ cmd_diff(fcli_command const *argv)
 	fsl_id_t			 prid = -1, rid = -1;
 	int				 context = DIFF_DEF_CTXT, rc = 0;
 	unsigned short			 blob = 0;
-	enum fnc_diff_type		 diff_type;
+	enum fnc_diff_type		 diff_type = FNC_DIFF_CKOUT;
 	bool				 showmeta = false;
 
 	rc = fcli_process_flags(argv->flags);
@@ -5737,7 +5709,6 @@ cmd_diff(fcli_command const *argv)
 		}
 	}
 	if (!artifact2 && diff_type != FNC_DIFF_BLOB) {
-		diff_type = FNC_DIFF_CKOUT;
 		fsl_ckout_version_info(f, &rid, NULL);
 		if ((rc = fsl_ckout_changes_scan(f)))
 			return RC(rc, "%s", "fsl_ckout_changes_scan");
@@ -6004,8 +5975,12 @@ open_tree_view(struct fnc_view *view, const char *path, fsl_id_t rid)
 	s->first_entry_onscreen = &s->tree->entries[0];
 	s->selected_entry = &s->tree->entries[0];
 
-	if (s->colour)
-		set_colours(&s->colours, FNC_VIEW_TREE);
+	if (s->colour) {
+		STAILQ_INIT(&s->colours);
+		rc = set_colours(&s->colours, FNC_VIEW_TREE);
+		if (rc)
+			goto end;
+	}
 
 	view->show = show_tree_view;
 	view->input = tree_input_handler;
@@ -6450,7 +6425,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 	struct fnc_tree_entry		*te;
 	struct fnc_colour		*c = NULL;
 	wchar_t				*wcstr;
-	int				 match = -1, rc = 0;
+	int				 rc = 0;
 	int				 wstrlen, n, idx, nentries;
 	int				 limit = view->nlines;
 	uint_fast8_t			 hashlen = FSL_UUID_STRLEN_MIN;
@@ -6589,11 +6564,8 @@ draw_tree(struct fnc_view *view, const char *treepath)
 				wattr_on(view->window, A_REVERSE, NULL);
 			s->selected_entry = te;
 		}
-		if (s->colour && (match = fsl_list_index_of(&s->colours, line,
-		    match_line)) != -1)
-			c = s->colours.list[match];
-		else
-			c = NULL;
+		if (s->colour)
+			c = match_colour(&s->colours, line);
 		if (c)
 			wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 		waddwstr(view->window, wcstr);
@@ -7118,9 +7090,8 @@ static int
 close_tree_view(struct fnc_view *view)
 {
 	struct fnc_tree_view_state	*s = &view->state.tree;
-	struct fsl_list_state		 st = { FNC_COLOUR_OBJ };
 
-	fsl_list_clear(&s->colours, fsl_list_object_free, &st);
+	free_colours(&s->colours);
 
 	fsl_free(s->tree_label);
 	s->tree_label = NULL;
@@ -7204,16 +7175,16 @@ cmd_config(const fcli_command *argv)
 	value = fcli_next_arg(true);
 	if (value || fnc_init.unset) {
 		if (value && fnc_init.unset)
-			return RC(FSL_RC_MISUSE,
-			    "\n--unset %s or set %s to %s?", set, set, value);
-		char *prev = fnc_conf_get(setid);
+			return RC(FSL_RC_MISUSE, "\n--unset or set %s to %s?",
+			    set, value);
+		char *prev = fnc_conf_get(setid, true);
 		rc = fnc_conf_set(setid, value, fnc_init.unset);
 		if (!rc)
-			f_out("%s: %s -> %s", fnc_conf_enum2str(setid),
+			f_out("%s: %s -> %s (local)", fnc_conf_enum2str(setid),
 			    prev ? prev : "default", value ? value : "default");
 		fsl_free(prev);
 	} else {
-		char *v = fnc_conf_get(setid);
+		char *v = fnc_conf_get(setid, true);
 		f_out("%s = %s", fnc_conf_enum2str(setid), v ? v : "default");
 		fsl_free(v);
 	}
@@ -7235,8 +7206,9 @@ fnc_conf_ls_settings(bool all)
 	size_t	 maxlen = 0;
 
 	for (idx = FNC_START_SETTINGS + 1; idx < FNC_EOF_SETTINGS; ++idx) {
-		last = fnc_conf_get(idx) ? idx : last;
+		last = (value = fnc_conf_get(idx, true)) ? idx : last;
 		maxlen = MAX(fsl_strlen(fnc_settings[idx]), maxlen);
+		fsl_free(value);
 	}
 
 	if (!last && !all) {
@@ -7247,7 +7219,7 @@ fnc_conf_ls_settings(bool all)
 	}
 
 	for (idx = FNC_START_SETTINGS + 1;  idx < FNC_EOF_SETTINGS;  ++idx) {
-		value = fnc_conf_get(idx);
+		value = fnc_conf_get(idx, true);
 		if (value || all)
 			f_out("%-*s%s%s%c", maxlen + 2, fnc_settings[idx],
 			    value ? " = " : "", value ? value : "",
@@ -7316,7 +7288,7 @@ view_set_child(struct fnc_view *view, struct fnc_view *child)
 }
 
 static int
-set_colours(fsl_list *s, enum fnc_view_id vid)
+set_colours(struct fnc_colours *s, enum fnc_view_id vid)
 {
 	int	rc = 0;
 
@@ -7331,7 +7303,7 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 		    {FNC_COLOUR_DIFF_META, init_colour(FNC_COLOUR_DIFF_META)},
 		    {FNC_COLOUR_USER, init_colour(FNC_COLOUR_USER)},
 		    {FNC_COLOUR_DATE, init_colour(FNC_COLOUR_DATE)},
-		    {FNC_COLOUR_TAGS, init_colour(FNC_COLOUR_TAGS)},
+		    {FNC_COLOUR_DIFF_TAGS, init_colour(FNC_COLOUR_DIFF_TAGS)},
 		    {FNC_COLOUR_DIFF_MINUS, init_colour(FNC_COLOUR_DIFF_MINUS)},
 		    {FNC_COLOUR_DIFF_PLUS, init_colour(FNC_COLOUR_DIFF_PLUS)},
 		    {FNC_COLOUR_DIFF_CHUNK, init_colour(FNC_COLOUR_DIFF_CHUNK)}
@@ -7339,7 +7311,6 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 		rc = set_colour_scheme(s, pairs_diff, regexp_diff,
 		    nitems(regexp_diff));
 		break;
-
 	}
 	case FNC_VIEW_TREE: {
 		static const char *regexp_tree[] = {"@ ->", "/$", "\\*$", "^$"};
@@ -7373,16 +7344,34 @@ set_colours(fsl_list *s, enum fnc_view_id vid)
 		    nitems(regexp_blame));
 		break;
 	}
+	case FNC_VIEW_BRANCH: {
+		static const char *regexp_branch[] = {
+		    "^\\ +", "^ -", "@$", "\\*$"
+		};
+		const int pairs_branch[][2] = {
+		    {FNC_COLOUR_BRANCH_OPEN,
+		        init_colour(FNC_COLOUR_BRANCH_OPEN)},
+		    {FNC_COLOUR_BRANCH_CLOSED,
+		        init_colour(FNC_COLOUR_BRANCH_CLOSED)},
+		    {FNC_COLOUR_BRANCH_CURRENT,
+		        init_colour(FNC_COLOUR_BRANCH_CURRENT)},
+		    {FNC_COLOUR_BRANCH_PRIVATE,
+		         init_colour(FNC_COLOUR_BRANCH_PRIVATE)}
+		};
+		rc = set_colour_scheme(s, pairs_branch, regexp_branch,
+		    nitems(regexp_branch));
+		break;
+	}
 	default:
-		return RC(FSL_RC_TYPE, "%s", "invalid fnc_view_id");
+		rc = RC(FSL_RC_TYPE, "invalid fnc_view_id: %s", vid);
 	}
 
 	return rc;
 }
 
 static int
-set_colour_scheme(fsl_list *s, const int (*pairs)[2], const char **regexp,
-    int n)
+set_colour_scheme(struct fnc_colours *colours, const int (*pairs)[2],
+    const char **regexp, int n)
 {
 	struct fnc_colour	*colour;
 	int			 idx, rc = 0;
@@ -7405,61 +7394,22 @@ set_colour_scheme(fsl_list *s, const int (*pairs)[2], const char **regexp,
 
 		colour->scheme = pairs[idx][0];
 		init_pair(colour->scheme, pairs[idx][1], -1);
-		fsl_list_append(s, colour);
+		STAILQ_INSERT_HEAD(colours, colour, entries);
 	}
 
 	return rc;
 }
 
 static int
-init_colour(enum fnc_colour_obj envvar)
+init_colour(enum fnc_colour_obj id)
 {
 	char	*val = NULL;
 	int	 rc = 0;
 
-	val = fnc_conf_get(envvar);
-	if (val == NULL) {
-		const char *ev = NULL;
-		switch (envvar) {
-		case FNC_COLOUR_DIFF_META:
-			ev = getenv(STRINGIFY(FNC_COLOUR_DIFF_META));
-			break;
-		case FNC_COLOUR_DIFF_MINUS:
-			ev = getenv(STRINGIFY(FNC_COLOUR_DIFF_MINUS));
-			break;
-		case FNC_COLOUR_DIFF_PLUS:
-			ev = getenv(STRINGIFY(FNC_COLOUR_DIFF_PLUS));
-			break;
-		case FNC_COLOUR_DIFF_CHUNK:
-			ev = getenv(STRINGIFY(FNC_COLOUR_DIFF_CHUNK));
-			break;
-		case FNC_COLOUR_TREE_LINK:
-			ev = getenv(STRINGIFY(FNC_COLOUR_TREE_LINK));
-			break;
-		case FNC_COLOUR_TREE_DIR:
-			ev = getenv(STRINGIFY(FNC_COLOUR_TREE_DIR));
-			break;
-		case FNC_COLOUR_TREE_EXEC:
-			ev = getenv(STRINGIFY(FNC_COLOUR_TREE_EXEC));
-			break;
-		case FNC_COLOUR_COMMIT:
-			ev = getenv(STRINGIFY(FNC_COLOUR_COMMIT));
-			break;
-		case FNC_COLOUR_USER:
-			ev = getenv(STRINGIFY(FNC_COLOUR_USER));
-			break;
-		case FNC_COLOUR_DATE:
-			ev = getenv(STRINGIFY(FNC_COLOUR_DATE));
-			break;
-		case FNC_COLOUR_TAGS:
-			ev = getenv(STRINGIFY(FNC_COLOUR_TAGS));
-		}
-		if (ev)
-			val = fsl_strdup(ev);
-	}
+	val = fnc_conf_get(id, false);
 
 	if (val == NULL)
-		return default_colour(envvar);
+		return default_colour(id);
 
 	if (!fsl_stricmp(val, "black"))
 		rc = COLOR_BLACK;
@@ -7481,19 +7431,23 @@ init_colour(enum fnc_colour_obj envvar)
 		rc = -1;  /* Terminal default foreground colour. */
 
 	fsl_free(val);
-	return rc ? rc : default_colour(envvar);
+	return rc ? rc : default_colour(id);
 }
 
 /*
- * Lookup setting id from the repository db. If found, return a dynamically
- * allocated string obtained from fsl_db_g_text(), which must be disposed of
- * by the caller. If not found, return NULL.
+ * Lookup setting id from the repository db. If not found, search envvars. If
+ * found, return a dynamically allocated string obtained from fsl_db_g_text() or
+ * strdup(), which must be disposed of by the caller. Alternatively, if ls is
+ * set, search local settings and envvars for id. If found, dynamically allocate
+ * and return a formatted string for pretty printing the current state of id,
+ * which the caller must free. In either case, if not found, return NULL.
  */
 static char *
-fnc_conf_get(enum fnc_colour_obj id)
+fnc_conf_get(enum fnc_colour_obj id, bool ls)
 {
 	fsl_cx	*const f = fcli_cx();
 	fsl_db	*db = NULL;
+	char	*colour = NULL, *colour_g = NULL;
 
 	db = fsl_needs_repo(f);
 
@@ -7503,35 +7457,58 @@ fnc_conf_get(enum fnc_colour_obj id)
 		return NULL;
 	}
 
-	return fsl_db_g_text(db, NULL,
+	colour = fsl_db_g_text(db, NULL,
 	    "SELECT value FROM config WHERE name=%Q", fnc_conf_enum2str(id));
+
+	if (colour == NULL || ls)
+		colour_g = fsl_strdup(getenv(fnc_conf_enum2str(id)));
+
+	if (ls && (colour || colour_g)) {
+		char *colour_ls = fsl_mprintf("%s%s%s%s%s",
+		    colour ? colour : "", colour ? " (local)" : "",
+		    colour && colour_g ? ", " : "",
+		    colour_g ? colour_g : "", colour_g ? " (envvar)" : "");
+		fsl_free(colour);
+		fsl_free(colour_g);
+		colour = colour_ls;
+	}
+
+	return ls ? colour : (colour ? colour : colour_g);
 }
 
 static int
 default_colour(enum fnc_colour_obj obj)
 {
-	if (obj == FNC_COLOUR_DIFF_MINUS)
-		return COLOR_MAGENTA;
-	if (obj == FNC_COLOUR_DIFF_PLUS)
-		return COLOR_CYAN;
-	if (obj == FNC_COLOUR_DIFF_CHUNK)
-		return COLOR_YELLOW;
-	if (obj == FNC_COLOUR_DIFF_META)
-		return COLOR_GREEN;
-	if (obj == FNC_COLOUR_TREE_LINK)
-		return COLOR_MAGENTA;
-	if (obj == FNC_COLOUR_TREE_DIR)
-		return COLOR_CYAN;
-	if (obj == FNC_COLOUR_TREE_EXEC)
-		return COLOR_GREEN;
 	if (obj == FNC_COLOUR_COMMIT)
 		return COLOR_GREEN;
 	if (obj == FNC_COLOUR_USER)
 		return COLOR_CYAN;
 	if (obj == FNC_COLOUR_DATE)
 		return COLOR_YELLOW;
-	if (obj == FNC_COLOUR_TAGS)
+	if (obj == FNC_COLOUR_DIFF_META)
+		return COLOR_GREEN;
+	if (obj == FNC_COLOUR_DIFF_MINUS)
 		return COLOR_MAGENTA;
+	if (obj == FNC_COLOUR_DIFF_PLUS)
+		return COLOR_CYAN;
+	if (obj == FNC_COLOUR_DIFF_CHUNK)
+		return COLOR_YELLOW;
+	if (obj == FNC_COLOUR_DIFF_TAGS)
+		return COLOR_MAGENTA;
+	if (obj == FNC_COLOUR_TREE_LINK)
+		return COLOR_MAGENTA;
+	if (obj == FNC_COLOUR_TREE_DIR)
+		return COLOR_CYAN;
+	if (obj == FNC_COLOUR_TREE_EXEC)
+		return COLOR_GREEN;
+	if (obj == FNC_COLOUR_BRANCH_OPEN)
+		return COLOR_CYAN;
+	if (obj == FNC_COLOUR_BRANCH_CLOSED)
+		return COLOR_MAGENTA;
+	if (obj == FNC_COLOUR_BRANCH_CURRENT)
+		return COLOR_GREEN;
+	if (obj == FNC_COLOUR_BRANCH_PRIVATE)
+		return COLOR_YELLOW;
 
 	return -1;  /* Terminal default foreground colour. */
 }
@@ -7557,27 +7534,49 @@ fnc_conf_set(enum fnc_colour_obj id, const char *val, bool unset)
 }
 
 struct fnc_colour *
-get_colour(fsl_list *colours, int scheme)
+get_colour(struct fnc_colours *colours, int scheme)
 {
-	struct fnc_colour	cs;
-	int			match = -1;
+	struct fnc_colour *c = NULL;
 
-	cs.scheme = scheme;
-	match = fsl_list_index_of(colours, &cs, match_colour);
+	STAILQ_FOREACH(c, colours, entries) {
+		if (c->scheme == scheme)
+			return c;
+	}
 
-	if (match != -1)
-		return colours->list[match];
+	return NULL;
+}
+
+struct fnc_colour *
+match_colour(struct fnc_colours *colours, const char *line)
+{
+	struct fnc_colour *c = NULL;
+
+	STAILQ_FOREACH(c, colours, entries) {
+		if (match_line(line, &c->regex, 0, NULL))
+			return c;
+	}
 
 	return NULL;
 }
 
 static int
-match_colour(const void *target, const void *key)
+match_line(const char *line, regex_t *regex, size_t nmatch,
+    regmatch_t *regmatch)
 {
-	struct fnc_colour *c = (struct fnc_colour *)key;
-	struct fnc_colour *t = (struct fnc_colour *)target;
+	return regexec(regex, line, nmatch, regmatch, 0) == 0;
+}
 
-	return (c->scheme == t->scheme) ? 0 : 1;
+static void
+free_colours(struct fnc_colours *colours)
+{
+	struct fnc_colour *c;
+
+	while (!STAILQ_EMPTY(colours)) {
+		c = STAILQ_FIRST(colours);
+		STAILQ_REMOVE_HEAD(colours, entries);
+		regfree(&c->regex);
+		fsl_free(c);
+	}
 }
 
 /*
@@ -7713,6 +7712,7 @@ open_blame_view(struct fnc_view *view, char *path, fsl_uuid_str commit_id,
 	s->colour = !fnc_init.nocolour && has_colors();
 
 	if (s->colour) {
+		STAILQ_INIT(&s->colours);
 		rc = set_colours(&s->colours, FNC_VIEW_BLAME);
 		if (rc)
 			return rc;
@@ -8611,7 +8611,6 @@ static int
 close_blame_view(struct fnc_view *view)
 {
 	struct fnc_blame_view_state	*s = &view->state.blame;
-	struct fsl_list_state		 st = { FNC_COLOUR_OBJ };
 	int				 rc = 0;
 
 	rc = stop_blame(&s->blame);
@@ -8624,7 +8623,7 @@ close_blame_view(struct fnc_view *view)
 	}
 
 	fsl_free(s->path);
-	fsl_list_clear(&s->colours, fsl_list_object_free, &st);
+	free_colours(&s->colours);
 
 	return rc;
 }
@@ -8791,8 +8790,10 @@ open_branch_view(struct fnc_view *view, int branch_flags, const char *glob,
 	if (rc)
 		return rc;
 
-	if (s->colour)
-		init_pair(FNC_COLOUR_COMMIT, COLOR_GREEN, -1);
+	if (s->colour) {
+		STAILQ_INIT(&s->colours);
+		rc = set_colours(&s->colours, FNC_VIEW_BRANCH);
+	}
 
 	view->show = show_branch_view;
 	view->input = branch_input_handler;
@@ -8800,7 +8801,7 @@ open_branch_view(struct fnc_view *view, int branch_flags, const char *glob,
 	view->search_init = branch_search_init;
 	view->search_next = branch_search_next;
 
-	return 0;
+	return rc;
 }
 
 static int
@@ -9034,6 +9035,7 @@ show_branch_view(struct fnc_view *view)
 {
 	struct fnc_branch_view_state	*s = &view->state.branch;
 	struct fnc_branchlist_entry	*be;
+	struct fnc_colour		*c = NULL;
 	char				*line = NULL;
 	wchar_t				*wline;
 	int				 limit, n, width, rc = 0;
@@ -9088,6 +9090,9 @@ show_branch_view(struct fnc_view *view)
 		if (line == NULL)
 			return RC(FSL_RC_ERROR, "%s", "fsl_mprintf");
 
+		if (s->colour)
+			c = match_colour(&s->colours, line);
+
 		rc = formatln(&wline, &width, line, view->ncols, 0);
 		if (rc) {
 			fsl_free(line);
@@ -9099,11 +9104,11 @@ show_branch_view(struct fnc_view *view)
 				wattr_on(view->window, A_REVERSE, NULL);
 			s->selected_branch = be;
 		}
-		if (s->colour)
-			wattr_on(view->window, COLOR_PAIR(FNC_COLOUR_COMMIT), NULL);
+		if (c)
+			wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 		waddwstr(view->window, wline);
-		if (s->colour)
-			wattr_off(view->window, COLOR_PAIR(FNC_COLOUR_COMMIT), NULL);
+		if (c)
+			wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
 		if (width < view->ncols - 1)
 			waddch(view->window, '\n');
 		if (n == s->selected && view->active)
@@ -9429,7 +9434,11 @@ match_branchlist_entry(struct fnc_branchlist_entry *be, regex_t *regex)
 static int
 close_branch_view(struct fnc_view *view)
 {
-	fnc_free_branches(&view->state.branch.branches);
+	struct fnc_branch_view_state *s = &view->state.branch;
+
+	fnc_free_branches(&s->branches);
+	free_colours(&s->colours);
+
 	return 0;
 }
 
