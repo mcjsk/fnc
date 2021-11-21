@@ -62,7 +62,7 @@
 .Op Ar glob
 .Nm
 .Cm config
-.Op Fl ghu
+.Op Fl hu
 .Op Fl -ls
 .Op Ar setting Op Ar value
 .Nm
@@ -138,9 +138,9 @@ Commands available to
 are as follows:
 .Bl -tag -width 4v
 .Tg conf
-.It Cm config Oo Fl g | -global Oc Oo Fl h | -help Oc Oo Fl -ls Oc \
-Oo Fl u | -unset Oc Oo Ar setting Op Ar value Oc
-.Dl (aliases: Cm conf , Cm cfg, settings, set )
+.It Cm config Oo Fl h | -help Oc Oo Fl -ls Oc \
+Oo Ar setting Op Ar value | Fl -unset Oc
+.Dl Pq aliases: Cm conf , Cm cfg, settings, set
 Retrieve the current, or set a new,
 .Ar value
 for
@@ -178,7 +178,7 @@ Oo Fl b | -branch Ar branch Oc Oo Fl c | -commit Ar commit Oc \
 Oo Fl f | -filter Ar glob Oc Oo Fl h | -help Oc  Oo Fl n | -limit Ar n Oc \
 Oo Fl t | -type Ar type Oc Oo Fl u | -username Ar user Oc Oo Fl z | -utc Oc \
 Op Ar path
-.Dl (aliases: Cm log , Cm tl , Cm time , Cm ti )
+.Dl Pq aliases: Cm log , Cm tl , Cm time , Cm ti
 Display commit history of a repository.  If
 .Ar path
 is specified, only commits that modified the file(s) at this path will populate
@@ -294,9 +294,9 @@ are as follows:
 Move selection cursor down the timeline.
 .It Cm Arrow-up, k, <, \&,
 Move selection cursor up the timeline.
-.It Cm Ctrl+f, Page-down
+.It Cm C-f, Page-down
 Move selection cursor one page down the timeline.
-.It Cm Ctrl+b, Page-up
+.It Cm C-b, Page-up
 Move selection cursor one page up the timeline.
 .It Cm G, End
 Move selection cursor to the last commit on the timeline (i.e., oldest commit
@@ -341,7 +341,7 @@ on the timeline is consumed.
 .It Cm diff Oo Fl C | -no-colour Oc Oo Fl h | -help Oc Oo Fl i | -invert \
 Oc Oo Fl w | -whitespace Oc Oo Fl x | -context Ar n Oc \
 Oo Ar artifact1 Oo Ar artifact2 Oc Oc Op Ar path ...
-.Dl (alias: Cm di )
+.Dl Pq alias: Cm di
 Display the differences between two repository artifacts, or between the local
 changes on disk and a given commit.  If neither
 .Ar artifact1
@@ -405,20 +405,20 @@ are as follows:
 Scroll down one line of diff output.
 .It Cm Arrow-up, k
 Scroll up one line of diff output.
-.It Cm Ctrl+f, Page-down, Space
+.It Cm C-f, Page-down, Space
 Scroll down one page of diff output.
-.It Cm Ctrl+b, Page-up
+.It Cm C-b, Page-up
 Scroll up one page of diff output.
 .It Cm G, End
 Scroll to the end of the view (i.e., last line of diff output).
 .It Cm gg, Home
 Scroll to the top of the view (i.e., first line of diff output).
-.It Cm Ctrl+k, K, <, \&,
+.It Cm C-k, K, <, \&,
 Move up the
 .Cm timeline
 to the previous (i.e., newer) commit and display its diff. (Only available
 if the diff was accessed from the timeline.)
-.It Cm Ctrl+j, J, >, \&.
+.It Cm C-j, J, >, \&.
 Move down the
 .Cm timeline
 to the next (i.e., older) commit and display its diff. (Only available
@@ -455,7 +455,7 @@ Find the previous line that matches the current search term.
 .Tg dir
 .It Cm tree Oo Fl C | -no-colour Oc Oo Fl c | -commit Ar commit Oc \
 Oo Fl h | -help Oc Op Ar path
-.Dl (aliases: Cm dir , Cm tr )
+.Dl Pq aliases: Cm dir , Cm tr
 Display navigable, hierarchical tree of a repository.  If a
 .Ar path
 is specified, display tree nodes of this path.  The
@@ -519,9 +519,9 @@ Move up a level to the parent directory.  This is a no-op when in the root tree.
 Move selection cursor one node down the tree.
 .It Cm Arrow-up, k
 Move selection cursor one node up the tree.
-.It Cm Page-down, Ctrl+f
+.It Cm Page-down, C-f
 Move selection cursor one page down the tree.
-.It Cm Page-up, Ctrl+b
+.It Cm Page-up, C-b
 Move selection cursor one page up the tree.
 .It Cm Home, gg
 Move selection cursor to the first node in the tree.
@@ -556,7 +556,7 @@ Find the previous tree node that matches the current search pattern.
 .It Cm blame Oo Fl C | -no-colour Oc \
 Oo Fl c | -commit Ar commit Oo Fl r | -reverse Oc Oc Oo Fl h | -help Oc \
 Oo Fl n | -limit Ar n Oc Ar path
-.Dl (aliases: Cm praise , Cm annotate , Cm bl , Cm pr , Cm an )
+.Dl Pq aliases: Cm praise , Cm annotate , Cm bl , Cm pr , Cm an
 Show commit attribution history for each line of the file at the specified
 .Ar path ,
 which may be absolute, relative to the current working directory, or relative to
@@ -621,9 +621,9 @@ are as follows:
 Move selection cursor down one line.
 .It Cm Arrow-up, k
 Move selection cursor up one line.
-.It Cm Page-down, Ctrl+f
+.It Cm Page-down, C-f
 Move selection cursor down one page.
-.It Cm Page-up, Ctrl+b
+.It Cm Page-up, C-b
 Move selection cursor up one page.
 .It Cm Home, gg
 Move selection cursor to the first line in the file.
@@ -662,7 +662,7 @@ Find the previous token that matches the current search pattern.
 Fl -before Ar date Oc Oo Fl h | -help Oc Oo Fl -open | Fl -closed Oc \
 Oo Fl p | -no-private Oc Oo Fl r | -reverse Oc \
 Oo Fl s | -sort Ar order Oc Op Ar glob
-.Dl (aliases: Cm tag , Cm br )
+.Dl Pq aliases: Cm tag , Cm br
 Display navigable list of repository branches. If
 .Ar glob ,
 is specified, only display branches matching the pattern provided. Pattern
@@ -741,9 +741,9 @@ are as follows:
 Move selection cursor down one branch.
 .It Cm Arrow-up, k
 Move selection cursor up one branch.
-.It Cm Page-down, Ctrl+f
+.It Cm Page-down, C-f
 Move selection cursor down one page.
-.It Cm Page-up, Ctrl+b
+.It Cm Page-up, C-b
 Move selection cursor up one page.
 .It Cm Home, gg
 Move selection cursor to the first branch in the list.
@@ -766,7 +766,7 @@ of the commit on the tip of said branch.
 Open the
 .Cm tree
 view of the currently selected branch.
-.It Cm R, Ctrl+l
+.It Cm R, C-l
 Reload the view with all repository branches, irrespective of which options
 were used in this
 .Cm fnc branch
@@ -799,19 +799,19 @@ will search for user-defined colours in the following order:
 .It 3. environment variables Ta Sy shell
 .El
 .Pp
-This enables setting per-project colours to visually distinguish the current
-repository being viewed, and globally changing the colour scheme for all
-repositories with no local settings.  If none are found, the default colour
-scheme will be displayed.  Colours supported in
+If none are found, the default colour scheme will be displayed.  This enables
+setting per-project colours to visually distinguish the current repository
+being viewed, and globally changing the colour scheme for all repositories with
+no local settings configured.  Colours supported in
 .Nm
 are:
 .Bl -column "black" "yellow" "magenta" "default" -offset indent-two
-.It So black Sc Ta So green Sc Ta So blue Sc Ta So cyan Sc
-.It So red Sc Ta So yellow Sc Ta So magenta Sc Ta So default Sc
+.It Qq black Ta Qq green Ta Qq blue Ta Qq cyan
+.It Qq red Ta Qq yellow Ta Qq magenta Ta Qq default
 .El
 .Pp
 Where
-.Dq default
+.Qq default
 is the current foreground (i.e., text) colour in the terminal.
 User-definable colour objects displayed in various
 .Nm
@@ -820,47 +820,47 @@ views are as follows:
 .It Ev FNC_COLOUR_COMMIT
 The commit hash ID field displayed in all views.  If not defined, the default
 value is
-.Dq green .
+.Qq green .
 .It Ev FNC_COLOUR_USER
 The username field displayed in the timeline and diff views.  If not defined,
 the default value is
-.Dq cyan .
+.Qq cyan .
 .It Ev FNC_COLOUR_DATE
 The date field displayed in the timeline and diff views.  If not defined, the
 default value is
-.Dq yellow .
+.Qq yellow .
 .It Ev FNC_COLOUR_TAGS
 The tag field displayed in the timeline and diff views.  If not defined, the
 default value is
-.Dq magenta .
+.Qq magenta .
 .It Ev FNC_COLOUR_DIFF_MINUS
 Removed lines displayed in the diff view.  If not defined, the default value is
-.Dq magenta .
+.Qq magenta .
 .It Ev FNC_COLOUR_DIFF_PLUS
 Added lines displayed in the diff view.  If not defined, the default value is
-.Dq cyan .
+.Qq cyan .
 .It Ev FNC_COLOUR_DIFF_CHUNK
 Chunk header lines
 .Po e.g.,
 .Ql @@ -732,34 +747,40 @@
 .Pc
 displayed in the diff view.  If not defined, the default value is
-.Dq yellow .
+.Qq yellow .
 .It Ev FNC_COLOUR_DIFF_META
 Metadata displayed in the diff view.  If not defined, the default value is
-.Dq green .
+.Qq green .
 .It Ev FNC_COLOUR_TREE_DIR
 Directory entries displayed in the tree view.  If not defined, the default value
 is
-.Dq cyan .
+.Qq cyan .
 .It Ev FNC_COLOUR_TREE_EXEC
 Executable file entries displayed in the tree view.  If not defined, the default
 value is
-.Dq green .
+.Qq green .
 .It Ev FNC_COLOUR_TREE_LINK
 Symbolic link entries displayed in the tree view.  If not defined, the default
 value is
-.Dq magenta .
+.Qq magenta .
 .El
 .Pp
 To clear environment variables, issue
