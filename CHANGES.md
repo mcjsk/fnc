@@ -1,3 +1,28 @@
+**fnc 0.6** 2021-11-22
+
+- implement support for user-defined colours in tl, diff, tree and blame views
+- make branch view accessible from all other views
+- optimise colour scheme initialisation
+- implement new 'fnc config' interface to configure per-project settings
+- improve build by making make file make(1) compatible
+- rename old make file to GNUmakefile to keep gmake support
+- more robust error handling of invalid user input to new config command
+- fix tree symlink colour regular expression so symlink entries are colourised
+- improve colourised header highlighting when in splitscreen mode
+- fix display of colourised headers in tmux
+- more robust handling of cached statements when switching views
+- fix branch-to-tree-to-timeline segv bug when file is missing
+- improve const correctness of fcli struct declarations
+- enhance diff command with support for arbitrary repository blob artifacts
+- quiet error reporting in non-debug builds
+- fix commit builder bug that may omit timeline commits when switching views
+- improved branch view resource deallocation
+- implement new timeline command --filter option and key binding
+- enhance timeline --type option with support for tag control artifacts
+- general documentation improvements
+- assorted updates from upstream libfossil including compiler warning fix
+- expand support for user-defined colours to include the branch view
+
 **fnc 0.5** 2021-11-03
 
 - simplify the build system to make-only and remove autosetup (patch from sdk)
