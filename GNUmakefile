@@ -6,7 +6,7 @@
 CC ?=		cc
 PREFIX ?=	/usr/local
 MANDIR ?=	/share/man
-VERSION ?=	0.6
+VERSION ?=	0.7
 
 # USED BELOW FOR PLATFORM SPECIFIC LDFLAGS
 UNAME :=	$(shell uname -s)
