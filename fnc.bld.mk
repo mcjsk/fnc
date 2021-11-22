@@ -57,10 +57,10 @@ lib/sqlite3.o: lib/sqlite3.c lib/sqlite3.h
 lib/libfossil.o: lib/libfossil.c lib/libfossil.h
 	${CC} ${FOSSIL_CFLAGS} -c $< -o $@
 
-src/fnc.o: src/fnc.c include/settings.h
+src/fnc.o: src/fnc.c include/settings.h fnc.bld.mk
 	${CC} ${FNC_CFLAGS} -c $< -o $@
 
-src/fnc: src/fnc.o lib/libfossil.o lib/sqlite3.o Makefile
+src/fnc: src/fnc.o lib/libfossil.o lib/sqlite3.o fnc.bld.mk
 	${CC} -o $@ src/fnc.o lib/libfossil.o lib/sqlite3.o ${FNC_LDFLAGS}
 
 install:
