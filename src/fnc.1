@@ -27,12 +27,19 @@
 .Op Fl h | -help
 .Op Fl v | -version
 .Nm
+.Cm config
+.Op Fl hu
+.Op Fl -ls
+.Op Fl R Ar path
+.Op Ar setting Op Ar value
+.Nm
 .Cm timeline
 .Op Fl Cz
 .Op Fl b Ar branch
 .Op Fl c Ar commit
 .Op Fl f Ar glob
 .Op Fl n Ar number
+.Op Fl R Ar path
 .Op Fl T Ar tag
 .Op Fl t Ar type
 .Op Fl u Ar user
@@ -40,6 +47,7 @@
 .Nm
 .Cm diff
 .Op Fl Ciw
+.Op Fl R Ar path
 .Op Fl x Ar number
 .Op Ar artifact1 Op Ar artifact2
 .Op Ar path ...
@@ -47,24 +55,22 @@
 .Cm tree
 .Op Fl C
 .Op Fl c Ar commit
+.Op Fl R Ar path
 .Op Ar path
 .Nm
 .Cm blame
 .Op Fl C
 .Op Fl c Ar commit Op Fl r
 .Op Fl n Ar number
+.Op Fl R Ar path
 .Ar path
 .Nm
 .Cm branch
 .Op Fl Ccopr
 .Op Fl a Ar date | Fl b Ar date
+.Op Fl R Ar path
 .Op Fl s Ar order
 .Op Ar glob
-.Nm
-.Cm config
-.Op Fl hu
-.Op Fl -ls
-.Op Ar setting Op Ar value
 .Nm
 .Op Ar path
 .Sh DESCRIPTION
@@ -102,11 +108,18 @@ Display navigable list of all repository branches.
 .Pp
 .Nm
 provides both global and command-specific options and in-app key
-bindings.  Global options are specified absent a command name, and
-are as follows:
+bindings.  Global options are as follows:
 .Bl -tag -width 6v
 .It Fl h , -help
 Display program help and usage information then exit.
+.It Fl R , -repo Ar path
+Use the
+.Xr fossil 1
+repository database at the specified
+.Ar path
+for the current
+.Nm
+session.  See command specific options for details.
 .It Fl v , -version
 Display program version then exit.
 .El
@@ -138,9 +151,9 @@ Commands available to
 are as follows:
 .Bl -tag -width 4v
 .Tg conf
-.It Cm config Oo Fl h | -help Oc Oo Fl -ls Oc \
+.It Cm config Oo Fl h | -help Oc Oo Fl -ls Oc Oo Fl R | -repo Ar path Oc \
 Oo Ar setting Op Ar value | Fl -unset Oc
-.Dl Pq aliases: Cm conf , Cm cfg, settings, set
+.Dl Pq aliases: Cm conf , Cm cfg , Cm settings , Cm set
 Retrieve the current, or set a new,
 .Ar value
 for
@@ -160,7 +173,13 @@ will display a list of all configurable settings.  Alternatively, see
 for a detailed list of available settings
 used in the display or processing of data.  When no value is found for a given
 setting in the local repository, environment variables will be searched.
-If still not found, default values will be used.  Options for
+If still not found, default values will be used.  Unless the
+.Sy --repo
+option is used, this command must be executed from within the repository
+hierarchy; that is,
+.Nm
+assumes a local checkout is open in or above the current working directory.
+Options for
 .Cm fnc config
 are as follows:
 .Bl -tag -width Ds
@@ -168,6 +187,14 @@ are as follows:
 Display config command help and usage information then exit.
 .It Fl -ls
 List all currently defined settings.
+.It Fl R , -repo Ar path
+Use the
+.Xr fossil 1
+repository database at the specified
+.Ar path
+for the current
+.Cm fnc config
+invocation.
 .It Fl u , -unset
 Clear the specified
 .Ar setting.
@@ -176,7 +203,8 @@ Clear the specified
 .It Cm timeline Oo Fl C | -no-colour Oc Oo Fl T | -tag Ar tag Oc \
 Oo Fl b | -branch Ar branch Oc Oo Fl c | -commit Ar commit Oc \
 Oo Fl f | -filter Ar glob Oc Oo Fl h | -help Oc  Oo Fl n | -limit Ar n Oc \
-Oo Fl t | -type Ar type Oc Oo Fl u | -username Ar user Oc Oo Fl z | -utc Oc \
+Oo Fl R | -repo Ar path Oc Oo Fl t | -type Ar type Oc \
+Oo Fl u | -username Ar user Oc Oo Fl z | -utc Oc \
 Op Ar path
 .Dl Pq aliases: Cm log , Cm tl , Cm time , Cm ti
 Display commit history of a repository.  If
@@ -185,8 +213,10 @@ is specified, only commits that modified the file(s) at this path will populate
 the timeline.  The
 .Ar path
 may be absolute, relative to the current working directory, or relative to the
-repository root.  This command must be executed from within or below the top
-level directory of the repository; that is,
+repository root.  Unless the
+.Sy --repo
+option is used, this command must be executed from within the repository
+hierarchy; that is,
 .Nm
 assumes a local checkout is open in or above the current working directory.
 .Pp
@@ -247,6 +277,26 @@ By default,
 .Nm
 will load the entire history of the repository's local checkout.
 Negative values are a no-op.
+.It Fl R , -repo Ar path
+Use the
+.Xr fossil 1
+repository database at the specified
+.Ar path
+for the current
+.Cm fnc timeline
+invocation.  When this option is used, the checkout-related Fossil special
+tags
+.Qq current ,
+.Qq prev ,
+and
+.Qq next
+are invalid arguments to the
+.Sy --commit
+option.  When
+.Sy --commit
+is not specified,
+.Nm
+will default to populating the timeline from the latest commit.
 .It Fl T , -tag Ar tag
 Only display commits with T cards containing
 .Ar tag .
@@ -338,8 +388,8 @@ search will continue until either a match is found or the latest commit
 on the timeline is consumed.
 .El
 .Tg di
-.It Cm diff Oo Fl C | -no-colour Oc Oo Fl h | -help Oc Oo Fl i | -invert \
-Oc Oo Fl w | -whitespace Oc Oo Fl x | -context Ar n Oc \
+.It Cm diff Oo Fl C | -no-colour Oc Oo Fl h | -help Oc Oo Fl i | -invert Oc \
+Oo Fl R | -repo Ar path Oc Oo Fl w | -whitespace Oc Oo Fl x | -context Ar n Oc \
 Oo Ar artifact1 Oo Ar artifact2 Oc Oc Op Ar path ...
 .Dl Pq alias: Cm di
 Display the differences between two repository artifacts, or between the local
@@ -370,7 +420,12 @@ must be of the same type, which is expected to be either a symbolic check-in
 name, tag, (unique abbreviated prefix of) a commit or blob artifact UUID SHA1
 or SHA3 hash, or an ISO 8601 formatted date. Both artifact arguments must be
 supplied when diffing blobs; any following non-option arguments are invalid
-and will be ignored.
+and will be ignored.  Unless the
+.Sy --repo
+option is used, this command must be executed from within the repository
+hierarchy; that is,
+.Nm
+assumes a local checkout is open in or above the current working directory.
 .Pp
 Options for
 .Cm fnc diff
@@ -388,6 +443,25 @@ for details.
 Display diff command help and usage information then exit.
 .It Fl i , -invert
 Invert the difference between artifacts when displaying the diff.
+.It Fl R , -repo Ar path
+Use the
+.Xr fossil 1
+repository database at the specified
+.Ar path
+for the current
+.Cm fnc diff
+invocation.  When this option is used, both
+.Ar artifact1
+and
+.Ar artifact2
+are required, and the checkout-related Fossil special tags
+.Qq current ,
+.Qq prev ,
+and
+.Qq next
+are invalid
+.Sy artifact
+operands.
 .It Fl w , -whitespace
 Ignore whitespace-only changes when displaying the diff.
 .It Fl x , -context Ar n
@@ -454,7 +528,7 @@ Find the previous line that matches the current search term.
 .El
 .Tg dir
 .It Cm tree Oo Fl C | -no-colour Oc Oo Fl c | -commit Ar commit Oc \
-Oo Fl h | -help Oc Op Ar path
+Oo Fl h | -help Oc Oo Fl R | -repo Ar path Oc Op Ar path
 .Dl Pq aliases: Cm dir , Cm tr
 Display navigable, hierarchical tree of a repository.  If a
 .Ar path
@@ -462,8 +536,10 @@ is specified, display tree nodes of this path.  The
 .Ar path
 may be absolute, relative to the current working directory, or relative to the
 repository root.  With no options passed, the tree will reflect the state of the
-latest commit on trunk.  This command must be executed from within or below the
-top level directory of the repository; that is,
+latest commit on trunk.  Unless the
+.Sy --repo
+option is used, this command must be executed from within the repository
+hierarchy; that is,
 .Nm
 assumes a local checkout is open in or above the current working directory.
 .Pp
@@ -503,6 +579,22 @@ arguments this option accepts, see
 "Fossil's Check-in Names".
 .It Fl h , -help
 Display tree command help and usage information then exit.
+.It Fl R , -repo Ar path
+Use the
+.Xr fossil 1
+repository database at the specified
+.Ar path
+for the current
+.Cm fnc tree
+invocation.  When this option is used, the checkout-related Fossil special
+tags
+.Qq current ,
+.Qq prev ,
+and
+.Qq next
+are invalid arguments to the
+.Sy --commit
+option.
 .El
 .Pp
 Key bindings for
@@ -555,13 +647,15 @@ Find the previous tree node that matches the current search pattern.
 .Tg praise
 .It Cm blame Oo Fl C | -no-colour Oc \
 Oo Fl c | -commit Ar commit Oo Fl r | -reverse Oc Oc Oo Fl h | -help Oc \
-Oo Fl n | -limit Ar n Oc Ar path
+Oo Fl n | -limit Ar n Oc Oo Fl R | -repo Ar path Oc Ar path
 .Dl Pq aliases: Cm praise , Cm annotate , Cm bl , Cm pr , Cm an
 Show commit attribution history for each line of the file at the specified
 .Ar path ,
 which may be absolute, relative to the current working directory, or relative to
-the repository root.  This command must be executed from within or below the top
-level directory of the repository; that is,
+the repository root.  Unless the
+.Sy --repo
+option is used, this command must be executed from within the repository
+hierarchy; that is,
 .Nm
 assumes a local checkout is open in or above the current working directory.
 .Pp
@@ -605,6 +699,26 @@ specified time limit.  By default,
 will traverse the entire historical record of the file, which can be expensive
 for large files that span many commits. Use this option for a faster, more
 targeted annotation.
+.It Fl R , -repo Ar path
+Use the
+.Xr fossil 1
+repository database at the specified
+.Ar path
+for the current
+.Cm fnc blame
+invocation.  When this option is used, the checkout-related Fossil special
+tags
+.Qq current ,
+.Qq prev ,
+and
+.Qq next
+are invalid arguments to the
+.Sy --commit
+option.  When
+.Sy --commit
+is not specified,
+.Nm
+will default to blaming the version of the file found in the latest commit.
 .It Fl r , -reverse
 Reverse annotate the file starting from a historical commit and move forward in
 time. That is, rather than show the most recent change to each line, show the
@@ -660,7 +774,7 @@ Find the previous token that matches the current search pattern.
 .Tg tag
 .It Cm branch Oo Fl C | -no-colour Oc Oo Fl -after Ar date | \
 Fl -before Ar date Oc Oo Fl h | -help Oc Oo Fl -open | Fl -closed Oc \
-Oo Fl p | -no-private Oc Oo Fl r | -reverse Oc \
+Oo Fl p | -no-private Oc Oo Fl R | -repo Ar path Oc Oo Fl r | -reverse Oc \
 Oo Fl s | -sort Ar order Oc Op Ar glob
 .Dl Pq aliases: Cm tag , Cm br
 Display navigable list of repository branches. If
@@ -670,9 +784,10 @@ matching comparisons depend on the
 .Xr sqlite3 1
 .B
 LIKE
-operator, which only folds case for the ASCII character set.  This
-command must be executed from within or below the top level directory of the
-repository; that is,
+operator, which only folds case for the ASCII character set.  Unless the
+.Sy --repo
+option is used, this command must be executed from within the repository
+hierarchy; that is,
 .Nm
 assumes a local checkout is open in or above the current working directory.
 .Pp
@@ -696,10 +811,28 @@ are as follows:
 .Bl -tag -width Ds
 .It Fl a , -after Ar date
 Display only those branches with activity after the specified
-.Ar date .
+.Ar date ,
+which is expected to be either an ISO8601
+.Po e.g.,
+.Sy 2020-10-10
+.Pc
+or unambiguous
+.Sy DD/MM/YYYY
+or
+.Sy MM/DD/YYYY
+formatted date.
 .It Fl b , -before Ar date
 Display only those branches with activity before the specified
-.Ar date .
+.Ar date ,
+which is expected to be either an ISO8601
+.Po e.g.,
+.Sy 2020-10-10
+.Pc
+or unambiguous
+.Sy DD/MM/YYYY
+or
+.Sy MM/DD/YYYY
+formatted date.
 .It Fl C , -no-colour
 Disable coloured output, which is enabled by default on supported terminals.
 If this option is not used, colour can be toggled with the
@@ -717,6 +850,14 @@ Display only opened branches.
 .It Fl p , -no-private
 Do not show private branches, which are included in the list of displayed
 branches by default.
+.It Fl R , -repo Ar path
+Use the
+.Xr fossil 1
+repository database at the specified
+.Ar path
+for the current
+.Cm fnc branch
+invocation.
 .It Fl r , -reverse
 Reverse the order in which branches are displayed.
 .It Fl s , -sort Ar order

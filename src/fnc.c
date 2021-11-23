@@ -208,12 +208,12 @@ static struct fnc_setup {
 	fcli_help_info	  fnc_help;			/* Global help. */
 	fcli_cliflag	  cliflags_global[3];		/* Global options. */
 	fcli_command	  cmd_args[7];			/* App commands. */
-	fcli_cliflag	  cliflags_timeline[12];	/* Timeline options. */
-	fcli_cliflag	  cliflags_diff[7];		/* Diff options. */
-	fcli_cliflag	  cliflags_tree[4];		/* Tree options. */
-	fcli_cliflag	  cliflags_blame[6];		/* Blame options. */
-	fcli_cliflag	  cliflags_branch[10];		/* Branch options. */
-	fcli_cliflag	  cliflags_config[4];		/* Config options. */
+	fcli_cliflag	  cliflags_timeline[13];	/* Timeline options. */
+	fcli_cliflag	  cliflags_diff[8];		/* Diff options. */
+	fcli_cliflag	  cliflags_tree[5];		/* Tree options. */
+	fcli_cliflag	  cliflags_blame[7];		/* Blame options. */
+	fcli_cliflag	  cliflags_branch[11];		/* Branch options. */
+	fcli_cliflag	  cliflags_config[5];		/* Config options. */
 } fnc_init = {
 	NULL,		/* cmdarg copy of argv[1] to aid usage/error report. */
 	NULL,		/* sym(bolic name) of commit to open defaults to tip. */
@@ -280,14 +280,12 @@ static struct fnc_setup {
 	},
 
 	{ /* cliflags_timeline timeline command related options. */
+	    FCLI_FLAG("b", "branch", "<branch>", &fnc_init.filter_branch,
+	    "Only display commits that reside on the given <branch>."),
 	    FCLI_FLAG_BOOL("C", "no-colour", &fnc_init.nocolour,
 	    "Disable colourised timeline, which is enabled by default on\n    "
 	    "supported terminals. Colour can also be toggled with the 'c' "
 	    "\n    key binding in timeline view when this option is not used."),
-	    FCLI_FLAG("T", "tag", "<tag>", &fnc_init.filter_tag,
-	    "Only display commits with T cards containing <tag>."),
-	    FCLI_FLAG("b", "branch", "<branch>", &fnc_init.filter_branch,
-	    "Only display commits that reside on the given <branch>."),
 	    FCLI_FLAG("c", "commit", "<commit>", &fnc_init.sym,
 	    "Open the timeline from <commit>. Common symbols are:\n"
 	    "\tSHA{1,3} hash\n"
@@ -308,6 +306,11 @@ static struct fnc_setup {
 	    FCLI_FLAG("n", "limit", "<n>", &fnc_init.nrecords.zlimit,
 	    "Limit display to <n> latest commits; defaults to entire history "
 	    "of\n    current checkout. Negative values are a no-op."),
+	    FCLI_FLAG_CSTR("R", "repo", "<path>", NULL,
+	    "Use the fossil(1) repository located at <path> for this timeline\n"
+	    "    invocation."),
+	    FCLI_FLAG("T", "tag", "<tag>", &fnc_init.filter_tag,
+	    "Only display commits with T cards containing <tag>."),
 	    FCLI_FLAG_X("t", "type", "<type>", &fnc_init.filter_type,
 	    fcli_flag_type_arg_cb,
 	    "Only display <type> commits. Valid types are:\n"
@@ -339,6 +342,9 @@ static struct fnc_setup {
 	    "Disable verbose diff output; that is, do not output complete"
 	    " content\n    of newly added or deleted files. Verbosity can also"
 	    " be toggled with\n    the 'v' key binding in diff view."),
+	    FCLI_FLAG_CSTR("R", "repo", "<path>", NULL,
+	    "Use the fossil(1) repository located at <path> for this diff\n    "
+	    "invocation."),
 	    FCLI_FLAG_BOOL("w", "whitespace", &fnc_init.ws,
 	    "Ignore whitespace-only changes when displaying diff. This option "
 	    "can\n    also be toggled with the 'w' key binding in diff view."),
@@ -368,6 +374,9 @@ static struct fnc_setup {
 	    "https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki"),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
 	    "Display tree command help and usage."),
+	    FCLI_FLAG_CSTR("R", "repo", "<path>", NULL,
+	    "Use the fossil(1) repository located at <path> for this tree\n    "
+	    "invocation."),
 	    fcli_cliflag_empty_m
 	}, /* End cliflags_tree. */
 
@@ -395,6 +404,9 @@ static struct fnc_setup {
 	    "\n    latter by postfixing 's' (e.g., 30s). Useful for large files"
 	    " with\n    extensive history. Persists for the duration of the "
 	    "session."),
+	    FCLI_FLAG_CSTR("R", "repo", "<path>", NULL,
+	    "Use the fossil(1) repository located at <path> for this blame\n"
+	    "    invocation."),
 	    FCLI_FLAG_BOOL("r", "reverse", &fnc_init.reverse,
 	    "Reverse annotate the file starting from a historical commit. "
 	    "Rather\n    than show the most recent change of each line, show "
@@ -427,6 +439,9 @@ static struct fnc_setup {
 	    FCLI_FLAG_BOOL("p", "no-private", &fnc_init.noprivate,
 	    "Do not show private branches, which are otherwise included in the"
 	    "\n    list of displayed branches by default."),
+	    FCLI_FLAG_CSTR("R", "repo", "<path>", NULL,
+	    "Use the fossil(1) repository located at <path> for this branch\n"
+	    "    invocation."),
 	    FCLI_FLAG_BOOL("r", "reverse", &fnc_init.reverse,
 	    "Reverse the order in which branches are displayed."),
 	    FCLI_FLAG("s", "sort", "<order>", &fnc_init.sort,
@@ -442,6 +457,9 @@ static struct fnc_setup {
 	    "Display config command help and usage."),
 	    FCLI_FLAG_BOOL(NULL, "ls", &fnc_init.lsconf,
 	    "Display a list of all currently defined settings."),
+	    FCLI_FLAG_CSTR("R", "repo", "<path>", NULL,
+	    "Use the fossil(1) repository located at <path> for this config\n"
+	    "    invocation."),
 	    FCLI_FLAG_BOOL("u", "unset", &fnc_init.unset,
 	    "Unset (i.e., remove) the specified repository setting."),
 	    fcli_cliflag_empty_m
@@ -5589,9 +5607,9 @@ static void
 usage_timeline(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " usage: %s timeline [-C|--no-colour] [-T tag] [-b branch] "
-	    "[-c commit] [-f glob] [-h|--help] [-n n] [-t type] [-u user] "
-	    "[-z|--utc] [path]\n"
+	    " usage: %s timeline [-C|--no-colour] [-R path] [-T tag] "
+	    "[-b branch] [-c commit] [-f glob] [-h|--help] [-n n] [-t type] "
+	    "[-u user] [-z|--utc] [path]\n"
 	    "  e.g.: %s timeline --type ci -u jimmy src/frobnitz.c\n\n",
 	    fcli_progname(), fcli_progname());
 }
@@ -5600,8 +5618,8 @@ static void
 usage_diff(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " usage: %s diff [-C|--no-colour] [-h|--help] [-i|--invert]"
-	    " [-q|--quiet] [-w|--whitespace] [-x|--context n] "
+	    " usage: %s diff [-C|--no-colour] [-R path] [-h|--help] "
+	    "[-i|--invert] [-q|--quiet] [-w|--whitespace] [-x|--context n] "
 	    "[artifact1 [artifact2]] [path ...]\n  "
 	    "e.g.: %s diff --context 3 d34db33f c0ff33 src/*.c\n\n",
 	    fcli_progname(), fcli_progname());
@@ -5611,7 +5629,8 @@ static void
 usage_tree(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " usage: %s tree [-C|--no-colour] [-c commit] [-h|--help] [path]\n"
+	    " usage: %s tree [-C|--no-colour] [-R path] [-c commit] [-h|--help]"
+	    " [path]\n"
 	    "  e.g.: %s tree -c d34dc0d3\n\n" ,
 	    fcli_progname(), fcli_progname());
 }
@@ -5620,8 +5639,8 @@ static void
 usage_blame(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " usage: %s blame [-C|--no-colour] [-c commit [-r]] [-h|--help] "
-	    "[-n n] path\n"
+	    " usage: %s blame [-C|--no-colour] [-R path] [-c commit [-r]] "
+	    "[-h|--help] [-n n] path\n"
 	    "  e.g.: %s blame -c d34db33f src/foo.c\n\n" ,
 	    fcli_progname(), fcli_progname());
 }
@@ -5630,7 +5649,7 @@ static void
 usage_branch(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " usage: %s branch [-C|--no-colour] [-a|--after date] "
+	    " usage: %s branch [-C|--no-colour] [-R path] [-a|--after date] "
 	    "[-b|--before date] [-c|--closed] [-h|--help] [-o|--open] "
 	    "[-p|--no-private] [-r|--reverse] [-s|--sort order] [glob]\n"
 	    "  e.g.: %s branch -b 2020-10-10\n\n" ,
@@ -5641,7 +5660,8 @@ static void
 usage_config(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
-	    " usage: %s config [-h|--help] [--ls] [setting [value|--unset]]\n"
+	    " usage: %s config [-R path] [-h|--help] [--ls] "
+	    "[setting [value|--unset]]\n"
 	    "  e.g.: %s config FNC_DIFF_COMMIT blue\n\n" ,
 	    fcli_progname(), fcli_progname());
 }
@@ -7642,8 +7662,11 @@ cmd_blame(fcli_command const *argv)
 		rc = fsl_sym_to_rid(f, fnc_init.sym, FSL_SATYPE_CHECKIN, &rid);
 		if (rc)
 			goto end;
-	} else if (!fnc_init.sym)
+	} else if (!fnc_init.sym) {
 		fsl_ckout_version_info(f, &rid, NULL);
+		if (!rid)  /* -R|--repo option used */
+			fsl_sym_to_rid(f, "tip", FSL_SATYPE_CHECKIN, &rid);
+	}
 
 	rc = map_repo_path(&path);
 	if (rc) {
@@ -8917,7 +8940,7 @@ static int
 create_tmp_branchlist_table(void)
 {
 	fsl_cx			*const f = fcli_cx();
-	fsl_db			*db = fsl_needs_ckout(f);
+	fsl_db			*db = fsl_needs_repo(f);  /* -R|--repo option */
 	static const char	 tmp_branchlist_table[] =
 	    "CREATE TEMP TABLE IF NOT EXISTS tmp_brlist AS "
 	    "SELECT tagxref.value AS name,"
@@ -8943,7 +8966,7 @@ create_tmp_branchlist_table(void)
 	int rc = 0;
 
 	if (!db)
-		return RC(FSL_RC_NOT_A_CKOUT, "%s", "fsl_needs_ckout");
+		return RC(FSL_RC_NOT_A_CKOUT, "%s", "fsl_needs_repo");
 	rc = fsl_db_exec(db, tmp_branchlist_table);
 
 	return rc ? RC(fsl_cx_uplift_db_error2(f, db, rc), "%s", "fsl_db_exec")
