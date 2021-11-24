@@ -1,6 +1,6 @@
 # README
 
-# fnc 0.5
+# fnc 0.6
 
 ## An ncurses browser for [Fossil][0] repositories in the terminal.
 
@@ -82,6 +82,16 @@ by the change.
 ![branch split screen](https://fnc.bsdbox.org/uv/resources/img/fnc-branch-splitscreen.png "fnc branch split screen")
 ![in-app help](https://fnc.bsdbox.org/uv/resources/img/fnc-inapp_help.png "fnc in-app help")
 ![timeline help](https://fnc.bsdbox.org/uv/resources/img/fnc-timeline-help.png "fnc timeline help")
+
+# Trivia
+
+**fnc** [fɪŋk]  
+*noun* (n.)  
+1. an ncurses browser for [Fossil][0] repositories in the terminal  
+*verb* (v.)  
+2. to inform  
+etymology  
+From the German word *Fink*, meaning "finch", a type of bird.
 
 [0]: https://fossil-scm.org
 [1]: https://fossil.wanderinghorse.net/r/libfossil
