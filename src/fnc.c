@@ -1802,7 +1802,10 @@ end:
 	fsl_free(op);
 	fsl_free(str);
 	if (rc) {
-		view_close(view);
+		if (view->close)
+			view_close(view);
+		else
+			close_timeline_view(view);
 		if (db->error.code)
 			rc = fsl_cx_uplift_db_error(f, db);
 	}
