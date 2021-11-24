@@ -230,8 +230,12 @@ are as follows:
 .It Fl b , -branch Ar branch
 Display commits that are members of the specified
 .Ar branch .
-The expected argument is a case sensitive glob of the symbolic name of a branch,
-with the most recent branch to match being selected.  By default,
+The expected argument is a glob of the symbolic name of a branch, with the most
+recent branch to match being selected.  Pattern matching is case-insensitive
+unless
+.Ar branch
+has at least one uppercase character, in which case the search will be
+case-sensitive.  By default,
 .Nm
 will display all commits irrespective of the branch on which they
 reside.
@@ -258,17 +262,11 @@ complete list of valid arguments this option accepts, see
 .It Fl f , -filter Ar glob
 Filter timeline by commits containing
 .Ar glob
-in any of the commit comment, user, or branch fields.  Pattern matching depends
-on the
-.Xr sqlite3 1
-.Li GLOB
-operator, which is case sensitive such that
-.Qq jim
-matches
-.Qq jimmy
-but not
-.Qq Jim .
-Filtering can also be performed in-session with the
+in any of the commit comment, user, or branch fields.  Pattern matching is
+case-insensitive unless
+.Ar glob
+has at least one uppercase character, in which case the search will be
+case-sensitive.  Filtering can also be performed in-session with the
 .Sy F
 timeline view key binding as documented below.
 .It Fl h , -help
@@ -305,8 +303,12 @@ will default to populating the timeline from the latest commit.
 .It Fl T , -tag Ar tag
 Only display commits with T cards containing
 .Ar tag .
-The expected argument is a case sensitive glob of a commit manifest's T card
-argument, with the most recent tag to match being selected.  By default,
+The expected argument is a glob of a commit manifest's T card argument, with the
+most recent tag to match being selected.  Pattern matching is case-insensitive
+unless
+.Ar tag
+has at least one uppercase character, in which case the search will be
+case-sensitive.  By default,
 .Nm
 will indiscriminately display all commits irrespective of which T cards
 are attached to the commit manifest.
@@ -337,6 +339,10 @@ Note that this is a repeatable flag (e.g.,
 .It Fl u , -username Ar user
 Only display commits authored by
 .Ar user .
+The search is case-insensitive by default unless
+.Ar user
+contains at least one uppercase character, in which case the search will be
+case-sensitive.
 .It Fl z , -utc
 Use Coordinated Universal Time (UTC) rather than local time when
 displaying commit dates and timestamps.
@@ -784,18 +790,12 @@ Oo Fl p | -no-private Oc Oo Fl R | -repo Ar path Oc Oo Fl r | -reverse Oc \
 Oo Fl s | -sort Ar order Oc Op Ar glob
 .Dl Pq aliases: Cm tag , Cm br
 Display navigable list of repository branches. If
-.Ar glob ,
-is specified, only display branches matching the pattern provided. Pattern
-matching comparisons depend on the
-.Xr sqlite3 1
-.Li GLOB
-operator, which is case sensitive such that
-.Qq bob
-matches
-.Qq bobby
-but not
-.Qq Bob .
-Unless the
+.Ar glob
+is specified, only display branches matching the pattern provided.  Pattern
+matching is case-insensitive unless
+.Ar glob
+contains at least one uppercase character, in which case the search will be
+case-sensitive.  Unless the
 .Sy --repo
 option is used, this command must be executed from within the repository
 hierarchy; that is,

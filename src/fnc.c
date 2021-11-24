@@ -1061,6 +1061,8 @@ static int		 strtonumcheck(int *, const char *, const int,
 			    const int);
 static int		 fnc_date_to_mtime(double *, const char *, int);
 static char		*fnc_strsep (char **, const char *);
+static bool		 fnc_str_has_upper(const char *);
+static int		 fnc_make_sql_glob(char **, char **, const char *, bool);
 static int		 set_colours(struct fnc_colours *, enum fnc_view_id);
 static int		 set_colour_scheme(struct fnc_colours *,
 			    const int (*)[2], const char **, int);
@@ -1533,6 +1535,7 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path,
 	fsl_db				*db = fsl_cx_db_repo(f);
 	fsl_buffer			 sql = fsl_buffer_empty;
 	char				*startdate = NULL;
+	char				*op = NULL, *str = NULL;
 	fsl_id_t			 idtag = 0;
 	int				 idx, rc = 0;
 
@@ -1634,9 +1637,13 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path,
 	}
 
 	if (fnc_init.filter_branch) {
+		rc = fnc_make_sql_glob(&op, &str, fnc_init.filter_branch,
+		    !fnc_str_has_upper(fnc_init.filter_branch));
+		if (rc)
+			goto end;
 		idtag = fsl_db_g_id(db, 0,
-		    "SELECT tagid FROM tag WHERE tagname GLOB 'sym-*%q*'"
-		    " ORDER BY tagid DESC", fnc_init.filter_branch);
+		    "SELECT tagid FROM tag WHERE tagname %q 'sym-%q'"
+		    " ORDER BY tagid DESC", op, str);
 		if (idtag) {
 			rc = fsl_buffer_appendf(&sql,
 			    " AND EXISTS(SELECT 1 FROM tagxref"
@@ -1653,14 +1660,17 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path,
 
 	if (fnc_init.filter_tag) {
 		/* Lookup non-branch tag first; if not found, lookup branch. */
+		rc = fnc_make_sql_glob(&op, &str, fnc_init.filter_tag,
+		    !fnc_str_has_upper(fnc_init.filter_tag));
+		if (rc)
+			goto end;
 		idtag = fsl_db_g_id(db, 0,
-		    "SELECT tagid FROM tag WHERE tagname GLOB '*%q*'"
-		    " ORDER BY tagid DESC", fnc_init.filter_tag);
+		    "SELECT tagid FROM tag WHERE tagname %q '%q'"
+		    " ORDER BY tagid DESC", op, str);
 		if (idtag == 0)
 			idtag = fsl_db_g_id(db, 0,
-			    "SELECT tagid FROM tag"
-			    " WHERE tagname GLOB 'sym-*%q*'"
-			    " ORDER BY tagid DESC", fnc_init.filter_tag);
+			    "SELECT tagid FROM tag WHERE tagname %q 'sym-%q'"
+			    " ORDER BY tagid DESC", op, str);
 		if (idtag) {
 			rc = fsl_buffer_appendf(&sql,
 			    " AND EXISTS(SELECT 1 FROM tagxref"
@@ -1676,22 +1686,29 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path,
 	}
 
 	if (fnc_init.filter_user) {
+		rc = fnc_make_sql_glob(&op, &str, fnc_init.filter_user,
+		    !fnc_str_has_upper(fnc_init.filter_user));
+		if (rc)
+			goto end;
 		rc = fsl_buffer_appendf(&sql,
-		    " AND coalesce(euser, user) GLOB '*%q*'",
-		    fnc_init.filter_user);
+		    " AND coalesce(euser, user) %q '%q'", op, str);
 		if (rc)
 			goto end;
 	}
 
 	if (glob) {
 		/* Filter commits on comment, user, and branch name. */
+		rc = fnc_make_sql_glob(&op, &str, fnc_init.glob,
+		    !fnc_str_has_upper(fnc_init.glob));
+		if (rc)
+			goto end;
 		idtag = fsl_db_g_id(db, 0,
-		    "SELECT tagid FROM tag WHERE tagname GLOB 'sym-*%q*'"
-		    " ORDER BY tagid DESC", glob);
+		    "SELECT tagid FROM tag WHERE tagname %q 'sym-%q'"
+		    " ORDER BY tagid DESC", op, str);
 		rc = fsl_buffer_appendf(&sql,
-		    " AND (coalesce(ecomment, comment) GLOB '*%q*'"
-		    " OR coalesce(euser, user) GLOB '*%q*'%c",
-		    glob, glob, idtag ? ' ' : ')');
+		    " AND (coalesce(ecomment, comment) %q %Q"
+		    " OR coalesce(euser, user) %q %Q%c",
+		    op, str, op, str, idtag ? ' ' : ')');
 		if (!rc && idtag > 0)
 			rc = fsl_buffer_appendf(&sql,
 			    " OR EXISTS(SELECT 1 FROM tagxref"
@@ -1782,6 +1799,8 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path,
 	}
 end:
 	fsl_buffer_clear(&sql);
+	fsl_free(op);
+	fsl_free(str);
 	if (rc) {
 		view_close(view);
 		if (db->error.code)
@@ -8872,8 +8891,13 @@ fnc_load_branches(struct fnc_branch_view_state *s)
 		goto end;
 
 	if (s->branch_glob) {
-		rc = fsl_buffer_appendf(&sql, " AND name GLOB '*%q*'",
-		    s->branch_glob);
+		char *op = NULL, *str = NULL;
+		rc = fnc_make_sql_glob(&op, &str, s->branch_glob,
+		    !fnc_str_has_upper(s->branch_glob));
+		if (!rc)
+			fsl_buffer_appendf(&sql, " AND name %q %Q", op, str);
+		fsl_free(op);
+		fsl_free(str);
 		if (rc)
 			goto end;
 	}
@@ -9692,5 +9716,50 @@ fnc_strsep(char **ptr, const char *sep)
 		*ptr = NULL;
 
 	return s;
+}
+
+static bool
+fnc_str_has_upper(const char *str)
+{
+	int	idx;
+
+	for (idx = 0; str[idx]; ++idx)
+		if (fsl_isupper(str[idx]))
+			return true;
+
+	return false;
+}
+
+/*
+ * If fold is true, construct a pairing for SQL queries using the SQLite LIKE
+ * operator to fold case with dynamically allocated strings such that:
+ *   *op = "LIKE"
+ *   *glob = "%%%%str%%%%"
+ * Otherwise, construct a case-sensitive pairing:
+ *   *op = "GLOB"
+ *   *glob = "*str*"
+ * Both *op and *glob must be disposed of by the caller. Return non-zero on
+ * allocation failure, else return zero.
+ */
+static int
+fnc_make_sql_glob(char **op, char **glob, const char *str, bool fold)
+{
+	if (fold) {
+		*op = fsl_strdup("LIKE");
+		if (*op == NULL)
+			return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+		*glob = fsl_mprintf("%%%%%s%%%%", str);
+		if (*glob == NULL)
+			return RC(FSL_RC_ERROR, "%s", "fsl_mprintf");
+	} else {
+		*op = fsl_strdup("GLOB");
+		if (*op == NULL)
+			return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
+		*glob = fsl_mprintf("*%s*", str);
+		if (*glob == NULL)
+			return RC(FSL_RC_ERROR, "%s", "fsl_mprintf");
+	}
+
+	return 0;
 }
 
