@@ -1635,62 +1635,68 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path,
 
 	if (fnc_init.filter_branch) {
 		idtag = fsl_db_g_id(db, 0,
-		    "SELECT tagid FROM tag WHERE tagname='sym-%q'",
-		    fnc_init.filter_branch);
-		if (idtag > 0)
-			fsl_buffer_appendf(&sql,
+		    "SELECT tagid FROM tag WHERE tagname GLOB 'sym-*%q*'"
+		    " ORDER BY tagid DESC", fnc_init.filter_branch);
+		if (idtag) {
+			rc = fsl_buffer_appendf(&sql,
 			    " AND EXISTS(SELECT 1 FROM tagxref"
 			    " WHERE tagid=%"FSL_ID_T_PFMT
 			    " AND tagtype > 0 AND rid=blob.rid)", idtag);
-		else {
-			rc = RC(FSL_RC_NOT_FOUND, "Invalid branch name [%s]",
+			if (rc)
+				goto end;
+		} else {
+			rc = RC(FSL_RC_NOT_FOUND, "branch not found: %s",
 			    fnc_init.filter_branch);
 			goto end;
 		}
 	}
 
 	if (fnc_init.filter_tag) {
+		/* Lookup non-branch tag first; if not found, lookup branch. */
 		idtag = fsl_db_g_id(db, 0,
-		    "SELECT tagid FROM tag WHERE tagname GLOB 'sym-%q'",
-		    fnc_init.filter_tag);
+		    "SELECT tagid FROM tag WHERE tagname GLOB '*%q*'"
+		    " ORDER BY tagid DESC", fnc_init.filter_tag);
 		if (idtag == 0)
 			idtag = fsl_db_g_id(db, 0,
-			    "SELECT tagid FROM tag WHERE tagname='%q'",
-			    fnc_init.filter_tag);
-		if (idtag > 0)
-			fsl_buffer_appendf(&sql,
+			    "SELECT tagid FROM tag"
+			    " WHERE tagname GLOB 'sym-*%q*'"
+			    " ORDER BY tagid DESC", fnc_init.filter_tag);
+		if (idtag) {
+			rc = fsl_buffer_appendf(&sql,
 			    " AND EXISTS(SELECT 1 FROM tagxref"
 			    " WHERE tagid=%"FSL_ID_T_PFMT
 			    " AND tagtype > 0 AND rid=blob.rid)", idtag);
-		else {
-			rc = RC(FSL_RC_NOT_FOUND, "Invalid tag [%s]",
+			if (rc)
+				goto end;
+		} else {
+			rc = RC(FSL_RC_NOT_FOUND, "tag not found: %s",
 			    fnc_init.filter_tag);
 			goto end;
 		}
 	}
 
-	if (fnc_init.filter_user)
-		if ((rc = fsl_buffer_appendf(&sql,
-		    " AND coalesce(euser, user) GLOB lower('*%q*')",
-		    fnc_init.filter_user)))
-		goto end;
+	if (fnc_init.filter_user) {
+		rc = fsl_buffer_appendf(&sql,
+		    " AND coalesce(euser, user) GLOB '*%q*'",
+		    fnc_init.filter_user);
+		if (rc)
+			goto end;
+	}
 
 	if (glob) {
 		/* Filter commits on comment, user, and branch name. */
-		char *like = fsl_mprintf("%%%%%s%%%%", glob);
 		idtag = fsl_db_g_id(db, 0,
-		    "SELECT tagid FROM tag WHERE tagname LIKE 'sym-%q'",
-		    like);
+		    "SELECT tagid FROM tag WHERE tagname GLOB 'sym-*%q*'"
+		    " ORDER BY tagid DESC", glob);
 		rc = fsl_buffer_appendf(&sql,
-		    " AND (coalesce(ecomment, comment) LIKE %Q "
-		    " OR coalesce(euser, user) LIKE %Q%c",
-		    like, like, idtag ? ' ' : ')');
+		    " AND (coalesce(ecomment, comment) GLOB '*%q*'"
+		    " OR coalesce(euser, user) GLOB '*%q*'%c",
+		    glob, glob, idtag ? ' ' : ')');
 		if (!rc && idtag > 0)
 			rc = fsl_buffer_appendf(&sql,
 			    " OR EXISTS(SELECT 1 FROM tagxref"
 			    " WHERE tagid=%"FSL_ID_T_PFMT
 			    " AND tagtype > 0 AND rid=blob.rid))", idtag);
-		fsl_free(like);
 		if (rc)
 			goto end;
 	}
@@ -8865,9 +8871,8 @@ fnc_load_branches(struct fnc_branch_view_state *s)
 		goto end;
 
 	if (s->branch_glob) {
-		char *like = fsl_mprintf("%%%%%s%%%%", s->branch_glob);
-		rc = fsl_buffer_appendf(&sql, " AND name LIKE %Q", like);
-		fsl_free(like);
+		rc = fsl_buffer_appendf(&sql, " AND name GLOB '*%q*'",
+		    s->branch_glob);
 		if (rc)
 			goto end;
 	}
