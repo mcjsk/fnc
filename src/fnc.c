@@ -5526,8 +5526,9 @@ fcli_flag_type_arg_cb(fcli_cliflag const *v)
 	struct artifact_types	*ft = &fnc_init.filter_types;
 	const char		*t = *((const char **)v->flagValue);
 
-	if (*t != 'e' && *t != 'f' && *t != 'g' &&
-	    *t != 't' && *t != 'w' && fsl_strcmp(t, "ci")) {
+	/* Valid types: ci, e, f, g, t, w */
+	if (t[2] || (t[1] && (*t != 'c' || t[1] != 'i')) || (!t[1] &&
+	    (*t != 'e' && *t != 'f' && *t != 'g' && *t != 't' && *t != 'w'))) {
 		fnc_init.err = RC(FSL_RC_TYPE, "invalid type: %s", t);
 		usage();
 		/* NOT REACHED */
