@@ -1698,8 +1698,8 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path,
 
 	if (glob) {
 		/* Filter commits on comment, user, and branch name. */
-		rc = fnc_make_sql_glob(&op, &str, fnc_init.glob,
-		    !fnc_str_has_upper(fnc_init.glob));
+		rc = fnc_make_sql_glob(&op, &str, glob,
+		    !fnc_str_has_upper(glob));
 		if (rc)
 			goto end;
 		idtag = fsl_db_g_id(db, 0,
