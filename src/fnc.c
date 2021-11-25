@@ -1063,6 +1063,9 @@ static int		 fnc_date_to_mtime(double *, const char *, int);
 static char		*fnc_strsep (char **, const char *);
 static bool		 fnc_str_has_upper(const char *);
 static int		 fnc_make_sql_glob(char **, char **, const char *, bool);
+#ifdef __OpenBSD__
+static int		 init_unveil(const char *, const char *);
+#endif
 static int		 set_colours(struct fnc_colours *, enum fnc_view_id);
 static int		 set_colour_scheme(struct fnc_colours *,
 			    const int (*)[2], const char **, int);
@@ -1110,6 +1113,18 @@ main(int argc, const char **argv)
 		usage();
 		/* NOT REACHED */
 
+#ifdef __OpenBSD__
+	/*
+	 * See pledge(2). This is the most restrictive set we can operate under.
+	 * Look for any adverse impact & revise when implementing new features.
+	 * stdio (close, sigaction); rpath (chdir getcwd lstat); wpath (getcwd);
+	 * cpath (symlink); flock (open); tty (TIOCGWINSZ); unveil (unveil).
+	 */
+	if (pledge("stdio rpath wpath cpath flock tty unveil", NULL) == -1) {
+		rc = RC(fsl_errno_to_rc(errno, FSL_RC_ACCESS), "%s", "pledge");
+		goto end;
+	}
+#endif
 	rc = fcli_fingerprint_check(true);
 	if (rc)
 		goto end;
@@ -1202,12 +1217,22 @@ cmd_timeline(fcli_command const *argv)
 		glob = fsl_strdup(fnc_init.glob);
 	if (fnc_init.path)
 		path = fsl_strdup(fnc_init.path);
-	else
+	else {
 		rc = map_repo_path(&path);
-	if (!rc)
-		rc = init_curses();
+		if (rc)
+			goto end;
+	}
+
+	rc = init_curses();
 	if (rc)
 		goto end;
+#ifdef __OpenBSD__
+	rc = init_unveil(fsl_cx_db_file_repo(f, NULL),
+	    fsl_cx_ckout_dir_name(f, NULL));
+	if (rc)
+		goto end;
+#endif
+
 	v = view_open(0, 0, 0, 0, FNC_VIEW_TIMELINE);
 	if (v == NULL) {
 		rc = RC(FSL_RC_ERROR, "%s", "view_open");
@@ -5852,6 +5877,12 @@ cmd_diff(fcli_command const *argv)
 	rc = init_curses();
 	if (rc)
 		goto end;
+#ifdef __OpenBSD__
+	rc = init_unveil(fsl_cx_db_file_repo(f, NULL),
+	    fsl_cx_ckout_dir_name(f, NULL));
+	if (rc)
+		goto end;
+#endif
 
 	if (fnc_init.context) {
 		if ((rc = strtonumcheck(&context, fnc_init.context, INT_MIN,
@@ -5958,6 +5989,12 @@ cmd_tree(fcli_command const *argv)
 	rc = init_curses();
 	if (rc)
 		goto end;
+#ifdef __OpenBSD__
+	rc = init_unveil(fsl_cx_db_file_repo(f, NULL),
+	    fsl_cx_ckout_dir_name(f, NULL));
+	if (rc)
+		goto end;
+#endif
 
 	view = view_open(0, 0, 0, 0, FNC_VIEW_TREE);
 	if (view == NULL) {
@@ -6142,10 +6179,10 @@ create_repository_tree(struct fnc_repository_tree **repo, fsl_uuid_str *id,
 		return RC(rc, "fsl_deck_load_rid(%d) [%s]", rid, id);
 	rc = fsl_deck_F_rewind(&d);
 	if (rc)
-		goto end;;
+		goto end;
 	rc = fsl_deck_F_next(&d, &cf);
 	if (rc)
-		goto end;;
+		goto end;
 
 	while (cf) {
 		char		*filename = NULL, *uuid = NULL;
@@ -7713,7 +7750,15 @@ cmd_blame(fcli_command const *argv)
 		goto end;
 	}
 
-	init_curses();
+	rc = init_curses();
+	if (rc)
+		goto end;
+#ifdef __OpenBSD__
+	rc = init_unveil(fsl_cx_db_file_repo(f, NULL),
+	    fsl_cx_ckout_dir_name(f, NULL));
+	if (rc)
+		goto end;
+#endif
 
 	view = view_open(0, 0, 0, 0, FNC_VIEW_BLAME);
 	if (view == NULL) {
@@ -8804,7 +8849,16 @@ cmd_branch(fcli_command const *argv)
 	}
 	glob = fsl_strdup(fcli_next_arg(true));
 
-	init_curses();
+	rc = init_curses();
+	if (rc)
+		goto end;
+#ifdef __OpenBSD__
+	const fsl_cx *const f = fcli_cx();
+	rc = init_unveil(fsl_cx_db_file_repo(f, NULL),
+	    fsl_cx_ckout_dir_name(f, NULL));
+	if (rc)
+		goto end;
+#endif
 
 	view = view_open(0, 0, 0, 0, FNC_VIEW_BRANCH);
 	if (view == NULL) {
@@ -9765,4 +9819,37 @@ fnc_make_sql_glob(char **op, char **glob, const char *str, bool fold)
 
 	return 0;
 }
+
+#ifdef __OpenBSD__
+/*
+ * Read permissions for the below unveil() calls are self-evident; we need
+ * to read the repository and ckout databases, and ckout dir for most all fnc
+ * operations. Write and create permissions are briefly listed inline, but we
+ * effectively veil the entire fs except the repo db, ckout dir, and /tmp.
+ */
+static int
+init_unveil(const char *repodb, const char *ckoutdir)
+{
+	/* w repo db for 'fnc config' command: fnc_conf_set(). */
+	if (unveil(repodb, "rw") == -1)
+		return RC(fsl_errno_to_rc(errno, FSL_RC_ACCESS),
+		    "unveil(%s, \"rw\")", repodb);
+
+	/* w .fslckout for fsl_ckout_changes_scan() in cmd_diff(). */
+	if (unveil(ckoutdir, "rw") == -1)
+		return RC(fsl_errno_to_rc(errno, FSL_RC_ACCESS),
+		    "unveil(%s, \"rw\")", ckoutdir);
+
+	/* rwc /tmp for tmpfile() in help(), create_diff(), and run_blame(). */
+	if (unveil(P_tmpdir, "rwc") == -1)
+		return RC(fsl_errno_to_rc(errno, FSL_RC_ACCESS),
+		    "unveil(%s, \"rwc\")", P_tmpdir);
+
+	if (unveil(NULL, NULL) == -1)
+		return RC(fsl_errno_to_rc(errno, FSL_RC_ACCESS),
+		    "%s", "unveil");
+
+	return FSL_RC_OK;
+}
+#endif
 
