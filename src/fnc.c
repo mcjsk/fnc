@@ -6161,7 +6161,7 @@ create_repository_tree(struct fnc_repository_tree **repo, fsl_uuid_str *id,
 			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 			goto end;
 		}
-		rc = fsl_mtime_of_F_card(f, rid, cf, &mtime);
+		rc = fsl_card_F_ckout_mtime(f, rid, cf, &mtime, NULL);
 		if (!rc)
 			rc = link_tree_node(ptr, filename, uuid, mtime);
 		fsl_free(filename);
