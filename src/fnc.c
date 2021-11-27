@@ -1064,7 +1064,7 @@ static char		*fnc_strsep (char **, const char *);
 static bool		 fnc_str_has_upper(const char *);
 static int		 fnc_make_sql_glob(char **, char **, const char *, bool);
 #ifdef __OpenBSD__
-static int		 init_unveil(const char *, const char *);
+static int		 init_unveil(const char *, const char *, bool);
 #endif
 static int		 set_colours(struct fnc_colours *, enum fnc_view_id);
 static int		 set_colour_scheme(struct fnc_colours *,
@@ -1228,7 +1228,7 @@ cmd_timeline(fcli_command const *argv)
 		goto end;
 #ifdef __OpenBSD__
 	rc = init_unveil(fsl_cx_db_file_repo(f, NULL),
-	    fsl_cx_ckout_dir_name(f, NULL));
+	    fsl_cx_ckout_dir_name(f, NULL), false);
 	if (rc)
 		goto end;
 #endif
@@ -5879,7 +5879,7 @@ cmd_diff(fcli_command const *argv)
 		goto end;
 #ifdef __OpenBSD__
 	rc = init_unveil(fsl_cx_db_file_repo(f, NULL),
-	    fsl_cx_ckout_dir_name(f, NULL));
+	    fsl_cx_ckout_dir_name(f, NULL), false);
 	if (rc)
 		goto end;
 #endif
@@ -5991,7 +5991,7 @@ cmd_tree(fcli_command const *argv)
 		goto end;
 #ifdef __OpenBSD__
 	rc = init_unveil(fsl_cx_db_file_repo(f, NULL),
-	    fsl_cx_ckout_dir_name(f, NULL));
+	    fsl_cx_ckout_dir_name(f, NULL), false);
 	if (rc)
 		goto end;
 #endif
@@ -7238,6 +7238,16 @@ cmd_config(const fcli_command *argv)
 {
 	const char	*set = NULL, *value = NULL;
 	int		 setid, rc = 0;
+#ifdef __OpenBSD__
+	const fsl_cx	*const f = fcli_cx();
+	fsl_buffer	 buf = fsl_buffer_empty;
+
+	fsl_file_dirpart(fsl_cx_db_file_repo(f, NULL), -1, &buf, false);
+	rc = init_unveil(fsl_buffer_cstr(&buf), fsl_cx_ckout_dir_name(f, NULL),
+	    true);
+	if (rc)
+		return rc;
+#endif
 
 	rc = fcli_process_flags(argv->flags);
 	if (rc || (rc = fcli_has_unused_flags(false)))
@@ -7755,7 +7765,7 @@ cmd_blame(fcli_command const *argv)
 		goto end;
 #ifdef __OpenBSD__
 	rc = init_unveil(fsl_cx_db_file_repo(f, NULL),
-	    fsl_cx_ckout_dir_name(f, NULL));
+	    fsl_cx_ckout_dir_name(f, NULL), false);
 	if (rc)
 		goto end;
 #endif
@@ -8855,7 +8865,7 @@ cmd_branch(fcli_command const *argv)
 #ifdef __OpenBSD__
 	const fsl_cx *const f = fcli_cx();
 	rc = init_unveil(fsl_cx_db_file_repo(f, NULL),
-	    fsl_cx_ckout_dir_name(f, NULL));
+	    fsl_cx_ckout_dir_name(f, NULL), false);
 	if (rc)
 		goto end;
 #endif
@@ -9828,10 +9838,10 @@ fnc_make_sql_glob(char **op, char **glob, const char *str, bool fold)
  * effectively veil the entire fs except the repo db, ckout dir, and /tmp.
  */
 static int
-init_unveil(const char *repodb, const char *ckoutdir)
+init_unveil(const char *repodb, const char *ckoutdir, bool cfg)
 {
 	/* w repo db for 'fnc config' command: fnc_conf_set(). */
-	if (unveil(repodb, "rw") == -1)
+	if (unveil(repodb, cfg ? "rwc" : "rw") == -1)
 		return RC(fsl_errno_to_rc(errno, FSL_RC_ACCESS),
 		    "unveil(%s, \"rw\")", repodb);
 
