@@ -2904,6 +2904,7 @@ help(struct fnc_view *view)
 	    {"  Enter,Space      ", "  ❬Enter❭❬Space❭  "},
 	    {"  d                ", "  ❬d❭             "},
 	    {"  i                ", "  ❬i❭             "},
+	    {"  s                ", "  ❬s❭             "},
 	    {"  t                ", "  ❬t❭             "},
 	    {"  R,<C-l>          ", "  ❬R❭❬C-l❭        "},
 	    {""},
@@ -2968,6 +2969,7 @@ help(struct fnc_view *view)
 	    "Display the timeline of the currently selected branch",
 	    "Toggle display of the date when the branch last received changes",
 	    "Toggle display of the SHA hash that identifies the branch",
+	    "Toggle branch sort order (lexicographical -> mru -> state)",
 	    "Open a tree view of the currently selected branch",
 	    "Reload view with all repository branches and no filters applied",
 	    "",
@@ -9253,6 +9255,7 @@ branch_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 {
 	struct fnc_branch_view_state	*s = &view->state.branch;
 	struct fnc_view			*timeline_view, *tree_view;
+	/* struct fnc_tl_thread_cx		*tcx = NULL; */
 	struct fnc_branchlist_entry	*be;
 	int				 start_col = 0, n, rc = 0;
 
@@ -9285,6 +9288,25 @@ branch_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			view->focus_child = true;
 		} else
 			*new_view = timeline_view;
+		break;
+	case 's':
+		/*
+		 * Toggle branch list sort order (cf. branch --sort option):
+		 * lexicographical (default) -> most recently used -> state
+		 */
+		if (FLAG_CHK(s->branch_flags, BRANCH_SORT_MTIME)) {
+			FLAG_CLR(s->branch_flags, BRANCH_SORT_MTIME);
+			FLAG_SET(s->branch_flags, BRANCH_SORT_STATUS);
+		} else if (FLAG_CHK(s->branch_flags, BRANCH_SORT_STATUS))
+			FLAG_CLR(s->branch_flags, BRANCH_SORT_STATUS);
+		else
+			FLAG_SET(s->branch_flags, BRANCH_SORT_MTIME);
+		fnc_free_branches(&s->branches);
+		rc = fnc_load_branches(s);
+		/* May need to reset the commit builder query. */
+		/* tcx = fcli_cx()->clientState.state; */
+		/* if (tcx) */
+		/*	tcx->needs_reset = true; */
 		break;
 	case 't':
 		if (!s->selected_branch)
