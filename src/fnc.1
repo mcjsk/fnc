@@ -637,14 +637,16 @@ Open and populate branch view with all repository branches.
 Toggle coloured output. On supported terminals,
 .Nm
 will default to displaying the tree in colour.
+.It Cm d
+Toggle ISO8601 modified timestamp display for each tree entry.
+.It Cm i
+Toggle SHA hash UUID display for all file nodes displayed in the tree.
 .It Cm t
 Open
 .Cm timeline
 view for the currently selected tree node.  This will display the timeline of
 all commits that involve the versioned file(s) corresponding to the selected
 node.
-.It Cm i
-Show SHA hash UUID for all file nodes displayed in the tree.
 .It Cm /
 Prompt to enter a search term to begin searching the tree for nodes matching the
 entered pattern.  The search term is an extended regular expression, as

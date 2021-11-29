@@ -469,6 +469,7 @@ static struct fnc_setup {
 
 enum date_string {
 	ISO8601_DATE_ONLY = 10,
+	ISO8601_DATE_HHMM = 16,
 	ISO8601_TIMESTAMP = 20
 };
 
@@ -714,6 +715,7 @@ struct fnc_tree_view_state {			  /* Parent trees of the- */
 	int				 selected_idx;
 	bool				 colour;
 	bool				 show_id;
+	bool				 show_date;
 };
 
 struct fnc_blame_line {
@@ -971,7 +973,7 @@ static int		 tree_builder(struct fnc_repository_tree *,
 /* static void		 delete_tree_node(struct fnc_tree_entry **, */
 /*			    struct fnc_tree_entry *); */
 static int		 link_tree_node(struct fnc_repository_tree *,
-			    const char *, const char *, fsl_time_t);
+			    const char *, const char *, double);
 static int		 show_tree_view(struct fnc_view *);
 static int		 tree_input_handler(struct fnc_view **,
 			    struct fnc_view *, int);
@@ -2889,6 +2891,7 @@ help(struct fnc_view *view)
 	    {"  l,Enter,<Right>  ", "  ❬→❭❬l❭❬Enter❭   "},
 	    {"  h,<BS>,<Left>    ", "  ❬←❭❬h❭❬⌫❭       "},
 	    {"  b                ", "  ❬b❭             "},
+	    {"  d                ", "  ❬d❭             "},
 	    {"  i                ", "  ❬i❭             "},
 	    {"  t                ", "  ❬t❭             "},
 	    {""},
@@ -2953,6 +2956,7 @@ help(struct fnc_view *view)
 	    "Move into the selected directory",
 	    "Return to the parent directory",
 	    "Open and populate branch view with all repository branches",
+	    "Toggle ISO8601 modified timestamp display for each tree entry",
 	    "Toggle display of file artifact SHA hash ID",
 	    "Display timeline of all commits modifying the selected entry",
 	    "",
@@ -6200,9 +6204,10 @@ create_repository_tree(struct fnc_repository_tree **repo, fsl_uuid_str *id,
 			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 			goto end;
 		}
-		rc = fsl_card_F_ckout_mtime(f, rid, cf, &mtime, NULL);
+		rc = fsl_mtime_of_F_card(f, rid, cf, &mtime);
 		if (!rc)
-			rc = link_tree_node(ptr, filename, uuid, mtime);
+			rc = link_tree_node(ptr, filename, uuid,
+			    fsl_unix_to_julian(mtime));
 		fsl_free(filename);
 		fsl_free(uuid);
 		if (!rc)
@@ -6212,7 +6217,6 @@ create_repository_tree(struct fnc_repository_tree **repo, fsl_uuid_str *id,
 	}
 end:
 	fsl_deck_finalize(&d);
-
 	*repo = ptr;
 	return rc;
 }
@@ -6314,7 +6318,7 @@ delete_tree_node(struct fnc_tree_entry **head, struct fnc_tree_entry *del)
  */
 static int
 link_tree_node(struct fnc_repository_tree *tree, const char *path,
-    const char *uuid, fsl_time_t mtime)
+    const char *uuid, double mtime)
 {
 	struct fnc_repo_tree_node	*parent_dir;
 	fsl_buffer			 buf = fsl_buffer_empty;
@@ -6589,6 +6593,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 	/* Iterate and write tree nodes postfixed with path type identifier. */
 	for (idx = te->idx; idx < nentries; ++idx) {
 		char		*line = NULL, *idstr = NULL, *targetlnk = NULL;
+		char		 iso8601[ISO8601_TIMESTAMP] = {0};
 		const char	*modestr = "";
 		mode_t		 mode;
 
@@ -6605,6 +6610,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 			/* If needed, pad SHA1 hash to align w/ SHA3 hashes. */
 			if (idstr == NULL || fsl_strlen(idstr) < hashlen) {
 				char buf[hashlen], pad = '.';
+				buf[hashlen] = '\0';
 				idstr = fsl_mprintf("%s%s", idstr ? idstr : "",
 				    (char *)memset(buf, pad,
 				    hashlen - fsl_strlen(idstr)));
@@ -6633,15 +6639,22 @@ draw_tree(struct fnc_view *view, const char *treepath)
 			modestr = "/";
 		else if (mode & S_IXUSR)
 			modestr = "*";
-		if ((line = fsl_mprintf("%s  %s%s%s%s", idstr ? idstr : "",
-		    te->basename, modestr, targetlnk ? " -> ": "",
-		    targetlnk ? targetlnk : "")) == NULL) {
-			fsl_free(idstr);
-			fsl_free(targetlnk);
-			return RC(FSL_RC_RANGE, "%s", "fsl_mprintf");
+		if (s->show_date) {
+			char *t;
+			if (fsl_julian_to_iso8601(te->mtime, iso8601, false))
+				*(t = strchr(iso8601, 'T')) = ' ';
+			else
+				rc = FSL_RC_ERROR;
 		}
+		line = fsl_mprintf("%s%s%.*s  %s%s%s%s", idstr ? idstr : "",
+		    (*iso8601 && idstr) ?  "  " : "", ISO8601_DATE_HHMM,
+		    *iso8601 ? iso8601 : "", te->basename, modestr,
+		    targetlnk ? " -> ": "", targetlnk ? targetlnk : "");
 		fsl_free(idstr);
 		fsl_free(targetlnk);
+		if (rc || line == NULL)
+			return RC(rc ? rc : FSL_RC_RANGE, "%s",
+			    rc ? "fsl_julian_to_iso8601" : "fsl_mprintf");
 		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0);
 		if (rc) {
 			fsl_free(line);
@@ -6772,6 +6785,9 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		break;
 	case 'c':
 		s->colour = !s->colour;
+		break;
+	case 'd':
+		s->show_date = !s->show_date;
 		break;
 	case 'i':
 		s->show_id = !s->show_id;
