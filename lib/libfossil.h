@@ -866,25 +866,33 @@ FSL_EXPORT int fsl_stream_compare( fsl_input_f in1, void * in1State,
    might partially populate the buffer, so be sure to clean up on
    error cases.
 
-   - The 'capacity' member specifies how much memory the buffer
-   current holds in its 'mem' member.
+   - The `capacity` member specifies how much memory the buffer
+   current holds in its `mem` member. If `capacity` is 0 and `mem` is
+   not then the memory is expected to refer to `used` bytes of memory
+   owned elsewhere. (See fsl_buffer_external() and
+   fsl_buffer_materialize().)
 
-   - The 'used' member specifies how much of the memory is actually
+   - The `used` member specifies how much of the memory is actually
    "in use" by the client.
 
-   - As a rule, the API tries to keep (used<capacity) and always
+   - As a rule, the public APIs keep (`used`<`capacity`) and always
    (unless documented otherwise) tries to keep the memory buffer
-   NUL-terminated (if it has any memory at all).
+   NUL-terminated (if it has any memory at all). The notable
+   potential exception to that is that "external" buffers
+   may not be NUL-terminated (see fsl_buffer_external()).
 
-   - Use fsl_buffer_reuse() to keep memory around and reset the
-   'used' amount to 0. Most rountines which write to buffers will
-   re-use that memory if they can.
+   - Use fsl_buffer_reuse() to keep memory around and reset the `used`
+   amount to 0. Most library-wide routines which write to buffers will
+   re-use that memory if they can, rather than re-allocating.
 
-   This example demonstrates the difference between 'used' and
-   'capacity' (error checking reduced to assert()ions for clarity):
+   This example demonstrates the difference between `used` and
+   `capacity` (error checking reduced to assert()ions for clarity):
 
    ```
    fsl_buffer b = fsl_buffer_empty;
+   // ALWAYS init via copying fsl_buffer_empty or (depending on
+   // the context) fsl_buffer_empty_m. The latter is used for
+   // in-struct initialization of struct members.
    int rc = fsl_buffer_reserve(&b, 20);
    assert(0==rc);
    assert(b.capacity>=20); // it may reserve more!
@@ -895,23 +903,10 @@ FSL_EXPORT int fsl_stream_compare( fsl_input_f in1, void * in1State,
    assert(0==b.mem[b.used]); // API always NUL-terminates
    ```
 
-   Potential TODO: add an allocator member which gets internally used
-   for allocation of the buffer member. fossil(1) uses this approach,
-   and swaps the allocator out as needed, to support a buffer pointing
-   to memory it does not own, e.g. a slice of another buffer or to
-   static memory, and then (re)allocate as necessary, e.g. to switch
-   from static memory to dynamic. That may be useful in order to
-   effectively port over some of the memory-intensive algos such as
-   merging. That would not affect [much of] the public API, just how
-   the buffer internally manages the memory. Certain API members would
-   need to specify that the memory is not owned by the blob and needs
-   to outlive the blob, though. We could potentially implement this
-   same thing without a new member by using the convention that a
-   `capacity` value of 0 when `mem` is!=00 means that the pointed-to
-   memory is owned by someone else and must be copied before
-   modification (effectively what fossil's approach does).
-
    @see fsl_buffer_reserve()
+   @see fsl_buffer_resize()
+   @see fsl_buffer_external()
+   @see fsl_buffer_materialize()
    @see fsl_buffer_append()
    @see fsl_buffer_appendf()
    @see fsl_buffer_cstr()
@@ -922,17 +917,39 @@ FSL_EXPORT int fsl_stream_compare( fsl_input_f in1, void * in1State,
 */
 struct fsl_buffer {
   /**
-     The raw memory owned by this buffer. It is this->capacity bytes
-     long, of which this->used are considered "used" by the client.
-     The difference beween (this->capacity - this->used) represents
-     space the buffer has available for use before it will require
-     another expansion/reallocation.
+     The raw memory pointed to by this buffer. There are two ways of
+     using this member:
+
+     - If `this->capacity` is non-0 then the first `this->capacity`
+     bytes of `this->mem` are owned by this buffer instance. The API
+     docs call this state "managed" buffers.
+
+     - `If this->capacity` is 0 and this->mem is not NULL then the
+     memory is owned by "somewhere else" and this API will treat it as
+     _immutable_ (so it may safely point to const data). Its lifetime
+     must exceed this object's and any attempt made via this API to
+     write to it will cause the memory to be copied (effectively a
+     copy-on-write op). The API calls this state "external" buffers
+     and refers to the copy-on-write of such buffers as
+     "materializing" them. See fsl_buffer_external() and
+     fsl_buffer_materialize().
+
+     `this->used` bytes are treated as the "used" part of the buffer
+     (as opposed to its capacity). When `this->capacity>0` the
+     difference beween (`this->capacity - this->used`) represents space
+     the buffer has available for use before it will require another
+     expansion/reallocation.
   */
   unsigned char * mem;
   /**
-     Number of bytes allocated for this buffer.
+     Number of bytes allocated for this buffer. If capacity is 0
+     and `this->mem` is not NULL then this buffer's memory is assumed
+     to be owned "elsewhere" and will be considered immutable by the
+     API. Any attempt to modify it will result in a copy-on-write
+     operation
   */
   fsl_size_t capacity;
+
   /**
      Number of "used" bytes in the buffer. This is generally
      interpreted as the string length of this->mem, and the buffer
@@ -1165,31 +1182,104 @@ FSL_EXPORT char fsl_str_is_date(const char *z);
 */
 FSL_EXPORT int fsl_str_is_date2(const char *z);
 
-
 /**
    Reserves at least n bytes of capacity in buf. Returns 0 on
    success, FSL_RC_OOM if allocation fails, FSL_RC_MISUSE if !buf.
 
-   This does not change buf->used, nor will it shrink the buffer
-   (reduce buf->capacity) unless n is 0, in which case it
-   immediately frees buf->mem and sets buf->capacity and buf->used
-   to 0.
+   If b is an external buffer then:
+
+   - If n is 0, this disassociates b->mem from b, effectively clearing
+     the buffer's state. Else...
+
+   - The buffer is materialized, transformed into a managed buffer.
+     This happens even if n is less than b->used because this routine
+     is always used in preparation for writing to the buffer.
+
+   - If n>0 then the greater of (n, b->used) bytes of memory are
+     allocated, b->used bytes are copied from b->mem (its external
+     memory) to the new block, and b->mem is replaced with the new
+     block. Afterwards, b->capacity will be non-0.
+
+   This does not change b->used, nor will it shrink the buffer
+   (reduce buf->capacity) unless n is 0, in which case it immediately
+   frees b->mem (if b is a managed buffer) and sets b->capacity
+   and buf->used to 0.
 
    @see fsl_buffer_resize()
+   @see fsl_buffer_materialize()
    @see fsl_buffer_clear()
 */
-FSL_EXPORT int fsl_buffer_reserve( fsl_buffer * buf, fsl_size_t n );
+FSL_EXPORT int fsl_buffer_reserve( fsl_buffer * const b, fsl_size_t n );
 
 /**
-   Convenience equivalent of fsl_buffer_reserve(buf,0).
-   This a no-op if buf==NULL.
+   If b is a "managed" buffer, this is a no-op and returns 0,
+   else b is an "external" buffer and it...
+
+   - Allocates enough memory to store b->used bytes plus a NUL
+     terminator.
+
+   - Copies b->mem to the new block.
+
+   - NUL-terminates the new block.
+
+   b is thereby transformed to a managed buffer.
+
+   Returns 0 on success, FSL_RC_OOM on allocation error.
+
+   Note that materialization happens automatically on demand by
+   fsl_buffer APIs which write to the buffer but clients can use this
+   to ensure that it is managed memory before they manipulate b->mem
+   directly.
+
+   @see fsl_buffer_external()
 */
-FSL_EXPORT void fsl_buffer_clear( fsl_buffer * buf );
+FSL_EXPORT int fsl_buffer_materialize( fsl_buffer * const b );
 
 /**
-   Resets buf->used to 0 and sets buf->mem[0] (if buf->mem is not
-   NULL) to 0. Does not (de)allocate memory, only changes the
-   logical "used" size of the buffer. Returns its argument.
+   Initializes b to be an "external" buffer pointing to n bytes of the
+   given memory. If n is negative, the equivalent of fsl_strlen() is
+   used to count its length. The buffer API treats external buffers as
+   immutable. If asked to write to one, the API will first
+   "materialize" the buffer, as documented for
+   fsl_buffer_materialize().
+
+   Either mem must be guaranteed to outlive b or b must be
+   materialized before mem goes out of scope.
+
+   ACHTUNG: it is NEVER legal to pass a pointer which may get
+   reallocated, as doing so may change its address, invaliding the
+   resulting `b->mem` pointer.
+
+   Results are undefined if mem is NULL, but n may be 0.
+
+   Results are undefined if b is already an external buffer or has
+   managed memory. When re-initializing buffers with this function,
+   use fsl_buffer_clear() between calls to ensure that b's state is
+   correct. Likewise, results are undefined if passed a completely
+   uninitialized buffer object. _Always_ initialize new buffer objects
+   by copying fsl_buffer_empty or (when appropriate)
+   fsl_buffer_empty_m.
+
+   @see fsl_buffer_materialize()
+*/
+FSL_EXPORT void fsl_buffer_external( fsl_buffer * const b, void const * mem, fsl_int_t n );
+
+/**
+   Convenience equivalent of fsl_buffer_reserve(b,0).
+*/
+FSL_EXPORT void fsl_buffer_clear( fsl_buffer * const b );
+
+/**
+   If b is a managed buffer, this resets b->used, b->cursor, and
+   b->mem[0] (if b->mem is not NULL) to 0. If b is an external buffer,
+   this clears all state from the buffer, behaving like
+   fsl_buffer_clear() (making it available for reuse as a managed or
+   external buffer).
+
+   This does not (de)allocate memory, only changes the logical "used"
+   size of the buffer. Returns its argument.
+
+   Returns b.
 
    Achtung for fossil(1) porters: this function's semantics are much
    different from the fossil's blob_reset(). To get those semantics,
@@ -1198,10 +1288,12 @@ FSL_EXPORT void fsl_buffer_clear( fsl_buffer * buf );
    fsl_buffer_reset(), but it was renamed in the hope of avoiding
    related confusion.)
 */
-FSL_EXPORT fsl_buffer * fsl_buffer_reuse( fsl_buffer * buf );
+FSL_EXPORT fsl_buffer * fsl_buffer_reuse( fsl_buffer * const b );
 
 /**
    Similar to fsl_buffer_reserve() except that...
+
+   For managed buffers:
 
    - It does not free all memory when n==0. Instead it essentially
    makes the memory a length-0, NUL-terminated string.
@@ -1215,13 +1307,26 @@ FSL_EXPORT fsl_buffer * fsl_buffer_reuse( fsl_buffer * buf );
    - On success it always NUL-terminates the buffer at
    offset buf->used.
 
-   Returns 0 on success, FSL_RC_MISUSE if !buf, FSL_RC_OOM if
-   (re)allocation fails.
+   For external buffers it behaves slightly differently:
+
+   - If n==buf->used, this is a no-op and returns 0.
+
+   - If n==0 then it behaves like fsl_buffer_external(buf,"",0)
+     and returns 0.
+
+   - Else it materializes the buffer, as per fsl_buffer_materialize(),
+     copies the lesser of (n, buf->used) bytes from buf->mem to that
+     memory, NUL-terminates the new block, replaces buf->mem with the
+     new block, sets buf->used to n and buf->capacity to n+1.
+
+   Returns 0 on success or FSL_RC_OOM if a (re)allocation fails. On
+   allocation error, the buffer's memory state is unchanged.
 
    @see fsl_buffer_reserve()
+   @see fsl_buffer_materialize()
    @see fsl_buffer_clear()
 */
-FSL_EXPORT int fsl_buffer_resize( fsl_buffer * buf, fsl_size_t n );
+FSL_EXPORT int fsl_buffer_resize( fsl_buffer * const buf, fsl_size_t n );
 
 /**
    Swaps the contents of the left and right arguments. Results are
@@ -1265,24 +1370,24 @@ FSL_EXPORT void fsl_buffer_swap_free( fsl_buffer * left, fsl_buffer * right,
    less than 0 then the equivalent of fsl_strlen((char const*)src)
    is used to calculate the length.
 
+   If b is an external buffer, it is first transformed into a
+   managed buffer.
+
+   Results are undefined if b or src are NULL.
+
    If n is 0 (or negative and !*src), this function ensures that
    b->mem is not NULL and is NUL-terminated, so it may allocate
    to have space for that NUL byte.
 
-   src may only be NULL if n==0. If passed (src==NULL, n!=0) then
-   FSL_RC_RANGE is returned.
+   Returns 0 on success, FSL_RC_OOM if allocation of memory fails.
 
-   Returns 0 on success, FSL_RC_MISUSE if !f, !b, or !src,
-   FSL_RC_OOM if allocation of memory fails.
-
-   If this function succeeds, it guarantees that it NUL-terminates
-   the buffer (but that the NUL terminator is not counted in
-   b->used). 
+   If this function succeeds, it guarantees that it NUL-terminates the
+   buffer (but that the NUL terminator is not counted in b->used).
 
    @see fsl_buffer_appendf()
    @see fsl_buffer_reserve()
 */
-FSL_EXPORT int fsl_buffer_append( fsl_buffer * b,
+FSL_EXPORT int fsl_buffer_append( fsl_buffer * const b,
                                   void const * src, fsl_int_t n );
 
 /**
@@ -1350,23 +1455,32 @@ FSL_EXPORT int fsl_buffer_compress2(fsl_buffer const *pIn1,
 
 /**
    Uncompress buffer pIn and store the result in pOut. It is ok for
-   pIn and pOut to be the same buffer. Returns 0 on success. On
-   error pOut is not modified.
+   pIn and pOut to be the same buffer. Returns 0 on success. If
+   pIn!=pOut then on error, depending on the type of error, pOut may
+   have been partially written so the state of its contents are
+   unspecified (but its state as a buffer object is still valid).
 
-   pOut must be either cleanly initialized/empty or the same as pIn.
+   pOut must be either cleanly initialized/empty or the same object as
+   pIn. If it has any current memory, it will be reused if it's
+   large enough and it is not the same pointer as pIn.
 
    Results are undefined if any argument is NULL.
 
    Returns 0 on success, FSL_RC_OOM on allocation error, and
-   FSL_RC_ERROR if the lower-level decompression routines fail.
+   some other code if the lower-level decompression routines fail.
 
-   TODO: if pOut!=(pIn1 or pIn2) then re-use its memory, if it has any.
+   Note that the decompression process, though computationally costly,
+   is a no-op if pIn is not actually compressed.
+
+   As a special case, if pIn==pOut and fsl_buffer_is_compressed() returns
+   false for pIn then this is a no-op.
 
    @see fsl_buffer_compress()
    @see fsl_buffer_compress2()
    @see fsl_buffer_is_compressed()
 */
-FSL_EXPORT int fsl_buffer_uncompress(fsl_buffer const *pIn, fsl_buffer *pOut);
+FSL_EXPORT int fsl_buffer_uncompress(fsl_buffer const * const pIn,
+                                     fsl_buffer * const pOut);
 
 /**
    Returns true if this function believes that mem (which must be
@@ -1378,7 +1492,7 @@ FSL_EXPORT int fsl_buffer_uncompress(fsl_buffer const *pIn, fsl_buffer *pOut);
 
    Returns 0 if mem is NULL.
 */
-FSL_EXPORT bool fsl_data_is_compressed(unsigned char const * mem, fsl_size_t len);
+FSL_EXPORT bool fsl_data_is_compressed(unsigned char const * const mem, fsl_size_t len);
 
 /**
    Equivalent to fsl_data_is_compressed(buf->mem, buf->used).
@@ -1398,53 +1512,76 @@ FSL_EXPORT fsl_int_t fsl_data_uncompressed_size(unsigned char const *mem, fsl_si
 FSL_EXPORT fsl_int_t fsl_buffer_uncompressed_size(fsl_buffer const * b);
 
 /**
-   Equivalent to ((char const *)b->mem), but returns NULL if
-   !b. The returned string is effectively b->used bytes long unless
-   the user decides to apply his own conventions. Note that the buffer APIs
-   generally assure that buffers are NUL-terminated, meaning that strings
-   returned from this function can (for the vast majority of cases)
-   assume that the returned string is NUL-terminated (with a string length
-   of b->used _bytes_).
+   Equivalent to ((char const *)b->mem). The returned string is
+   effectively b->used bytes long unless the user decides to apply his
+   own conventions. Note that the buffer APIs generally assure that
+   buffers are NUL-terminated, meaning that strings returned from this
+   function can (for the vast majority of cases) assume that the
+   returned string is NUL-terminated (with a string length of b->used
+   _bytes_). It is, however, possible for client code to violate that
+   convention via direct manipulation of the buffer or using
+   non-NUL-terminated extranal buffers.
 
    @see fsl_buffer_str()
    @see fsl_buffer_cstr2()
 */
-FSL_EXPORT char const * fsl_buffer_cstr(fsl_buffer const *b);
+FSL_EXPORT char const * fsl_buffer_cstr(fsl_buffer const * const b);
 
 /**
-   If buf is not NULL and has any memory allocated to it, that
-   memory is returned. If both b and len are not NULL then *len is
-   set to b->used. If b has no dynamic memory then NULL is returned
-   and *len (if len is not NULL) is set to 0.
+   If b has any memory allocated to it, that memory is returned. If
+   len is not NULL then *len is set to b->used. If b has no memory
+   then NULL is returned and *len (if len is not NULL) is set to 0.
 
    @see fsl_buffer_str()
    @see fsl_buffer_cstr()
 */
-FSL_EXPORT char const * fsl_buffer_cstr2(fsl_buffer const *b, fsl_size_t * len);
+FSL_EXPORT char const * fsl_buffer_cstr2(fsl_buffer const * const b, fsl_size_t * const len);
 
 /**
    Equivalent to ((char *)b->mem). The returned memory is effectively
    b->used bytes long unless the user decides to apply their own
    conventions.
+
+   Care must be taken to only write to the returned pointer for memory
+   owned or write-proxied by this buffer. More specifically, results
+   are undefined if b is an external buffer proxying const bytes. When
+   in doubt about whether b is external, use fsl_buffer_materialize()
+   to transform it to a managed buffer before using this routine,
+   noting that any of the public fsl_buffer APIs which write to a
+   buffer will materialize it on demand if needed.
+
+   @see fsl_buffer_take()
 */
-FSL_EXPORT char * fsl_buffer_str(fsl_buffer const *b);
+FSL_EXPORT char * fsl_buffer_str(fsl_buffer const * const b);
+
 /**
    "Takes" the memory refered to by the given buffer, transfering
    ownership to the caller. After calling this, b's state will be
-   empty.
+   empty. If b is an external buffer, this will materialize it
+   first and return NULL if that fails.
+
+   @see fsl_buffer_materialize()
+   @see fsl_buffer_str()
+   @see fsl_buffer_cstr()
+   @see fsl_buffer_cstr2()
 */
-FSL_EXPORT char * fsl_buffer_take(fsl_buffer *b);
+FSL_EXPORT char * fsl_buffer_take(fsl_buffer * const b);
 
 /**
    Returns the "used" size of b, or 0 if !b.
 */
-FSL_EXPORT fsl_size_t fsl_buffer_size(fsl_buffer const * b);
+#define fsl_buffer_size(b) (b)->used
+#if 0
+FSL_EXPORT fsl_size_t fsl_buffer_size(fsl_buffer const * const b);
+#endif
 
 /**
    Returns the current capacity of b, or 0 if !b.
 */
-FSL_EXPORT fsl_size_t fsl_buffer_capacity(fsl_buffer const * b);
-
+#define fsl_buffer_capacity(b) (b)->capacity
+#if 0
+FSL_EXPORT fsl_size_t fsl_buffer_capacity(fsl_buffer const * const b);
+#endif
 /**
    Compares the contents of buffers lhs and rhs using memcmp(3)
    semantics. Return negative, zero, or positive if the first
@@ -1455,7 +1592,7 @@ FSL_EXPORT fsl_size_t fsl_buffer_capacity(fsl_buffer const * b);
    where N is the shorter of the two buffers' lengths, it treats the
    shorter buffer as being "less than" the longer one.
 */
-FSL_EXPORT int fsl_buffer_compare(fsl_buffer const * lhs, fsl_buffer const * rhs);
+FSL_EXPORT int fsl_buffer_compare(fsl_buffer const * const lhs, fsl_buffer const * const rhs);
 
 /**
    Bitwise-compares the contents of b against the file named by
@@ -1489,7 +1626,7 @@ FSL_EXPORT int fsl_buffer_compare_file( fsl_buffer const * b, char const * zFile
    misses, to narrow down an attack to passwords of a specific
    length or content properties.
 */
-FSL_EXPORT int fsl_buffer_compare_O1(fsl_buffer const * lhs, fsl_buffer const * rhs);
+FSL_EXPORT int fsl_buffer_compare_O1(fsl_buffer const * const lhs, fsl_buffer const * const rhs);
 
 /**
    Overwrites dest's contents with a copy of those from src
@@ -1514,9 +1651,9 @@ FSL_EXPORT int fsl_buffer_copy( fsl_buffer * const dest,
    @see fsl_delta_apply()
    @see fsl_delta_apply2()
 */
-FSL_EXPORT int fsl_buffer_delta_apply( fsl_buffer const * pOriginal,
-                                       fsl_buffer const * pDelta,
-                                       fsl_buffer * pTarget);
+FSL_EXPORT int fsl_buffer_delta_apply( fsl_buffer const * const pOriginal,
+                                       fsl_buffer const * const pDelta,
+                                       fsl_buffer * const pTarget);
 
 /**
    Identical to fsl_buffer_delta_apply() except that if delta
@@ -1530,10 +1667,10 @@ FSL_EXPORT int fsl_buffer_delta_apply( fsl_buffer const * pOriginal,
    @see fsl_delta_apply()
    @see fsl_delta_apply2()
 */
-FSL_EXPORT int fsl_buffer_delta_apply2( fsl_buffer const * pOriginal,
-                                        fsl_buffer const * pDelta,
-                                        fsl_buffer * pTarget,
-                                        fsl_error * pErr);
+FSL_EXPORT int fsl_buffer_delta_apply2( fsl_buffer const * const pOriginal,
+                                        fsl_buffer const * const pDelta,
+                                        fsl_buffer * const pTarget,
+                                        fsl_error * const pErr);
 
 
 /**
@@ -1635,7 +1772,7 @@ FSL_EXPORT int fsl_buffer_fill_from_filename( fsl_buffer * const dest,
    Uses fsl_fopen() to open the file, so it supports the name '-'
    as an alias for stdout.
 */
-FSL_EXPORT int fsl_buffer_to_filename( fsl_buffer const * b,
+FSL_EXPORT int fsl_buffer_to_filename( fsl_buffer const * const b,
                                        char const * fname );
 
 /**
@@ -2049,7 +2186,7 @@ FSL_EXPORT int fsl_fprintfv( FILE * fp, char const * fmt, va_list args );
    @see fsl_list_clear()
    @see fsl_list_visit_free()
 */
-FSL_EXPORT int fsl_list_reserve( fsl_list * self, fsl_size_t n );
+FSL_EXPORT int fsl_list_reserve( fsl_list * const self, fsl_size_t n );
 
 /**
    Appends a bitwise copy of cp to self->list, expanding the list as
@@ -2060,14 +2197,14 @@ FSL_EXPORT int fsl_list_reserve( fsl_list * self, fsl_size_t n );
    Returns 0 on success, FSL_RC_MISUSE if any argument is NULL, or
    FSL_RC_OOM on allocation error.
 */
-FSL_EXPORT int fsl_list_append( fsl_list * self, void * cp );
+FSL_EXPORT int fsl_list_append( fsl_list * const self, void * cp );
 
 /**
    Swaps all contents of both lhs and rhs. Results are undefined if
    lhs or rhs are NULL or not properly initialized (via initial copy
    initialization from fsl_list_empty resp. fsl_list_empty_m).
 */
-FSL_EXPORT void fsl_list_swap( fsl_list * lhs, fsl_list * rhs );
+FSL_EXPORT void fsl_list_swap( fsl_list * const lhs, fsl_list * const rhs );
 
 /** @typedef typedef int (*fsl_list_visitor_f)(void * p, void * visitorState )
 
@@ -2133,7 +2270,8 @@ FSL_EXPORT int fsl_list_visit( fsl_list const * self, int order,
 
    @see fsl_list_visit_free()
 */
-FSL_EXPORT int fsl_list_clear( fsl_list * list, fsl_list_visitor_f childFinalizer,
+FSL_EXPORT int fsl_list_clear( fsl_list * const list,
+                               fsl_list_visitor_f childFinalizer,
                                void * finalizerState );
 /**
    Similar to fsl_list_clear(list, fsl_list_v_fsl_free, NULL), but
@@ -2150,7 +2288,7 @@ FSL_EXPORT int fsl_list_clear( fsl_list * list, fsl_list_visitor_f childFinalize
 
    @see fsl_list_clear()
 */
-FSL_EXPORT void fsl_list_visit_free( fsl_list * list, bool freeListMem );
+FSL_EXPORT void fsl_list_visit_free( fsl_list * const list, bool freeListMem );
 
 /**
    Works similarly to the visit operation without the _p suffix
@@ -2162,7 +2300,8 @@ FSL_EXPORT void fsl_list_visit_free( fsl_list * list, bool freeListMem );
    removed from the list and self->used is adjusted (self->capacity
    is not changed).
 */
-FSL_EXPORT int fsl_list_visit_p( fsl_list * self, int order, bool shiftIfNulled,
+FSL_EXPORT int fsl_list_visit_p( fsl_list * const self, int order,
+                                 bool shiftIfNulled,
                                  fsl_list_visitor_f visitor, void * visitorState );
 
 
@@ -2172,7 +2311,7 @@ FSL_EXPORT int fsl_list_visit_p( fsl_list * self, int order, bool shiftIfNulled,
    will be pointers to pointers to the original entries, and may (depending
    on how the list is used) point to NULL.
 */
-FSL_EXPORT void fsl_list_sort( fsl_list * li, fsl_generic_cmp_f cmp);
+FSL_EXPORT void fsl_list_sort( fsl_list * const li, fsl_generic_cmp_f cmp);
 
 /**
    Searches for a value in the given list, using the given
@@ -2451,7 +2590,7 @@ FSL_EXPORT bool fsl_str_glob(const char *zGlob, const char *z);
    @see fsl_glob_list_matches()
    @see fsl_glob_list_clear()
 */
-FSL_EXPORT int fsl_glob_list_parse( fsl_list * tgt, char const * zPatternList );
+FSL_EXPORT int fsl_glob_list_parse( fsl_list * const tgt, char const * zPatternList );
 
 /**
    Appends a single blob pattern to tgt, in the form of a new (char *)
@@ -2465,7 +2604,7 @@ FSL_EXPORT int fsl_glob_list_parse( fsl_list * tgt, char const * zPatternList );
    @see fsl_glob_list_matches()
    @see fsl_glob_list_clear()
 */
-FSL_EXPORT int fsl_glob_list_append( fsl_list * tgt, char const * zGlob );
+FSL_EXPORT int fsl_glob_list_append( fsl_list * const tgt, char const * zGlob );
 
 /**
    Assumes globList is a list of (char [const] *) glob values and
@@ -2952,7 +3091,7 @@ struct fsl_fstat {
 FSL_EXPORT const fsl_fstat fsl_fstat_empty;
 
 /**
-   Runs the OS's stat(2) equivalent to populate fst with
+   Runs the OS's stat(2) equivalent to populate fst (if not NULL) with
    information about the given file.
 
    Returns 0 on success, FSL_RC_MISUSE if zFilename is NULL, and
@@ -2975,7 +3114,7 @@ FSL_EXPORT const fsl_fstat fsl_fstat_empty;
    symlink). It does not apply any special logic for platform-specific
    oddities other than symlinks (e.g. character devices and such).
 */
-FSL_EXPORT int fsl_stat(const char *zFilename, fsl_fstat * fst,
+FSL_EXPORT int fsl_stat(const char *zFilename, fsl_fstat * const fst,
                         bool derefSymlinks);
 
 /**
@@ -3094,13 +3233,14 @@ FSL_EXPORT int fsl_delta_create2( unsigned char const *zSrc, fsl_size_t lenSrc,
 
    If the output buffer (delta) is the same as src or newVers,
    FSL_RC_MISUSE is returned, and results are undefined if delta
-   indirectly refers to the same buffer as either src or newVers.
+   indirectly refers to the same buffer as either src or newVers
+   or if any argument is NULL.
 
    Returns 0 on success.
 */
-FSL_EXPORT int fsl_buffer_delta_create( fsl_buffer const * src,
-                             fsl_buffer const * newVers,
-                             fsl_buffer * delta);
+FSL_EXPORT int fsl_buffer_delta_create( fsl_buffer const * const src,
+                             fsl_buffer const * const newVers,
+                             fsl_buffer * const delta);
 
 /**
    Apply a delta created using fsl_delta_create().
@@ -3222,7 +3362,7 @@ FSL_EXPORT void fsl_bytes_defossilize( unsigned char * inp, fsl_size_t * resultL
    Defossilizes the contents of b. Equivalent to:
    fsl_bytes_defossilize( b->mem, &b->used );
 */
-FSL_EXPORT void fsl_buffer_defossilize( fsl_buffer * b );
+FSL_EXPORT void fsl_buffer_defossilize( fsl_buffer * const b );
 
 /**
    Returns true if the input string contains only valid lower-case
@@ -5039,18 +5179,18 @@ FSL_EXPORT fsl_size_t fsl_simplify_sql( char * sql, fsl_int_t len );
    string. It gets processed by fsl_simplify_sql() and its 'used'
    length potentially gets adjusted to match the adjusted SQL string.
 */
-FSL_EXPORT fsl_size_t fsl_simplify_sql_buffer( fsl_buffer * b );
-
+FSL_EXPORT fsl_size_t fsl_simplify_sql_buffer( fsl_buffer * const b );
 
 /**
    Returns the result of calling the platform's equivalent of
    isatty(fd). e.g. on Windows this is _isatty() and on Unix
-   isatty(). i.e. it returns a true value (non-0) if it thinks that
-   the given file descriptor value is attached to an interactive
-   terminal, else it returns false.
-*/
-FSL_EXPORT char fsl_isatty(int fd);
+   isatty(). i.e. it returns true if it thinks that the given file
+   descriptor value is attached to an interactive terminal, else it
+   returns false.
 
+   The standard file descriptors are: 0=stdin, 1=stdout, and 2=stderr.
+*/
+FSL_EXPORT bool fsl_isatty(int fd);
 
 /**
 
@@ -10501,7 +10641,7 @@ FSL_EXPORT char fsl_tag_prefix_char( fsl_tagtype_e t );
 struct fsl_card_F_list {
   /**
      The list of F-cards. The first this->used elements are in-use.
-     This pointer may change any time the list is reallocated.a
+     This pointer may change any time the list is reallocated.
   */
   fsl_card_F * list;
   /**
@@ -11083,6 +11223,16 @@ FSL_EXPORT int fsl_deck_F_set( fsl_deck * d, char const * name,
    error's, d->f's error state will be updated with a description of
    the problem.
 
+   Returns FSL_RC_MISUSE if `d->rid>0` (which indicates that the deck
+   has already been saved in the repository). fsl_deck_derive() can be
+   used to "extend" a saved deck into a new version before using this API.
+
+   Returns FSL_RC_RANGE if zName is not a valid filename for use as a
+   repository entry, as per fsl_is_simple_pathname().
+
+   On error, d->f's error state will be updated with a description of
+   the problem.
+
    TODO: add a fsl_cx-level or fsl_deck-level API for marking content
    saved this way as private. This type of content is intended for use
    cases which do not have a checkout, and thus cannot be processed
@@ -11093,8 +11243,8 @@ FSL_EXPORT int fsl_deck_F_set( fsl_deck * d, char const * name,
    @see fsl_deck_F_add()
    @see fsl_deck_derive()
 */
-FSL_EXPORT int fsl_deck_F_set_content( fsl_deck * d, char const * name,
-                                       fsl_buffer const * src,
+FSL_EXPORT int fsl_deck_F_set_content( fsl_deck * const d, char const * name,
+                                       fsl_buffer const * const src,
                                        fsl_fileperm_e perm, 
                                        char const * priorName);
 
@@ -11102,25 +11252,27 @@ FSL_EXPORT int fsl_deck_F_set_content( fsl_deck * d, char const * name,
    UNDER CONSTRUCTION! EXPERIMENTAL!
 
    This routine rewires d such that it becomes the basis for a derived
-   version of itself. Requires that d be a loaded
-   from a repository, complete with a UUID and an RID, else
-   FSL_RC_MISUSE is returned.
+   version of itself. Requires that d be a loaded from a repository,
+   complete with an RID, else FSL_RC_MISUSE is returned.
 
    In short, this function peforms the following:
 
    - Clears d->P
-   - Moves d->uuid into d->P
+   - Assigns d->P[0] to the UUID of d->rid
    - Clears d->rid
    - Clears any other members which need to be (re)set by the new
-     child/derived version.
+     child/derived version. That includes the following card
+     letters: `ACDEGHIJKLMNQRTUW`.
+   - If d is a delta manifest it restructures it as a new baselin
+     (see below).
    - It specifically keeps d->F intact OR creates a new one (see below).
 
    Returns 0 on success, FSL_RC_OOM on an allocation error,
    FSL_RC_MISUSE if d->rid<=0 (i.e. the deck has never been saved or
-   was not loaded from the db. If d->type is not FSL_SATYPE_CHECKIN,
-   FSL_RC_TYPE is returned. On error, d may be left in an inconsistent
-   state and must not be used further except to pass it to
-   fsl_deck_finalize().
+   was not loaded from the db). If d->type is not FSL_SATYPE_CHECKIN,
+   FSL_RC_TYPE is returned (fixing that for other derivable types is
+   TODO). On error, d may be left in an inconsistent state and must
+   not be used further except to pass it to fsl_deck_finalize().
 
    The intention of this function is to simplify creation of decks
    which are to be used for creating checkins without requiring a
@@ -11132,7 +11284,14 @@ FSL_EXPORT int fsl_deck_F_set_content( fsl_deck * d, char const * name,
    the B-card's F-card list and any F-cards from the current delta. In
    other words, it creates a new baseline manifest.
 
-   TODO: extend this to support other inheritable deck types, e.g.
+   The expected workflow for this API is something like:
+
+   - Use fsl_deck_load_rid() to load a deck.
+   - Pass that deck to fsl_deck_derive().
+   - Update the deck's cards to suit.
+   - fsl_deck_save() the deck.
+
+   @todo Extend this to support other inheritable deck types, e.g.
    wiki, forum posts, and technotes.
 
    @see fsl_deck_F_set_content()
@@ -11417,14 +11576,14 @@ FSL_EXPORT int fsl_deck_R_set( fsl_deck * const mf, char const *md5);
    artifact in which the tag is contained (which appears as the '*'
    character in generated artifacts).
 
-   Returns 0 on success. Returns FSL_RC_MISUE if !mf or
-   !name. Returns FSL_RC_TYPE (and update's mf's error state with a
-   message) if the T card is not legal for mf (see
+   Returns 0 on success. Returns FSL_RC_MISUSE if !d or
+   !name. Returns FSL_RC_TYPE (and update's d's error state with a
+   message) if the T card is not legal for d (see
    fsl_card_is_legal()).  Returns FSL_RC_RANGE if !*name, tagType
    is invalid, or if uuid is not NULL and fsl_is_uuid(uuid)
    return false. Returns FSL_RC_OOM if an allocation fails.
 */
-FSL_EXPORT int fsl_deck_T_add( fsl_deck * const mf, fsl_tagtype_e tagType,
+FSL_EXPORT int fsl_deck_T_add( fsl_deck * const d, fsl_tagtype_e tagType,
                                fsl_uuid_cstr uuid, char const * name,
                                char const * value);
 
@@ -11448,8 +11607,14 @@ FSL_EXPORT int fsl_deck_T_add2( fsl_deck * const mf, fsl_card_T * t);
    FSL_RC_RANGE if branchName is empty or contains any characters with
    ASCII values <=32d. It natively assumes that any characters >=128
    are part of multibyte UTF8 characters.
+
+   ACHTUNG: this does not arrange for canceling the previous branch
+   because it doesn't know that branch at this point. To cancel the
+   previous branch a cancelation T-card needs to be added to the deck
+   named "sym-BRANCHNAME". Historically such tags have had the value
+   "Cancelled by branch", but that's not a requirement.
 */
-FSL_EXPORT int fsl_deck_branch_set( fsl_deck * d, char const * branchName );
+FSL_EXPORT int fsl_deck_branch_set( fsl_deck * const d, char const * branchName );
 
 /**
    Calculates the value of d's R-card based on its F-cards and updates
@@ -11474,7 +11639,7 @@ FSL_EXPORT int fsl_deck_branch_set( fsl_deck * d, char const * branchName );
 
    @see fsl_deck_R_calc2()
 */
-FSL_EXPORT int fsl_deck_R_calc(fsl_deck * d);
+FSL_EXPORT int fsl_deck_R_calc(fsl_deck * const d);
 
 /**
    A variant of fsl_deck_R_calc() which calculates the given deck's
@@ -11622,6 +11787,9 @@ FSL_EXPORT int fsl_deck_unshuffle( fsl_deck * d, bool calculateRCard );
    function and calculates any cards which cannot be calculated until
    the contents are complete (namely the R-card and Z-card).
 
+   If both (output, outputState) are NULL then d->f's outputer is
+   used.
+
    The given deck is "logically const" but traversal over F-cards and
    baselines requires non-const operations. To keep this routine from
    requiring an undue amount of pre-call effort on the client's part,
@@ -11642,13 +11810,13 @@ FSL_EXPORT int fsl_deck_unshuffle( fsl_deck * d, bool calculateRCard );
    context's (d->f) error state is updated.
 
    The exact structure of the ouput depends on the value of
-   mf->type, and FSL_RC_TYPE is returned if this function cannot
+   d->type, and FSL_RC_TYPE is returned if this function cannot
    figure out what to do with the given deck's type.
 
    @see fsl_deck_unshuffle()
    @see fsl_deck_save()
 */
-FSL_EXPORT int fsl_deck_output( fsl_deck * d, fsl_output_f out,
+FSL_EXPORT int fsl_deck_output( fsl_deck * const d, fsl_output_f out,
                                 void * outputState );
 
 
@@ -11779,19 +11947,41 @@ FSL_EXPORT int fsl_deck_save( fsl_deck * const d, bool isPrivate );
 
    Error result codes include:
 
+   - FSL_RC_SYNTAX on syntax errors. Note that fossil's approach to
+     determine "is this an artifact?" is "can it pass through
+     fsl_deck_parse()?" This result code simply means that the input
+     is, strictly speaking, not a fossil artifact. In some contexts
+     this condition must be caught and treated as not-an-error (but
+     not an artifact).
+
    - FSL_RC_MISUSE if any pointer argument is NULL or d->f is NULL.
 
-   - FSL_RC_SYNTAX on syntax errors.
-
-   - FSL_RC_CONSISTENCY if validation of a Z-card fails.
+   - FSL_RC_CONSISTENCY if validation of a Z-card fails. This is a
+     more specialized form of FSL_RC_SYNTAX but indicates that the
+     artifact is (or may be) well-formed but has an incorrect hash.
+     This check happens relatively early in the parsing process, but
+     after this function has uses fsl_might_be_artifact() to do a
+     basic sniff-test. In practice, this error "cannot happen" unless
+     the source buffer has been manually manipulated. Whether or not
+     client-side code wants to treat this as FSL_RC_SYNTAX (i.e.  "not
+     an artifact but not an error") is up to the client
 
    - Any number of errors coming from the allocator, database, or
-   fsl_deck APIs used here.
+     fsl_deck APIs used here.
 
    ACHTUNG API CHANGE: prior to 2021-10-20, this routine set d->rid
    (and the now-removed d->uuid) based on the hash of the input buffer
    if a matching record could be found in the db. That proved to be
    a huge performance hit and was removed.
+
+   Maintenance reminder: in keeping with fossil's "if it quacks like
+   an artifact, it is an artifact, else it's not" approach to
+   determining whether opaque blobs are artifacts, this function
+   _must_ continue to return FSL_RC_SYNTAX to indicate that "it
+   doesn't quack like an artifact but there's otherwise nothing
+   wrong," which downstream code must be able to rely upon as the
+   input being a non-artifact. More serious errors, e.g. FSL_RC_OOM,
+   are (of course) to be propagated back.
 
    @see fsl_deck_parse2()
 */
@@ -11815,8 +12005,8 @@ FSL_EXPORT int fsl_deck_parse2(fsl_deck * const d, fsl_buffer * const src, fsl_i
    "might" be a structural artifact. It performs a fast sanity check
    for prominent features which can be checked either in O(1) or very
    short O(N) time (with a fixed N). If it returns false then the
-   given buffer's contents are, with 100% certainty, *not* a
-   structural artifact. If it returns true then they *might* be, but
+   given buffer's contents are, with 100% certainty, _not_ a
+   structural artifact. If it returns true then they _might_ be, but
    being 100% certain requires passing the contents to
    fsl_deck_parse() to fully parse them.
 */
@@ -12074,6 +12264,11 @@ fsl_xlinker * fsl_xlinker_by_name( fsl_cx * f, char const * name );
 
    - Wiki artifacts: "fsl/wiki/timeline"
 
+   Sidebar: due to how tickets are crosslinked (_after_ the
+   crosslinking phase is actually finished), it is not currently
+   possible to add a custom ticket crosslink handler. Restructuring
+   that is on the TODO list.
+
    A context registers listeners under those names when it
    initializes, and clients may override them at any point after that.
 
@@ -12120,7 +12315,7 @@ FSL_EXPORT int fsl_xlink_listener( fsl_cx * const f, char const * name,
    @see fsl_content_blob()
    @see fsl_content_get()
 */
-FSL_EXPORT fsl_int_t fsl_content_size( fsl_cx * f, fsl_id_t blobRid );
+FSL_EXPORT fsl_int_t fsl_content_size( fsl_cx * const f, fsl_id_t blobRid );
 
 /**
    For the given blob.rid value, fetches the content field of that
@@ -12232,7 +12427,7 @@ typedef int (*fsl_deck_visitor_f)( fsl_cx * f, fsl_deck const * d,
    @see fsl_wiki_names_get()
    @see fsl_wiki_page_exists()
 */
-FSL_EXPORT int fsl_wiki_foreach_page( fsl_cx * f, fsl_deck_visitor_f cb, void * state );
+FSL_EXPORT int fsl_wiki_foreach_page( fsl_cx * const f, fsl_deck_visitor_f cb, void * state );
 
 /**
    Fetches the most recent RID for the given wiki page name and
@@ -12250,7 +12445,7 @@ FSL_EXPORT int fsl_wiki_foreach_page( fsl_cx * f, fsl_deck_visitor_f cb, void * 
    @see fsl_wiki_names_get()
    @see fsl_wiki_page_exists()
 */
-FSL_EXPORT int fsl_wiki_latest_rid( fsl_cx * f, char const * pageName, fsl_id_t * newRid );
+FSL_EXPORT int fsl_wiki_latest_rid( fsl_cx * const f, char const * pageName, fsl_id_t * const newRid );
 
 /**
    Loads the artifact for the most recent version of the given wiki page,
@@ -12266,7 +12461,7 @@ FSL_EXPORT int fsl_wiki_latest_rid( fsl_cx * f, char const * pageName, fsl_id_t 
    @see fsl_wiki_names_get()
    @see fsl_wiki_page_exists()
 */
-FSL_EXPORT int fsl_wiki_load_latest( fsl_cx * f, char const * pageName, fsl_deck * d );
+FSL_EXPORT int fsl_wiki_load_latest( fsl_cx * const f, char const * pageName, fsl_deck * d );
 
 /**
    Returns true (non-0) if f's repo database contains a page with the
@@ -12277,7 +12472,7 @@ FSL_EXPORT int fsl_wiki_load_latest( fsl_cx * f, char const * pageName, fsl_deck
    @see fsl_wiki_names_get()
    @see fsl_wiki_names_get()
 */
-FSL_EXPORT bool fsl_wiki_page_exists(fsl_cx * f, char const * pageName);
+FSL_EXPORT bool fsl_wiki_page_exists(fsl_cx * const f, char const * pageName);
 
 /**
    A helper type for use with fsl_wiki_save(), intended primarily
@@ -12880,8 +13075,8 @@ FSL_EXPORT const fsl_repo_extract_opt fsl_repo_extract_opt_empty;
    there are valid/interesting uses for such modification remains to
    be seen. If any are found, this copy behavior may change.
 */
-FSL_EXPORT int fsl_repo_extract( fsl_cx * f,
-                                 fsl_repo_extract_opt const * opt );
+FSL_EXPORT int fsl_repo_extract( fsl_cx * const f,
+                                 fsl_repo_extract_opt const * const opt );
 
 /**
    Equivalent to fsl_tag_an_rid() except that it takes a symbolic
@@ -12989,9 +13184,11 @@ FSL_EXPORT fsl_int_t fsl_count_nonbranch_children(fsl_cx * const f,
    on error. If no record is found, *rv is set to 0 and 0 is
    returned (as opposed to FSL_RC_NOT_FOUND) because that generally
    simplifies the error checking.
+
+   Results are undefined if any pointer argument is NULL.
 */
 FSL_EXPORT int fsl_delta_src_id( fsl_cx * const f, fsl_id_t deltaRid,
-                                 fsl_id_t * rv );
+                                 fsl_id_t * const rv );
 
 
 /**
@@ -13424,7 +13621,8 @@ FSL_EXPORT char const * fsl_schema_ticket_reports();
    is set to the value of f's preferred hash. *ridOut is only modified
    if 0 is returned, in which case *ridOut will have a positive value.
 */
-FSL_EXPORT int fsl_repo_blob_lookup( fsl_cx * f, fsl_buffer const * src, fsl_id_t * ridOut,
+FSL_EXPORT int fsl_repo_blob_lookup( fsl_cx * const f, fsl_buffer const * const src,
+                                     fsl_id_t * const ridOut,
                                      fsl_uuid_str * hashOut );
 
 /**
@@ -13472,15 +13670,15 @@ FSL_EXPORT bool fsl_is_reserved_fn(const char *zFilename,
    repository db. Be aware that the relativeToCwd flag may influence
    that test.
 
-   TODO/FIXME: if f's 'manifest' config setting is set to true AND
-   zPath refers to the top of the checkout root, treat the files
-   (manifest, manifest.uuid, manifest.tags) as reserved. If it is a
-   string with any of the letters "r", "u", or "t", check only the
-   file(s) which those letters represent (see
-   add.c:fossil_reserved_name() in fossil). Apply these only at the top
-   of the tree - allow them in subdirectories.
+   This routine also checks fsl_ckout_manifest_setting() and reports
+   any of the files represented by that function's results as being
+   reserved. It only treats such names as reserved if they are at the
+   top level of the repository - those same names in subdirectories are
+   not reserved. If f has no checkout opened and relativeToCwd is true
+   then those names are considered to be at the "top" if they are in
+   the current directory.
 */
-FSL_EXPORT int fsl_reserved_fn_check(fsl_cx *f, const char *zPath,
+FSL_EXPORT int fsl_reserved_fn_check(fsl_cx * const f, const char *zPath,
                                      fsl_int_t nFile, bool relativeToCwd);
 
 /**
@@ -13782,10 +13980,6 @@ struct fsl_annotate_opt {
   fsl_id_t originRid;
   /**
      The maximum number of versions to search through.
-
-     Note that fossil(1) offers the ability to limit the calculation
-     based on processing time, e.g. to 1500ms. We may or may not add
-     that in this library.
   */
   uint32_t limitVersions;
 
@@ -13969,9 +14163,8 @@ typedef int (*fsl_rebuild_f)(fsl_rebuild_step const * const state);
 struct fsl_rebuild_opt {
   /**
      Scan artifacts in a random order (generally only of use in testing
-     the library's code).
-
-     NOT YET IMPLEMENTED.
+     the library's code). This is primarily for testing that the library
+     can handle its inputs in an arbitrary order.
   */
   bool randomize;
   /**
@@ -13979,7 +14172,7 @@ struct fsl_rebuild_opt {
 
      NOT YET IMPLEMENTED.
   */  
-  bool clustering;
+  bool createClusters;
   /**
      If true, the transaction started by the rebuild process will end
      in a rollback even on success. In that case, if a transaction is
@@ -14001,12 +14194,11 @@ struct fsl_rebuild_opt {
 
 /** Initialized-with-defaults fsl_rebuild_opt structure, intended for
     const-copy initialization. */
-#define fsl_rebuild_opt_empty_m {false,false,false}
+#define fsl_rebuild_opt_empty_m {false,false,false,NULL,NULL}
 
 /** Initialized-with-defaults fsl_rebuild_opt structure, intended for
     non-const copy initialization. */
 FSL_EXPORT const fsl_rebuild_opt fsl_rebuild_opt_empty;
-
 
 /**
    "Rebuilds" the current repository database. This involves _at least_
@@ -14055,6 +14247,25 @@ FSL_EXPORT const fsl_rebuild_opt fsl_rebuild_opt_empty;
    any ticket artifacts.
 */
 FSL_EXPORT int fsl_repo_rebuild(fsl_cx * const f, fsl_rebuild_opt const * const opt);
+
+/**
+   Tries to determine the branch name of the given rid, which is assumed to
+   refer to a checkin artifact. If it cannot find one and doFallback
+   is true then it looks for the `main-branch` repository-level config
+   setting and uses that (falling back to "trunk" is that setting is not set).
+
+   On success it returns 0 and sets `*zOut` to the branch name,
+   transfering ownership of those bytes to the caller. If doFallback
+   is false and no direct branch name is found then it sets `*zOut` to
+   NULL. If doFallback is true then, on success, `*zOut` will always be
+   set to some non-NULL value. On error `*zOut` is not modified.
+
+   On error it may return FSL_RC_NOT_A_REPO, FSL_RC_OOM, or any number
+   of db-side error codes.
+*/
+FSL_EXPORT int fsl_branch_of_rid(fsl_cx * const f, fsl_int_t rid,
+                                 bool doFallback, char ** zOut );
+
 
 #if defined(__cplusplus)
 } /*extern "C"*/
@@ -15847,8 +16058,11 @@ FSL_EXPORT int fsl_ckout_calc_update_version(fsl_cx * f, fsl_id_t * outRid);
    fsl_ckout_manifest_write().
 */
 enum fsl_cx_manifest_mask_e {
+/** Coresponds to the file "manifest". */
 FSL_MANIFEST_MAIN = 0x001,
+/** Coresponds to the file "manifest.uuid". */
 FSL_MANIFEST_UUID = 0x010,
+/** Coresponds to the file "manifest.tags". */
 FSL_MANIFEST_TAGS = 0x100
 };
 typedef enum fsl_cx_manifest_mask_e fsl_cx_manifest_mask_e;
@@ -15934,11 +16148,11 @@ FSL_EXPORT void fsl_ckout_manifest_setting(fsl_cx *f, int *m);
 
    @see fsl_repo_manifest_write()
 */
-FSL_EXPORT int fsl_ckout_manifest_write(fsl_cx *f,
+FSL_EXPORT int fsl_ckout_manifest_write(fsl_cx * const f,
                                         int manifest,
                                         int manifestUuid,
                                         int manifestTags,
-                                        int *wroteWhat );
+                                        int * const wroteWhat );
 
 /**
    Returns true if f has an opened checkout and the given absolute
@@ -15950,7 +16164,7 @@ FSL_EXPORT int fsl_ckout_manifest_write(fsl_cx *f,
    Note that this is strictly a string comparison, not a
    filesystem-level operation.
 */
-FSL_EXPORT bool fsl_is_rooted_in_ckout(fsl_cx *f, char const *zAbsPath);
+FSL_EXPORT bool fsl_is_rooted_in_ckout(fsl_cx * const f, char const * const zAbsPath);
 
 /**
    Works like fsl_is_rooted_in_ckout() except that it returns 0 on
@@ -15958,7 +16172,7 @@ FSL_EXPORT bool fsl_is_rooted_in_ckout(fsl_cx *f, char const *zAbsPath);
    and returns non-0: FSL_RC_RANGE or (if updating the error state
    fails) FSL_RC_OOM.
  */
-FSL_EXPORT int fsl_is_rooted_in_ckout2(fsl_cx *f, char const *zAbsPath);
+FSL_EXPORT int fsl_is_rooted_in_ckout2(fsl_cx * const f, char const * const zAbsPath);
 
 /**
    Change-type values for use with fsl_ckout_revert_f() callbacks.
@@ -16328,7 +16542,7 @@ FSL_EXPORT int fsl_ckout_file_content(fsl_cx * const f, bool relativeToCwd,
    Fetches the timestamp of the given F-card's name against the
    filesystem and/or the most recent checkin in which it was modified
    (as reported by fsl_mtime_of_manifest()). vid is the checkin
-   version to look at. If it's 0, the current checkout will be used.
+   version to look at. If it's <=0, the current checkout will be used.
 
    On success, returns 0 and:
 
@@ -17715,16 +17929,6 @@ struct fsl_cx {
   fsl_error error;
 
   /**
-     A place for temporarily holding file content. We use this in
-     places where we have to loop over files and read their entire
-     contents, so that we can reuse this buffer's memory if possible.
-     The loop and the reading might be happening in different
-     functions, though, and some care must be taken to avoid use in
-     two functions concurrently.
-  */
-  fsl_buffer fileContent;
-
-  /**
      Reuseable scratchpads for low-level file canonicalization
      buffering and whatnot. Not intended for huge content: use
      this->fileContent for that. This list should stay relatively
@@ -17885,13 +18089,30 @@ struct fsl_cx {
        see that here!
     */
     short manifestSetting;
-
+    
     /**
        Record ID of rcvfrom entry during commits. This is likely to
        remain unused in libf until/unless the sync protocol is
        implemented.
     */
     fsl_id_t rcvId;
+
+    /**
+       A place for temporarily holding file content. We use this in
+       places where we have to loop over files and read their entire
+       contents, so that we can reuse this buffer's memory if
+       possible.  The loop and the reading might be happening in
+       different functions, though, and some care must be taken to
+       avoid use in two functions concurrently.
+    */
+    fsl_buffer fileContent;
+
+    /**
+       Reusable buffer for creating and fetching deltas via
+       fsl_content_get() and fsl__content_deltify(). The number of
+       allocations this actually saves is pretty small.
+    */
+    fsl_buffer deltaContent;
     
     /**
        fsl_content_get() cache.
@@ -17963,6 +18184,36 @@ struct fsl_cx {
       */
       fsl_list crnl;
     } globs;
+
+    /**
+       Very-frequently-used SQL statements. This are not stored as
+       pointers into the fsl_db_prepare_cached() list because that
+       cache can be invalidated via a db-close. These particular
+       statements are potentially prepared so often that we manage
+       them separate from fsl_db_prepare_cached() as a further
+       optimization.
+
+       This optimization was single-handedly responsible for cutting
+       f-rebuild's time in less than half. The rest of that time was
+       spent building the SQL strings (indirectly via fsl_appendf())
+       to figure out if they corresponded to a cached query or not.
+    */
+    struct {
+      fsl_stmt deltaSrcId;
+      fsl_stmt uuidToRid;
+      fsl_stmt uuidToRidGlob;
+      fsl_stmt contentSize;
+      fsl_stmt nextEntry;
+    } stmt;
+
+    /**
+       A list of `blob.rid` values referring to
+       delta children. Managed by fsl_content_get().
+    */
+    struct {
+      fsl_id_t * list;
+      unsigned int capacity;
+    } deltaIds;
   } cache;
 
   /**
@@ -18042,7 +18293,6 @@ struct fsl_cx {
     fsl_outputer_FILE_m /*output*/,                 \
     fsl_state_empty_m /*clientState*/,            \
     fsl_error_empty_m /*error*/,                  \
-    fsl_buffer_empty_m /*fileContent*/,           \
     {/*scratchpads*/ \
       {fsl_buffer_empty_m,fsl_buffer_empty_m,     \
       fsl_buffer_empty_m,fsl_buffer_empty_m,      \
@@ -18055,7 +18305,7 @@ struct fsl_cx {
     0/*interrupted*/,                             \
     fsl_xlinker_list_empty_m/*xlinkers*/,         \
     {/*cache*/                                    \
-      false/*caseInsensitive*/,                  \
+      false/*caseInsensitive*/,                   \
       false/*ignoreDephantomizations*/,          \
       false/*markPrivate*/,                         \
       false/*isCrosslinking*/,                      \
@@ -18066,6 +18316,8 @@ struct fsl_cx {
       -1/*searchIndexExists*/,                  \
       -1/*manifestSetting*/,\
       0/*rcvId*/,                               \
+      fsl_buffer_empty_m /*fileContent*/,         \
+      fsl_buffer_empty_m /*deltaContent*/,        \
       fsl__bccache_empty_m/*blobContent*/,               \
       fsl_id_bag_empty_m/*mfSeen*/,           \
       fsl_id_bag_empty_m/*leafCheck*/,        \
@@ -18078,8 +18330,18 @@ struct fsl_cx {
         fsl_list_empty_m/*ignore*/,           \
         fsl_list_empty_m/*binary*/,         \
         fsl_list_empty_m/*crnl*/            \
-      }                                     \
-    }/*cache*/,                             \
+      },                                \
+      {/*stmt*/                       \
+        fsl_stmt_empty_m/*deltaSrcId*/,   \
+        fsl_stmt_empty_m/*uuidToRid*/,        \
+        fsl_stmt_empty_m/*uuidToRidGlob*/,        \
+        fsl_stmt_empty_m/*contentSize*/,        \
+        fsl_stmt_empty_m/*???*/ \
+      },                                    \
+      {/*deltaIds*/                 \
+        NULL/*list*/, 0/*capacity*/ \
+      }                              \
+    }/*cache*/,                           \
     {/*ticket*/                             \
       fsl_list_empty_m/*customFields*/,     \
       0/*hasTicket*/,                       \
@@ -18291,7 +18553,7 @@ int fsl__content_undeltify(fsl_cx * const f, fsl_id_t rid);
 
     @see fsl__content_undeltify()
 */
-int fsl__content_deltify(fsl_cx * f, fsl_id_t rid,
+int fsl__content_deltify(fsl_cx * const f, fsl_id_t rid,
                         fsl_id_t srcid, bool force);
 
 
@@ -18824,8 +19086,8 @@ fsl_card_F * fsl__deck_F_seek(fsl_deck * const d, const char *zName);
 
 /** @internal
 
-    Part of the fsl_cx::fileContent optimization. This sets
-    f->fileContent.used to 0 and if its capacity is over a certain
+    Part of the fsl_cx::cache::fileContent optimization. This sets
+    f->cache.fileContent.used to 0 and if its capacity is over a certain
     (unspecified, unconfigurable) size then it is trimmed to that
     size.
 */
@@ -19418,6 +19680,14 @@ int fsl__shunned_remove(fsl_cx * const f);
 */
 int fsl__db_cached_clear_role(fsl_db * const db, int role);
 
+/** @internal
+
+    UNDER CONSTRUCTION!
+
+    Part of the crosslinking bits: rebuilds the entry for the
+    ticket with the given K-card value.
+*/
+int fsl__ticket_rebuild(fsl_cx * const f, char const * zTktId);
 
 /** @internal
 
@@ -20780,7 +21050,7 @@ struct fcli_t {
        Applications can set this to NULL _before_ calling
        fcli_setup() in order to disable the automatic attemp to
        open a checkout under the current directory.  Doing so is
-       equivalent to using the --no-checkout|-C flags. The global
+       equivalent to using the --no-checkout flag. The global
        --checkout-dir flag will trump that setting, though.
     */
     char const * checkoutDir;
@@ -20803,7 +21073,7 @@ struct fcli_t {
     */
     const char * repoDbArg;
     /**
-       User name from the -U/--user CLI flag.
+       User name from the --user CLI flag.
     */
     const char * userArg;
     /**
@@ -20860,7 +21130,7 @@ typedef struct fcli_t fcli_t;
 FSL_EXPORT fcli_t fcli;
 
 /**
-   Equivalent to `fcli_setup_v2(argc,argv,NULL,NULL)`.
+   Equivalent to `fcli_setup_v2(argc,argv,fcli.cliFlags,fcli.appHelp)`.
 
    @see fcli_pre_setup()
    @see fcli_setup_v2()
@@ -20886,17 +21156,20 @@ FSL_EXPORT int fcli_setup(int argc, char const * const * argv );
    value. If the 4th argument is not NULL, this sets `fcli.appHelp` to
    that value.
 
-   If argument processing finds either of the (--help, -?) flags,
+   If argument processing finds either of the (`--help`, `-?`) flags,
    or the first non-flag argument is "help", it sets
    fcli.transient.helpRequested to a true value, calls fcli_help(),
    and returns FCLI_RC_HELP, in which case the application should
-   exit/return from main with code 0 immediately.
+   exit/return from main with code 0 immediately. It behaves similar
+   when it finds the `--lib-version` flag.
 
-   This function behaves significantly differently if fcli.cliFlags
-   has been set before it is called. In that case, it parses the CLI
-   flags using that type's rules and sets up fcli_help() to use those
-   flags for generating the help. It parses the global flags first,
-   then the app-specific flags.
+   This function behaves significantly differently if its 3rd argument
+   is not NULL or if fcli.cliFlags has been set before it is
+   called. In that case, it parses the CLI flags using that type's
+   rules and sets up fcli_help() to use those flags for generating the
+   help. It parses the global flags first, then the app-specific flags
+   (this means that global flags will be consumed from the argv array
+   before app-specific flags with the same names).
 
    Returns 0 on success. Results other than FCLI_RC_HELP should be
    treated as fatal to the app, and fcli.f's error state _might_
@@ -21234,8 +21507,14 @@ FSL_EXPORT int fcli_end_of_main(int mainRc);
    Results are undefined if the same address or overlapping addresses
    are queued more than once. Once an entry is in this queue, there is
    no way to remove it.
+
+   Returns its argument so that it can be used like:
+
+   ```
+   char * x = fcli_fax( fsl_strdup("...") );
+   ```
 */
-FSL_EXPORT void fcli_fax(void * mem);
+FSL_EXPORT void * fcli_fax(void * mem);
 
 /**
    Requires an array of fcli_cliflag objects terminated with an
