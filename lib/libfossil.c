@@ -11208,7 +11208,7 @@ int fsl_mtime_of_F_card(fsl_cx * f, fsl_id_t vid, fsl_card_F const * fc, fsl_tim
 int fsl_mtime_of_manifest_file(fsl_cx * f, fsl_id_t vid, fsl_id_t fid, fsl_time_t *pMTime){
   fsl_db * db = fsl_needs_repo(f);
   fsl_stmt * q = NULL;
-  int rc;
+  int rc = 0;
   if(!db) return FSL_RC_NOT_A_REPO;
 
   if(fid<=0){
@@ -11234,9 +11234,12 @@ int fsl_mtime_of_manifest_file(fsl_cx * f, fsl_id_t vid, fsl_id_t fid, fsl_time_
       files from the same manifest.
     */
     f->cache.mtimeManifest = vid;
-    rc = fsl_db_exec_multi(db,"DROP TABLE IF EXISTS temp.fsl_computed_ancestors;"
-                           "CREATE TEMP TABLE fsl_computed_ancestors"
+    if(!fsl_db_table_exists(db, FSL_DBROLE_TEMP, "fsl_computed_ancestors")){
+      rc = fsl_db_exec(db, "CREATE TEMP TABLE fsl_computed_ancestors"
                            "(x INTEGER PRIMARY KEY);");
+    }else{
+      rc = fsl_db_exec(db, "DELETE FROM fsl_computed_ancestors;");
+    }
     if(!rc){
       rc = fsl_compute_ancestors(db, vid, 1000000, 1);
     }
