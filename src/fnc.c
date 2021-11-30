@@ -6923,7 +6923,8 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 				fnc_object_tree_close(subtree);
 				break;
 			}
-		} else if (S_ISREG(s->selected_entry->mode)) {
+		} else if (s->selected_entry != NULL &&
+		    S_ISREG(s->selected_entry->mode)) {
 			struct fnc_view *blame_view;
 			int start_col = view_is_parent(view) ?
 			    view_split_start_col(view->start_col) : 0;
@@ -8006,8 +8007,8 @@ fnc_dump_buffer_to_file(off_t *filesz, int *nlines, off_t **line_offsets,
 
 	len = buf->used;
 	if (len == 0)
-		return RC(FSL_RC_SIZE_MISMATCH, "%s",
-		    "fnc_dump_buffer_to_file");
+		return rc;  /* empty file */
+
 	if (nlines) {
 		if (line_offsets && *line_offsets == NULL) {
 			*nlines = 1;
@@ -8195,24 +8196,19 @@ draw_blame(struct fnc_view *view)
 	struct fnc_colour		*c = NULL;
 	wchar_t				*wcstr;
 	char				*line = NULL;
-	fsl_uuid_str			 prev_id = NULL, id_str = NULL;
+	fsl_uuid_str			 prev_id = NULL;
 	ssize_t				 linelen;
 	size_t				 linesz = 0;
 	int				 width, lineno = 0, nprinted = 0;
 	int				 rc = 0;
 	const int			 idfield = 11;  /* Prefix + space. */
 
-	id_str = fsl_strdup(s->blamed_commit->id);
-	if (id_str == NULL)
-		return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
-
 	rewind(blame->f);
 	werase(view->window);
 
-	if ((line = fsl_mprintf("checkin %s", id_str)) == NULL) {
+	if ((line = fsl_mprintf("checkin %s", s->blamed_commit->id)) == NULL) {
 		rc = RC(fsl_errno_to_rc(errno, FSL_RC_ERROR),
 		    "%s", "fsl_mprintf");
-		fsl_free(id_str);
 		return rc;
 	}
 
@@ -8242,13 +8238,12 @@ draw_blame(struct fnc_view *view)
 		waddch(view->window, '\n');
 
 	line = fsl_mprintf("[%d/%d] %s%s%s %c",
-	    s->first_line_onscreen - 1 + s->selected_line, blame->nlines,
-	    s->blame_complete ? "" : "annotating... ",
+	    MIN(blame->nlines, s->first_line_onscreen - 1 + s->selected_line),
+	    blame->nlines, s->blame_complete ? "" : "annotating... ",
 	    fnc_init.sym ? "/" : "", s->path,
 	    s->blame_complete ? ' ' : SPINNER[s->spin_idx]);
 	if (SPINNER[++s->spin_idx] == '\0')
 		s->spin_idx = 0;
-	fsl_free(id_str);
 	rc = formatln(&wcstr, &width, line, view->ncols, 0);
 	fsl_free(line);
 	line = NULL;
