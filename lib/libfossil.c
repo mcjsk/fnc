@@ -1326,6 +1326,7 @@ static int fsl__annotate_file(fsl_cx * const f,
       a->naVers = n;
     }
 #define AnnStr(COL,FLD) zCol = fsl_stmt_g_text(&q, COL, &nCol); \
+    if(!zCol){ goto end; } \
     zTmp = fsl_strndup(zCol, nCol); \
     if(!zTmp){ rc = FSL_RC_OOM; goto end; } \
     a->aVers[a->nVers].FLD = zTmp
