@@ -3209,7 +3209,7 @@ FSL_EXPORT int fsl_delta_create( unsigned char const *zSrc, fsl_size_t lenSrc,
    are identical to fsl_delta_create(), with these ammendments
    regarding the return value:
 
-   - Returns FSL_RC_MISUSE if any of (zSrc, zOut, out) are NULL.
+   - Returns FSL_RC_MISUSE if any of (zV1, zV2, out) are NULL.
 
    - If out() returns non-0 at any time, delta generation is
    aborted and that code is returned.
@@ -3218,12 +3218,12 @@ FSL_EXPORT int fsl_delta_create( unsigned char const *zSrc, fsl_size_t lenSrc,
 
    ```
    int rc = fsl_delta_create( v1, v1len, v2, v2len,
-   fsl_output_f_FILE, stdout);
+                              fsl_output_f_FILE, stdout);
    ```
 */
-FSL_EXPORT int fsl_delta_create2( unsigned char const *zSrc, fsl_size_t lenSrc,
-                       unsigned char const *zOut, fsl_size_t lenOut,
-                       fsl_output_f out, void * outState);
+FSL_EXPORT int fsl_delta_create2( unsigned char const *zV1, fsl_size_t lenV1,
+                                  unsigned char const *zV2, fsl_size_t lenV2,
+                                  fsl_output_f out, void * outState);
 
 /**
    A fsl_delta_create() wrapper which uses the first two arguments
@@ -8177,8 +8177,9 @@ FSL_OPEN_F_CREATE = 0x04,
 */
 FSL_OPEN_F_RWC = FSL_OPEN_F_RW | FSL_OPEN_F_CREATE,
 /**
-   Tells fsl_repo_open_xxx() to confirm that the db
-   is a repository.
+   Currently unused. It "should" be used to tell fsl_repo_open_xxx()
+   to confirm that the db is a repository, but how to propagate
+   that through the corresponding APIs is not currently clear.
 */
 FSL_OPEN_F_SCHEMA_VALIDATE = 0x20,
 
@@ -9120,8 +9121,10 @@ FSL_EXPORT int fsl_stmt_get_double( fsl_stmt * const stmt, int index, double * v
    by the statement and the caller should immediately copy it if
    it will be needed for much longer.
 
-   Returns FSL_RC_RANGE if index is out of range for stmt, FSL_RC_MISUSE
-   if stmt has no result columns.
+   Returns FSL_RC_RANGE if index is out of range for stmt,
+   FSL_RC_MISUSE if stmt has no result columns. Returns FSL_RC_OOM if
+   fetching the text from the underlying statement handle fails due to
+   an allocation error.
 */
 FSL_EXPORT int fsl_stmt_get_text( fsl_stmt * const stmt, int index, char const **out,
                        fsl_size_t * outLen );
@@ -9132,8 +9135,10 @@ FSL_EXPORT int fsl_stmt_get_text( fsl_stmt * const stmt, int index, char const *
    differs, and it fetches the data as a raw blob, without any sort
    of string interpretation.
 
-   Returns FSL_RC_RANGE if index is out of range for stmt, FSL_RC_MISUSE
-   if stmt has no result columns.
+   Returns FSL_RC_RANGE if index is out of range for stmt,
+   FSL_RC_MISUSE if stmt has no result columns. Returns FSL_RC_OOM if
+   fetching the text from the underlying statement handle fails due to
+   an allocation error.
 */
 FSL_EXPORT int fsl_stmt_get_blob( fsl_stmt * const stmt, int index, void const **out, fsl_size_t * outLen );
 
@@ -9605,13 +9610,8 @@ FSL_EXPORT double fsl_db_string_to_julian(fsl_db * db, char const * str);
    will be returned and db's error state will be updated. db->f
    does not need to be set for that check to work.
 
-
-   If db->f is not NULL when this function is called then a number of
-   fossil-specific SQL-accessible functions are installed. See the
-   file doc/db-udf.md in the libfossil source tree for complete
-   docs. Note that functions in those docs described as "triggering a
-   db error" will propagate that error, such that fsl_db_err_get() can
-   report it to the client.
+   If db->f is not NULL when this function is called then any error
+   triggered during opening is _copied_ into db->f's error state.
 
    @see fsl_db_close()
    @see fsl_db_prepare()
@@ -13223,7 +13223,8 @@ FSL_EXPORT int fsl_uuid_is_shunned(fsl_cx * const f, fsl_uuid_cstr zUuid);
    e.g. (1, 3, 1, 4, 1,...). This is a side-effect of the caching
    used in the computation of ancestors for a given vid.
 */
-FSL_EXPORT int fsl_mtime_of_manifest_file(fsl_cx * f, fsl_id_t vid, fsl_id_t fid, fsl_time_t *pMTime);
+FSL_EXPORT int fsl_mtime_of_manifest_file(fsl_cx * const f, fsl_id_t vid, fsl_id_t fid,
+                                          fsl_time_t * const pMTime);
 
 /**
    A convenience form of fsl_mtime_of_manifest_file() which looks up
@@ -13232,7 +13233,8 @@ FSL_EXPORT int fsl_mtime_of_manifest_file(fsl_cx * f, fsl_id_t vid, fsl_id_t fid
    full details - this function simply calculates the 3rd argument
    for that one.
 */
-FSL_EXPORT int fsl_mtime_of_F_card(fsl_cx * f, fsl_id_t vid, fsl_card_F const * fc, fsl_time_t *pMTime);
+FSL_EXPORT int fsl_mtime_of_F_card(fsl_cx * const f, fsl_id_t vid, fsl_card_F const * const fc,
+                                   fsl_time_t * const pMTime);
 
 /**
    Ensures that the given list has capacity for at least n entries. If
@@ -13689,10 +13691,10 @@ FSL_EXPORT int fsl_reserved_fn_check(fsl_cx * const f, const char *zPath,
    This can supposedly be expensive (in time) for a really large
    repository. Testing implies otherwise.
 
-   Returns 0 on success. Error may indicate that f has no repo db
-   opened.  On error f's error state may be updated.
+   Returns 0 on success. On error f's error state may be updated.
+   Results are undefined if f is invalid or has no opened repository.
 */
-FSL_EXPORT int fsl_repo_leaves_rebuild(fsl_cx * f);  
+FSL_EXPORT int fsl_repo_leaves_rebuild(fsl_cx * const f);  
 
 /**
    Flags for use with fsl_leaves_compute().
@@ -13738,7 +13740,7 @@ typedef enum fsl_leaves_compute_e fsl_leaves_compute_e;
    @see fsl_leaves_computed_latest()
    @see fsl_leaves_computed_cleanup()
 */
-FSL_EXPORT int fsl_leaves_compute(fsl_cx * f, fsl_id_t vid,
+FSL_EXPORT int fsl_leaves_compute(fsl_cx * const f, fsl_id_t vid,
                                   fsl_leaves_compute_e leafMode);
 
 /**
@@ -13749,7 +13751,7 @@ FSL_EXPORT int fsl_leaves_compute(fsl_cx * f, fsl_id_t vid,
    not empty, else false. This is more efficient than checking
    against fsl_leaves_computed_count()>0.
 */
-FSL_EXPORT bool fsl_leaves_computed_has(fsl_cx * f);
+FSL_EXPORT bool fsl_leaves_computed_has(fsl_cx * const f);
 
 /**
    Requires that a prior call to fsl_leaves_compute() has succeeded,
@@ -13760,7 +13762,7 @@ FSL_EXPORT bool fsl_leaves_computed_has(fsl_cx * f);
    encountered. On errors other than FSL_RC_OOM, f's error state will
    be updated with information about the error.
 */
-FSL_EXPORT fsl_int_t fsl_leaves_computed_count(fsl_cx * f);
+FSL_EXPORT fsl_int_t fsl_leaves_computed_count(fsl_cx * const f);
 
 /**
    Requires that a prior call to fsl_leaves_compute() has succeeded,
@@ -17800,6 +17802,29 @@ struct fsl_cx {
      this->dbMain would indeed simplify certain work but it would
      require special care to ensure that we never sqlite3_close()
      those out from under this->dbMain.
+
+     Reminder to self 2021-12-03: sqlite has since added an option
+     to give the MAIN db a name of one's choice:
+
+     ```
+     sqlite3_db_config(db, SQLITE_DBCONFIG_MAINDBNAME,...)
+     ```
+
+     that could be used to solve our connection-juggling problems by
+     OPEN()'ing the first (repo/checkout/config) db and ATTACHing the others
+     to that. Prior to the above API addition, that was not feasible because
+     it meant that juggling the db names was a true pain in the butt.
+
+     However, the global config throws a wrench in that: we need to be
+     able to open and close that particular db on demand because it's
+     used by an arbitrary number of applications and we need to avoid
+     locking it. If an app (like `f-config`) were to open that db
+     first, it would become the main db and we could no longer close
+     it once a repo and/or checkout had been attached. That said, we
+     could get away with using a completely separate sqlite3 instance
+     for that particular db if we really wanted to. There's no
+     pressing need to keep that db on the same connection as the
+     checkout/repo.
   */
   fsl_db dbMem;
 

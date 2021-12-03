@@ -1325,9 +1325,12 @@ static int fsl__annotate_file(fsl_cx * const f,
       a->aVers = x;
       a->naVers = n;
     }
-#define AnnStr(COL,FLD) zCol = fsl_stmt_g_text(&q, COL, &nCol); \
-    if(!zCol){ goto end; } \
-    zTmp = fsl_strndup(zCol, nCol); \
+#define AnnStr(COL,FLD) zCol = NULL; \
+    rc = fsl_stmt_get_text(&q, COL, &zCol, &nCol);  \
+    if(rc) goto end;                                \
+    else if(!zCol){ goto end;                                           \
+      /*zCol=""; nCol=0; //causes downstream 'RID 0 is invalid' error*/}  \
+    zTmp = fsl_strndup(zCol, (fsl_int_t)nCol);  \
     if(!zTmp){ rc = FSL_RC_OOM; goto end; } \
     a->aVers[a->nVers].FLD = zTmp
     AnnStr(0,zFUuid);
@@ -7452,8 +7455,7 @@ int fsl_ckout_update(fsl_cx * f, fsl_ckup_opt const *cuOpt){
   ** in the current checkout, the pivot, and the version being merged.
   */
   rc = fsl_db_exec_multi(dbC,
-    "DROP TABLE IF EXISTS fv;"
-    "CREATE TEMP TABLE fv("
+    "CREATE TEMP TABLE IF NOT EXISTS fv("
     "  fn TEXT %s PRIMARY KEY,"   /* The filename relative to root */
     "  idv INTEGER,"              /* VFILE entry for current version */
     "  idt INTEGER,"              /* VFILE entry for target version */
@@ -7465,7 +7467,8 @@ int fsl_ckout_update(fsl_cx * f, fsl_ckup_opt const *cuOpt){
     "  isexe BOOLEAN,"            /* Does target have execute permission? */
     "  deleted BOOLEAN DEFAULT 0,"/* File marked by "rm" to become unmanaged */
     "  fnt TEXT %s"               /* Filename of same file on target version */
-    ") /*%s()*/;",
+    ") /*%s()*/; "
+    "DELETE FROM fv;",
     collation, collation, __func__ );
   if(rc) goto dberr;
   /* Add files found in the current version
@@ -11107,7 +11110,8 @@ int fsl__repo_shun_artifacts(fsl_cx * const f){
   if(rc) return rc;
   rc = fsl_db_exec_multi(db,
                          "CREATE TEMP TABLE IF NOT EXISTS "
-                         "toshun(rid INTEGER PRIMARY KEY);"
+                         "toshun(rid INTEGER PRIMARY KEY); "
+                         "DELETE FROM toshun; "
                          "INSERT INTO toshun SELECT rid FROM blob, shun "
                          "WHERE blob.uuid=shun.uuid;"
   );
@@ -11128,7 +11132,7 @@ int fsl__repo_shun_artifacts(fsl_cx * const f){
     rc = fsl_db_exec_multi(db,
             "DELETE FROM delta WHERE rid IN toshun;"
             "DELETE FROM blob WHERE rid IN toshun;"
-            "DROP TABLE toshun;"
+            "DELETE FROM toshun;"
             "DELETE FROM private "
             "WHERE NOT EXISTS "
             "(SELECT 1 FROM blob WHERE rid=private.rid);"
@@ -11157,8 +11161,8 @@ int fsl_content_make_public(fsl_cx * const f, fsl_id_t rid){
     Load the record ID rid and up to N-1 closest ancestors into
     the "fsl_computed_ancestors" table.
  */
-static int fsl_compute_ancestors( fsl_db * db, fsl_id_t rid,
-                                  int N, char directOnly ){
+static int fsl__compute_ancestors( fsl_db * const db, fsl_id_t rid,
+                                   int N, bool directOnly ){
   fsl_stmt st = fsl_stmt_empty;
   int rc = fsl_db_prepare(db, &st,
     "WITH RECURSIVE "
@@ -11177,19 +11181,15 @@ static int fsl_compute_ancestors( fsl_db * db, fsl_id_t rid,
     directOnly ? "AND plink.isPrim" : ""
   );
   if(!rc){
-    fsl_stmt_bind_id(&st, 1, rid);
-    fsl_stmt_bind_id(&st, 2, rid);
-    fsl_stmt_bind_int32(&st, 3, (int32_t)N);
-    rc = fsl_stmt_step(&st);
-    if(FSL_RC_STEP_DONE==rc){
-      rc = 0;
-    }
+    rc = fsl_stmt_bind_step(&st, "RRi", rid, rid, (int32_t)N);
   }
   fsl_stmt_finalize(&st);
   return rc;
 }
 
-int fsl_mtime_of_F_card(fsl_cx * f, fsl_id_t vid, fsl_card_F const * fc, fsl_time_t *pMTime){
+int fsl_mtime_of_F_card(fsl_cx * const f, fsl_id_t vid,
+                        fsl_card_F const * const fc,
+                        fsl_time_t * const pMTime){
   if(!f || !fc) return FSL_RC_MISUSE;
   else if(vid<=0) return FSL_RC_RANGE;
   else if(!fc->uuid){
@@ -11206,8 +11206,9 @@ int fsl_mtime_of_F_card(fsl_cx * f, fsl_id_t vid, fsl_card_F const * fc, fsl_tim
   }
 }
 
-int fsl_mtime_of_manifest_file(fsl_cx * f, fsl_id_t vid, fsl_id_t fid, fsl_time_t *pMTime){
-  fsl_db * db = fsl_needs_repo(f);
+int fsl_mtime_of_manifest_file(fsl_cx * const f, fsl_id_t vid, fsl_id_t fid,
+                               fsl_time_t * const pMTime){
+  fsl_db * const db = fsl_needs_repo(f);
   fsl_stmt * q = NULL;
   int rc = 0;
   if(!db) return FSL_RC_NOT_A_REPO;
@@ -11235,14 +11236,12 @@ int fsl_mtime_of_manifest_file(fsl_cx * f, fsl_id_t vid, fsl_id_t fid, fsl_time_
       files from the same manifest.
     */
     f->cache.mtimeManifest = vid;
-    if(!fsl_db_table_exists(db, FSL_DBROLE_TEMP, "fsl_computed_ancestors")){
-      rc = fsl_db_exec(db, "CREATE TEMP TABLE fsl_computed_ancestors"
-                           "(x INTEGER PRIMARY KEY);");
-    }else{
-      rc = fsl_db_exec(db, "DELETE FROM fsl_computed_ancestors;");
-    }
+    rc = fsl_db_exec_multi(db, "CREATE TEMP TABLE IF NOT EXISTS "
+                           "fsl_computed_ancestors"
+                           "(x INTEGER PRIMARY KEY); "
+                           "DELETE FROM fsl_computed_ancestors;");
     if(!rc){
-      rc = fsl_compute_ancestors(db, vid, 1000000, 1);
+      rc = fsl__compute_ancestors(db, vid, 1000000, 1);
     }
     if(rc){
       fsl_cx_uplift_db_error(f, db);
@@ -11266,6 +11265,8 @@ int fsl_mtime_of_manifest_file(fsl_cx * f, fsl_id_t vid, fsl_id_t fid, fsl_time_
       if(FSL_RC_STEP_DONE==rc) rc = FSL_RC_NOT_FOUND;
     }
     fsl_stmt_cached_yield(q);
+    /* Reminder: DO NOT clean up fsl_computed ancestors here. Doing so
+       is not only costly later on but also breaks test code. */
   }
   return rc;
 }
@@ -12725,6 +12726,7 @@ static volatile long sg_autoregctr = 0;
 static void fsl__cx_reset( fsl_cx * const f, bool closeDatabases );
 
 
+
 int fsl_cx_init( fsl_cx ** tgt, fsl_cx_init_opt const * param ){
   static fsl_cx_init_opt paramDefaults = fsl_cx_init_opt_default_m;
   int rc = 0;
@@ -12793,23 +12795,13 @@ int fsl_cx_init( fsl_cx ** tgt, fsl_cx_init_opt const * param ){
 #if defined(SQLITE_THREADSAFE) && SQLITE_THREADSAFE>0
   sqlite3_mutex_leave(sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER));
 #endif
-  f->dbMem.f = f /* so that dbMem gets fsl_xxx() SQL funcs installed. */;
+  f->dbMem.f = f;
   rc = fsl_db_open( &f->dbMem, "", 0 );
   if(!rc){
-    /* Attempt to ensure that the TEMP tables/indexes use FILE storage. */
-    rc = fsl_db_exec(&f->dbMem, "PRAGMA temp_store=FILE;");
+    extern int fsl__cx_init_db(fsl_cx * const, fsl_db * const);
+    rc = fsl__cx_init_db(f, &f->dbMem);
   }
-  if(!rc){
-    rc = fsl_cx_install_timeline_crosslinkers(f);
-  }
-  if(rc){
-    if(f->dbMem.error.code){
-      fsl_cx_uplift_db_error(f, &f->dbMem);
-    }
-  }else{
-    f->dbMain = &f->dbMem;
-    f->dbMem.role = FSL_DBROLE_MAIN;
-  }
+  if(!rc) rc = fsl_cx_install_timeline_crosslinkers(f);
   return rc;
 }
 
@@ -13598,6 +13590,48 @@ static void fsl_cx_fetch_hash_policy(fsl_cx * f){
   }
   f->cxConfig.hashPolicy = p;
 }
+
+#if 0
+/**
+    Return true if the schema is out-of-date. db must be an opened
+    repo db.
+ */
+static bool fsl__db_repo_schema_is_outofdate(fsl_db *db){
+  return fsl_db_exists(db, "SELECT 1 FROM config "
+                       "WHERE name='aux-schema' "
+                       "AND value<>'%s'",
+                       FSL_AUX_SCHEMA);
+}
+
+/*
+   Returns 0 if db appears to have a current repository schema, 1 if
+   it appears to have an out of date schema, and -1 if it appears to
+   not be a repository.
+*/
+int fsl__db_repo_verify_schema(fsl_db * const db){
+  if(fsl__db_repo_schema_is_outofdate(db)) return 1;
+  else return fsl_db_exists(db,
+                            "SELECT 1 FROM config "
+                            "WHERE name='project-code'")
+    ? 0 : -1;
+}
+int fsl_repo_schema_validate(fsl_cx * const f, fsl_db * const db){
+  int rc = 0;
+  int const check = fsl__db_repo_verify_schema(db);
+  if(0 != check){
+    rc = (check<0)
+      ? fsl_cx_err_set(f, FSL_RC_NOT_A_REPO,
+                      "DB file [%s] does not appear to be "
+                      "a repository.", db->filename)
+      : fsl_cx_err_set(f, FSL_RC_REPO_NEEDS_REBUILD,
+                      "DB file [%s] appears to be a fossil "
+                      "repsitory, but is out-of-date and needs "
+                      "a rebuild.",
+                      db->filename);
+  }
+  return rc;
+}
+#endif
 
 int fsl_repo_open( fsl_cx * const f, char const * repoDbFile
                    /* , bool readOnlyCurrentlyIgnored */ ){
@@ -14772,6 +14806,48 @@ static int fsl_list_v_fsl_stmt_finalize(void * obj, void * visitorState ){
 }
 #endif
 
+
+/**
+   Translates sqliteCode (or, if it's 0, sqlite3_errcode()) to an
+   approximate FSL_RC_xxx match but treats SQLITE_ROW and SQLITE_DONE
+   as non-errors (result code 0). If non-0 is returned db's error
+   state is updated with the current sqlite3_errmsg() string.
+*/
+static int fsl__db_errcode(fsl_db * const db, int sqliteCode){
+  int rc = sqliteCode ? sqliteCode : sqlite3_errcode(db->dbh);
+  switch(sqliteCode){
+    case SQLITE_ROW:
+    case SQLITE_DONE:
+    case SQLITE_OK: rc = 0; break;
+    case SQLITE_NOMEM: rc = FSL_RC_OOM; break;
+    case SQLITE_INTERRUPT: rc = FSL_RC_INTERRUPTED; break;
+    case SQLITE_TOOBIG:
+    case SQLITE_FULL:
+    case SQLITE_NOLFS:
+    case SQLITE_RANGE: rc = FSL_RC_RANGE; break;
+    case SQLITE_NOTFOUND: rc = FSL_RC_NOT_FOUND; break;
+    case SQLITE_PERM:
+    case SQLITE_AUTH:
+    case SQLITE_LOCKED:
+    case SQLITE_READONLY: rc = FSL_RC_ACCESS; break;
+    case SQLITE_CORRUPT: rc = FSL_RC_CONSISTENCY; break;
+    case SQLITE_IOERR: rc = FSL_RC_IO; break;
+    default:
+      //MARKER(("sqlite3_errcode()=%d\n", rc));
+      rc = FSL_RC_DB; break;
+  }
+  return rc
+    ? fsl_error_set(&db->error, rc, "sqlite3 error: %s",
+                    sqlite3_errmsg(db->dbh))
+    /* ^^^ potential TODO: use fsl_buffer_external() on db->error.msg,
+       pointing it directly to the sqlite3_errmsg() result, instead of
+       allocating a copy with a prefix. That has the advantage of not
+       allocating (so an OOM message can be reported with a message)
+       but the disadvantage of exposing the 3rd-party error string
+       without any indication that it's coming from a 3rd party. */
+    : (fsl_error_reset(&db->error), 0);
+}
+
 void fsl__db_clear_strings(fsl_db * const db, bool alsoErrorState ){
   fsl_free(db->filename);
   db->filename = NULL;
@@ -14788,22 +14864,6 @@ int fsl_db_err_get( fsl_db const * const db, char const ** msg, fsl_size_t * len
 
 fsl_db * fsl_stmt_db( fsl_stmt * const stmt ){
   return stmt ? stmt->db : NULL;
-}
-
-/**
-    Resets db->error state based on the given code and the current
-    error string from the db driver. Returns FSL_RC_DB on success,
-    some other non-0 value on error (most likely FSL_RC_OOM while
-    allocating the error string - that's the only other error case as
-    long as db is opened). Results are undefined if !db or db is not
-    opened.
- */
-static int fsl_err_from_db( fsl_db * const db, int dbCode ){
-  assert(db && db->dbh);
-  db->error.msg.used =0 ;
-  return fsl_error_set(&db->error, FSL_RC_DB,
-                       "Db error #%d: %s",
-                       dbCode, sqlite3_errmsg(db->dbh));
 }
 
 char const * fsl_stmt_sql( fsl_stmt * const stmt, fsl_size_t * const len ){
@@ -15380,7 +15440,7 @@ int fsl_stmt_reset2( fsl_stmt * const stmt, bool resetRowCounter ){
     if(resetRowCounter) stmt->rowCount = 0;
     assert(stmt->db);
     return rc
-      ? fsl_err_from_db(stmt->db, rc)
+      ? fsl__db_errcode(stmt->db, rc)
       : 0;
   }
 }
@@ -15533,35 +15593,35 @@ int fsl_stmt_bind_step( fsl_stmt * st, char const * fmt, ... ){
 int fsl_stmt_bind_null( fsl_stmt * const stmt, int ndx ){
   BIND_PARAM_CHECK2 {
     int const rc = sqlite3_bind_null( stmt->stmt, ndx );
-    return rc ? fsl_err_from_db(stmt->db, rc) : 0;
+    return rc ? fsl__db_errcode(stmt->db, rc) : 0;
   }
 }
 
 int fsl_stmt_bind_int32( fsl_stmt * const stmt, int ndx, int32_t v ){
   BIND_PARAM_CHECK2 {
     int const rc = sqlite3_bind_int( stmt->stmt, ndx, (int)v );
-    return rc ? fsl_err_from_db(stmt->db, rc) : 0;
+    return rc ? fsl__db_errcode(stmt->db, rc) : 0;
   }
 }
 
 int fsl_stmt_bind_int64( fsl_stmt * const stmt, int ndx, int64_t v ){
   BIND_PARAM_CHECK2 {
     int const rc = sqlite3_bind_int64( stmt->stmt, ndx, (sqlite3_int64)v );
-    return rc ? fsl_err_from_db(stmt->db, rc) : 0;
+    return rc ? fsl__db_errcode(stmt->db, rc) : 0;
   }
 }
 
 int fsl_stmt_bind_id( fsl_stmt * const stmt, int ndx, fsl_id_t v ){
   BIND_PARAM_CHECK2 {
     int const rc = sqlite3_bind_int64( stmt->stmt, ndx, (sqlite3_int64)v );
-    return rc ? fsl_err_from_db(stmt->db, rc) : 0;
+    return rc ? fsl__db_errcode(stmt->db, rc) : 0;
   }
 }
 
 int fsl_stmt_bind_double( fsl_stmt * const stmt, int ndx, double v ){
   BIND_PARAM_CHECK2 {
     int const rc = sqlite3_bind_double( stmt->stmt, ndx, (double)v );
-    return rc ? fsl_err_from_db(stmt->db, rc) : 0;
+    return rc ? fsl__db_errcode(stmt->db, rc) : 0;
   }
 }
 
@@ -15571,7 +15631,7 @@ int fsl_stmt_bind_blob( fsl_stmt * const stmt, int ndx, void const * src,
     int rc;
     rc = sqlite3_bind_blob( stmt->stmt, ndx, src, (int)len,
                             makeCopy ? SQLITE_TRANSIENT : SQLITE_STATIC );
-    return rc ? fsl_err_from_db(stmt->db, rc) : 0;
+    return rc ? fsl__db_errcode(stmt->db, rc) : 0;
   }
 }
 
@@ -15582,7 +15642,7 @@ int fsl_stmt_bind_text( fsl_stmt * const stmt, int ndx, char const * src,
     if(len<0) len = fsl_strlen((char const *)src);
     rc = sqlite3_bind_text( stmt->stmt, ndx, src, len,
                             makeCopy ? SQLITE_TRANSIENT : SQLITE_STATIC );
-    return rc ? fsl_err_from_db(stmt->db, rc) : 0;
+    return rc ? fsl__db_errcode(stmt->db, rc) : 0;
   }
 }
 
@@ -15704,7 +15764,7 @@ int fsl_stmt_get_text( fsl_stmt * const stmt, int ndx, char const **out,
       int const x = sqlite3_column_bytes(stmt->stmt, ndx);
       *outLen = (x>0) ? (fsl_size_t)x : 0;
     }
-    return 0;
+    return t ? 0 : fsl__db_errcode(stmt->db, 0);
   }
 }
 
@@ -15722,7 +15782,7 @@ int fsl_stmt_get_blob( fsl_stmt * const stmt, int ndx, void const **out,
         *outLen = (sz>=0) ? (fsl_size_t)sz : 0;
       }
     }
-    return 0;
+    return t ? 0 : fsl__db_errcode(stmt->db, 0);
   }
 }
 
@@ -15771,410 +15831,6 @@ static void fsl_db_sql_trace(void *zFILE, const char *zSql){
               zSql, (n>0 && zSql[n-1]==';') ? "" : ";");
 }
 
-/*
-   SQL function for debugging.
-  
-   The print() function writes its arguments to fsl_output()
-   if the bound fsl_cx->cxConfig.sqlPrint flag is true.
-*/
-static void fsl_db_sql_print(
-  sqlite3_context *context,
-  int argc,
-  sqlite3_value **argv
-){
-  fsl_cx * f = (fsl_cx*)sqlite3_user_data(context);
-  assert(f);
-  if( f->cxConfig.sqlPrint ){
-    int i;
-    for(i=0; i<argc; i++){
-      char c = i==argc-1 ? '\n' : ' ';
-      fsl_outputf(f, "%s%c", sqlite3_value_text(argv[i]), c);
-    }
-  }
-}
-
-/*
-   SQL function to return the number of seconds since 1970.  This is
-   the same as strftime('%s','now') but is more compact.
-*/
-static void fsl_db_now_udf(
-  sqlite3_context *context,
-  int argc,
-  sqlite3_value **argv
-){
-  sqlite3_result_int64(context, (sqlite3_int64)time(0));
-}
-
-/*
-   SQL function to convert a Julian Day to a Unix timestamp.
-*/
-static void fsl_db_j2u_udf(
-  sqlite3_context *context,
-  int argc,
-  sqlite3_value **argv
-){
-  double const jd = (double)sqlite3_value_double(argv[0]);
-  sqlite3_result_int64(context, (sqlite3_int64)fsl_julian_to_unix(jd));
-}
-
-/*
-   SQL function FSL_CKOUT_DIR([bool includeTrailingSlash=1]) returns
-   the top-level checkout directory, optionally (by default) with a
-   trailing slash. Returns NULL if the fsl_cx instance bound to
-   sqlite3_user_data() has no checkout.
-*/
-static void fsl_db_cx_chkout_dir_udf(
-  sqlite3_context *context,
-  int argc,
-  sqlite3_value **argv
-){
-  fsl_cx * f = (fsl_cx*)sqlite3_user_data(context);
-  int const includeSlash = argc
-    ? sqlite3_value_int(argv[0])
-    : 1;
-  if(f && f->ckout.dir && f->ckout.dirLen){
-    sqlite3_result_text(context, f->ckout.dir,
-                        (int)f->ckout.dirLen
-                        - (includeSlash ? 0 : 1),
-                        SQLITE_TRANSIENT);
-  }else{
-    sqlite3_result_null(context);
-  }
-}
-
-
-/**
-    SQL Function to return the check-in time for a file.
-    Requires (vid,fid) RID arguments, as described for
-    fsl_mtime_of_manifest_file().
- */
-static void fsl_db_checkin_mtime_udf(
-                                     sqlite3_context *context,
-                                     int argc,
-                                     sqlite3_value **argv
-){
-  fsl_cx * f = (fsl_cx*)sqlite3_user_data(context);
-  fsl_time_t mtime = 0;
-  int rc;
-  fsl_id_t vid, fid;
-  assert(f);
-  vid = (fsl_id_t)sqlite3_value_int(argv[0]);
-  fid = (fsl_id_t)sqlite3_value_int(argv[1]);
-  rc = fsl_mtime_of_manifest_file(f, vid, fid, &mtime);
-  if( rc==0 ){
-    sqlite3_result_int64(context, mtime);
-  }else{
-    sqlite3_result_error(context, "fsl_mtime_of_manifest_file() failed", -1); 
-  }
-}
-
-
-static void fsl_db_content_udf(
-  sqlite3_context *context,
-  int argc,
-  sqlite3_value **argv
-){
-  fsl_cx * f = (fsl_cx*)sqlite3_user_data(context);
-  fsl_id_t rid = 0;
-  char const * arg;
-  int rc;
-  fsl_buffer b = fsl_buffer_empty;
-  assert(f);
-  if(1 != argc){
-    sqlite3_result_error(context, "Expecting one argument", -1);
-    return;
-  }
-  if(SQLITE_INTEGER==sqlite3_value_type(argv[0])){
-    rid = (fsl_id_t)sqlite3_value_int64(argv[0]);
-    arg = NULL;
-  }else{
-    arg = (const char*)sqlite3_value_text(argv[0]);
-    if(!arg){
-      sqlite3_result_error(context, "Invalid argument", -1);
-      return;
-    }
-    rc = fsl_sym_to_rid(f, arg, FSL_SATYPE_CHECKIN, &rid);
-    if(rc) goto cx_err;
-    else if(!rid){
-      sqlite3_result_error(context, "No blob found", -1);
-      return;
-    }
-  }
-  rc = fsl_content_get(f, rid, &b);
-  if(rc) goto cx_err;
-  /* Curiously, i'm seeing no difference in allocation counts here... */
-  sqlite3_result_blob(context, b.mem, (int)b.used, fsl_free);
-  b = fsl_buffer_empty;
-  return;
-  cx_err:
-  fsl_buffer_clear(&b);
-  assert(f->error.msg.used);
-  if(FSL_RC_OOM==rc){
-    sqlite3_result_error_nomem(context);
-  }else{
-    assert(f->error.msg.used);
-    sqlite3_result_error(context, (char const *)f->error.msg.mem,
-                         (int)f->error.msg.used);
-  }
-}
-
-static void fsl_db_sym2rid_udf(
-  sqlite3_context *context,
-  int argc,
-  sqlite3_value **argv
-){
-  fsl_cx * f = (fsl_cx*)sqlite3_user_data(context);
-  char const * arg;
-  assert(f);
-  if(1 != argc){
-    sqlite3_result_error(context, "Expecting one argument", -1);
-    return;
-  }
-  arg = (const char*)sqlite3_value_text(argv[0]);
-  if(!arg){
-    sqlite3_result_error(context, "Expecting a STRING argument", -1);
-  }else{
-    fsl_id_t rid = 0;
-    int const rc = fsl_sym_to_rid(f, arg, FSL_SATYPE_CHECKIN, &rid);
-    if(rc){
-      if(FSL_RC_OOM==rc){
-        sqlite3_result_error_nomem(context);
-      }else{
-        assert(f->error.msg.used);
-        sqlite3_result_error(context, (char const *)f->error.msg.mem,
-                             (int)f->error.msg.used);
-      }
-      fsl_cx_err_reset(f)
-        /* This is arguable but keeps this error from poluting
-           down-stream code (seen it happen in unit tests).  The irony
-           is, it's very possible/likely that the error will propagate
-           back up into f->error at some point.
-        */;
-    }else{
-      assert(rid>0);
-      sqlite3_result_int64(context, rid);
-    }
-  }
-}
-
-static void fsl_db_dirpart_udf(
-  sqlite3_context *context,
-  int argc,
-  sqlite3_value **argv
-){
-  char const * arg;
-  int rc;
-  fsl_buffer b = fsl_buffer_empty;
-  int fSlash = 0;
-  if(argc<1 || argc>2){
-    sqlite3_result_error(context,
-                         "Expecting (string) or (string,bool) arguments",
-                         -1);
-    return;
-  }
-  arg = (const char*)sqlite3_value_text(argv[0]);
-  if(!arg){
-    sqlite3_result_error(context, "Invalid argument", -1);
-    return;
-  }
-  if(argc>1){
-    fSlash = sqlite3_value_int(argv[1]);
-  }
-  rc = fsl_file_dirpart(arg, -1, &b, fSlash ? 1 : 0);
-  if(!rc){
-    if(b.used && *b.mem){
-#if 0
-      sqlite3_result_text(context, (char const *)b.mem,
-                          (int)b.used, SQLITE_TRANSIENT);
-#else
-      sqlite3_result_text(context, (char const *)b.mem,
-                          (int)b.used, fsl_free);
-      b = fsl_buffer_empty /* we passed ^^^^^ on ownership of b.mem */;
-#endif
-    }else{
-      sqlite3_result_null(context);
-    }
-  }else{
-    if(FSL_RC_OOM==rc){
-      sqlite3_result_error_nomem(context);
-    }else{
-      sqlite3_result_error(context, "fsl_dirpart() failed!", -1);
-    }
-  }
-  fsl_buffer_clear(&b);
-}
-
-
-/*
-   Implement the user() SQL function.  user() takes no arguments and
-   returns the user ID of the current user.
-*/
-static void fsl_db_user_udf(
-  sqlite3_context *context,
-  int argc,
-  sqlite3_value **argv
-){
-  fsl_cx * f = (fsl_cx*)sqlite3_user_data(context);
-  assert(f);
-  if(f->repo.user){
-    sqlite3_result_text(context, f->repo.user, -1, SQLITE_STATIC);
-  }else{
-    sqlite3_result_null(context);
-  }
-}
-
-/**
-   SQL function:
-
-   fsl_is_enqueued(vfile.id)
-   fsl_if_enqueued(vfile.id, X, Y)
-
-   On the commit command, when filenames are specified (in order to do
-   a partial commit) the vfile.id values for the named files are
-   loaded into the fsl_cx state.  This function looks at that state to
-   see if a file is named in that list.
-
-   In the first form (1 argument) return TRUE if either no files are
-   named (meaning that all changes are to be committed) or if id is
-   found in the list.
-
-   In the second form (3 arguments) return argument X if true and Y if
-   false unless Y is NULL, in which case always return X.
-*/
-static void fsl_db_selected_for_checkin_udf(
-  sqlite3_context *context,
-  int argc,
-  sqlite3_value **argv
-){
-  int rc = 0;
-  fsl_cx * f = (fsl_cx*)sqlite3_user_data(context);
-  fsl_id_bag * bag = &f->ckin.selectedIds;
-  assert(argc==1 || argc==3);
-  if( bag->entryCount ){
-    fsl_id_t const iId = (fsl_id_t)sqlite3_value_int64(argv[0]);
-    rc = iId ? (fsl_id_bag_contains(bag, iId) ? 1 : 0) : 0;
-  }else{
-    rc = 1;
-  }
-  if(1==argc){
-    sqlite3_result_int(context, rc);
-  }else{
-    assert(3 == argc);
-    assert( rc==0 || rc==1 );
-    if( sqlite3_value_type(argv[2-rc])==SQLITE_NULL ) rc = 1-rc;
-    sqlite3_result_value(context, argv[2-rc]);
-  }
-}
-
-/**
-   fsl_match_vfile_or_dir(p1,p2)
-
-   A helper for resolving expressions like:
-
-   WHERE pathname='X' C OR
-      (pathname>'X/' C AND pathname<'X0' C)
-
-   i.e. is 'X' a match for the LHS or is it a directory prefix of
-   LHS?
-
-   C = empty or COLLATE NOCASE, depending on the case-sensitivity
-   setting of the fsl_cx instance associated with
-   sqlite3_user_data(context). p1 is typically vfile.pathname or
-   vfile.origname, and p2 is the string being compared against that.
-
-   Resolves to NULL if either argument is NULL, 0 if the comparison
-   shown above is false, 1 if the comparison is an exact match, or 2
-   if p2 is a directory prefix part of p1.
-*/
-static void fsl_db_match_vfile_or_dir(
-  sqlite3_context *context,
-  int argc,
-  sqlite3_value **argv
-){
-  fsl_cx * f = (fsl_cx*)sqlite3_user_data(context);
-  char const * p1;
-  char const * p2;
-  fsl_buffer * b = 0;
-  int rc = 0;
-  assert(f);
-  if(2 != argc){
-    sqlite3_result_error(context, "Expecting two arguments", -1);
-    return;
-  }
-  p1 = (const char*)sqlite3_value_text(argv[0]);
-  p2 = (const char*)sqlite3_value_text(argv[1]);
-  if(!p1 || !p2){
-    sqlite3_result_null(context);
-    return;
-  }
-  int (*cmp)(char const *, char const *) =
-    f->cache.caseInsensitive ? fsl_stricmp : fsl_strcmp;
-  if(0==cmp(p1, p2)){
-    sqlite3_result_int(context, 1);
-    return;
-  }
-  b = fsl__cx_scratchpad(f);
-  rc = fsl_buffer_appendf(b, "%s/", p2);
-  if(rc) goto oom;
-  else if(cmp(p1, fsl_buffer_cstr(b))>0){
-    b->mem[b->used-1] = '0';
-    if(cmp(p1, fsl_buffer_cstr(b))<0)
-    rc = 2;
-  }
-  assert(0==rc || 2==rc);
-  sqlite3_result_int(context, rc);
-  end:
-  fsl__cx_scratchpad_yield(f, b);
-  return;
-  oom:
-  sqlite3_result_error_nomem(context);
-  goto end;
-}
-
-/**
-   F(glob-list-name, filename)
-
-   Returns 1 if the 2nd argument matches any glob in the fossil glob
-   list named by the first argument. The first argument must be a name
-   resolvable via fsl_glob_name_to_category() or an error is
-   triggered. The second value is intended to be a string, but NULL is
-   accepted (but never matches anything).
-
-   If no match is found, 0 is returned. An empty glob list never matches
-   anything.
-*/
-static void fsl_db_cx_glob_udf(
-  sqlite3_context *context,
-  int argc,
-  sqlite3_value **argv
-){
-  fsl_cx * const f = (fsl_cx*)sqlite3_user_data(context);
-  fsl_list * li = NULL;
-  fsl_glob_category_e globType;
-  char const * p1;
-  char const * p2;
-  p2 = (const char*)sqlite3_value_text(argv[1])/*value to check*/;
-  if(NULL==p2 || 0==p2[0]){
-    sqlite3_result_int(context, 0);
-    return;
-  }
-  p1 = (const char*)sqlite3_value_text(argv[0])/*glob set name*/;
-  globType  = fsl_glob_name_to_category(p1);
-  if(FSL_GLOBS_INVALID==globType){
-    char buf[100] = {0};
-    buf[sizeof(buf)-1] = 0;
-    fsl_snprintf(buf, (fsl_size_t)sizeof(buf)-1,
-                 "Unknown glob pattern name: %#.*s",
-                 50, p1 ? p1 : "NULL");
-    sqlite3_result_error(context, buf, -1);
-    return;
-  }
-  fsl_cx_glob_list(f, globType, &li, false);
-  assert(li);
-  sqlite3_result_int(context, fsl_glob_list_matches(li, p2) ? 1 : 0);
-}
-
-
 fsl_db * fsl_db_malloc(){
   fsl_db * rc = (fsl_db *)fsl_malloc(sizeof(fsl_db));
   if(rc){
@@ -16193,31 +15849,6 @@ fsl_stmt * fsl_stmt_malloc(){
   return rc;
 }
 
-
-/**
-    Return true if the schema is out-of-date. db must be an opened
-    repo db.
- */
-static char fsl_db_repo_schema_is_outofdate(fsl_db *db){
-  return fsl_db_exists(db, "SELECT 1 FROM config "
-                       "WHERE name='aux-schema' "
-                       "AND value<>'%s'",
-                       FSL_AUX_SCHEMA);
-}
-
-/*
-   Returns 0 if db appears to have a current repository schema, 1 if
-   it appears to have an out of date schema, and -1 if it appears to
-   not be a repository.
-*/
-int fsl__db_repo_verify_schema(fsl_db * db){
-  if(fsl_db_repo_schema_is_outofdate(db)) return 1;
-  else return fsl_db_exists(db,
-                            "SELECT 1 FROM config "
-                            "WHERE name='project-code'")
-    ? 0 : -1;
-}
-
 /**
    Callback for use with sqlite3_commit_hook(). The argument must be a
    (fsl_db*). This function returns 0 only if it surmises that
@@ -16226,12 +15857,7 @@ int fsl__db_repo_verify_schema(fsl_db * db){
    sanity check for something which "must not happen."
 */
 static int fsl_db_verify_begin_was_not_called(void * db_fsl){
-#if 0
-  return 0;
-#else
-  /* i cannot explain why, but the ptr i'm getting here is most definately
-     not a proper fsl_db. */
-  fsl_db * db = (fsl_db *)db_fsl;
+  fsl_db * const db = (fsl_db *)db_fsl;
   assert(db && "What else could it be?");
   assert(db->dbh && "Else we can't have been called by sqlite3, could we have?");
   if(db->beginCount>0){
@@ -16241,9 +15867,7 @@ static int fsl_db_verify_begin_was_not_called(void * db_fsl){
               "is pending.");
     return 2;
   }
-  /* we have no context: sqlite3_result_error(context, "fsl_mtime_of_manifest_file() failed", -1);  */
-  else return 0;
-#endif
+  return 0;
 }
 
 int fsl_db_open( fsl_db * db, char const * dbFile,
@@ -16316,103 +15940,10 @@ int fsl_db_open( fsl_db * db, char const * dbFile,
       }
     }
     db->dbh = dbh;
-    if(FSL_OPEN_F_SCHEMA_VALIDATE & openFlags){
-      int check;
-      check = fsl__db_repo_verify_schema(db);
-      if(0 != check){
-        rc = (check<0)
-          ? fsl_error_set(&db->error, FSL_RC_NOT_A_REPO,
-                          "DB file [%s] does not appear to be "
-                          "a repository.", dbFile)
-          : fsl_error_set(&db->error, FSL_RC_REPO_NEEDS_REBUILD,
-                          "DB file [%s] appears to be a fossil "
-                          "repsitory, but is out-of-date and needs "
-                          "a rebuild.",
-                          dbFile);
-        assert(rc == db->error.code);
-        goto end;
-      }
-    }
-
-    if( (openFlags & FSL_OPEN_F_TRACE_SQL)
-        || (db->f && db->f->cxConfig.traceSql) ){
+    sqlite3_commit_hook(dbh, fsl_db_verify_begin_was_not_called, db);
+    if(FSL_OPEN_F_TRACE_SQL & openFlags){
       fsl_db_sqltrace_enable(db, stdout);
     }
-
-    if(db->f){
-      /*
-        Plug in fsl_cx-specific functionality to this one.
-
-        TODO: move this into the fsl_cx code. Its placement here is
-        largely historical.
-      */
-      fsl_cx * f = db->f;
-      /* This all comes from db.c:db_open()... */
-      /* FIXME: check result codes here. */
-      sqlite3_commit_hook(dbh, fsl_db_verify_begin_was_not_called, db);
-      sqlite3_busy_timeout(dbh, 5000 /* historical value */);
-      sqlite3_wal_autocheckpoint(dbh, 1);  /* Set to checkpoint frequently */
-      sqlite3_exec(dbh, "PRAGMA foreign_keys=OFF;", 0, 0, 0);
-      sqlite3_create_function(dbh, "now", 0, SQLITE_ANY, 0,
-                              fsl_db_now_udf, 0, 0);
-      sqlite3_create_function(dbh, "fsl_ci_mtime", 2,
-                              SQLITE_ANY | SQLITE_DETERMINISTIC, f,
-                              fsl_db_checkin_mtime_udf, 0, 0);
-      sqlite3_create_function(dbh, "fsl_user", 0,
-                              SQLITE_ANY | SQLITE_DETERMINISTIC, f,
-                              fsl_db_user_udf, 0, 0);
-      sqlite3_create_function(dbh, "fsl_print", -1,
-                              SQLITE_UTF8
-                              /* not strictly SQLITE_DETERMINISTIC
-                                 because it produces output */,
-                              f, fsl_db_sql_print,0,0);
-      sqlite3_create_function(dbh, "fsl_content", 1,
-                              SQLITE_ANY | SQLITE_DETERMINISTIC, f,
-                              fsl_db_content_udf, 0, 0);
-      sqlite3_create_function(dbh, "fsl_sym2rid", 1,
-                              SQLITE_ANY | SQLITE_DETERMINISTIC, f,
-                              fsl_db_sym2rid_udf, 0, 0);
-      sqlite3_create_function(dbh, "fsl_dirpart", 1,
-                              SQLITE_ANY | SQLITE_DETERMINISTIC, NULL,
-                              fsl_db_dirpart_udf, 0, 0);
-      sqlite3_create_function(dbh, "fsl_dirpart", 2,
-                              SQLITE_ANY | SQLITE_DETERMINISTIC, NULL,
-                              fsl_db_dirpart_udf, 0, 0);
-      sqlite3_create_function(dbh, "fsl_j2u", 1,
-                              SQLITE_ANY | SQLITE_DETERMINISTIC, NULL,
-                              fsl_db_j2u_udf, 0, 0);
-      /*
-        fsl_i[sf]_selected() both require access to the f's list of
-        files being considered for commit.
-      */
-      sqlite3_create_function(dbh, "fsl_is_enqueued", 1, SQLITE_UTF8, f,
-                              fsl_db_selected_for_checkin_udf,0,0 );
-      sqlite3_create_function(dbh, "fsl_if_enqueued", 3, SQLITE_UTF8, f,
-                              fsl_db_selected_for_checkin_udf,0,0 );
-
-      sqlite3_create_function(dbh, "fsl_ckout_dir", -1,
-                              SQLITE_ANY /* | SQLITE_DETERMINISTIC ? */,
-                              f, fsl_db_cx_chkout_dir_udf,0,0 );
-      sqlite3_create_function(dbh, "fsl_match_vfile_or_dir", 2,
-                              SQLITE_ANY | SQLITE_DETERMINISTIC,
-                              f, fsl_db_match_vfile_or_dir,0,0 );
-      sqlite3_create_function(dbh, "fsl_glob", 2,
-                              SQLITE_UTF8 | SQLITE_DETERMINISTIC,
-                              /* noting that ^^^^^ it's only deterministic
-                                 for a given statement execution IF no SQL
-                                 triggers an effect which forces the globs to
-                                 reload. That "shouldn't ever happen." */
-                              f, fsl_db_cx_glob_udf, 0, 0 );
-
-#if 0
-      /* functions registered in v1 by db.c:db_open(). */
-      /* porting cgi() requires access to the HTTP/CGI
-         layer. i.e. this belongs downstream. */
-      sqlite3_create_function(dbh, "cgi", 1, SQLITE_ANY, 0, db_sql_cgi, 0, 0);
-      sqlite3_create_function(dbh, "cgi", 2, SQLITE_ANY, 0, db_sql_cgi, 0, 0);
-      re_add_sql_func(db) /* Requires the regex bits. */;
-#endif
-    }/*if(db->f)*/
   }
   end:
   if(rc){
@@ -16450,13 +15981,13 @@ int fsl_db_exec_multiv( fsl_db * const db, const char * sql, va_list args){
       fsl_stmt_t * pStmt = NULL;
       rc = sqlite3_prepare_v2(db->dbh, z, buf.used, &pStmt, &zEnd);
       if( SQLITE_OK != rc ){
-        rc = fsl_err_from_db(db, rc);
+        rc = fsl__db_errcode(db, rc);
         break;
       }
       if(pStmt){
         while( SQLITE_ROW == sqlite3_step(pStmt) ){}
         rc = sqlite3_finalize(pStmt);
-        if(rc) rc = fsl_err_from_db(db, rc);
+        if(rc) rc = fsl__db_errcode(db, rc);
       }
       buf.used -= (zEnd-z);
       z = zEnd;
@@ -23327,7 +22858,7 @@ int fsl__crosslink_end(fsl_cx * const f, int resultCode){
     }
   }
   fsl_stmt_finalize(&q);
-  rc = fsl_cx_exec(f, "DROP TABLE pending_xlink");
+  rc = fsl_cx_exec(f, "DELETE FROM pending_xlink");
   if(rc) goto end;
   /* If multiple check-ins happen close together in time, adjust their
      times by a few milliseconds to make sure they appear in chronological
@@ -23365,9 +22896,7 @@ int fsl__crosslink_end(fsl_cx * const f, int resultCode){
                      );
   }
   end:
-  if(!rc){
-    fsl_cx_exec(f, "DROP TABLE time_fudge");
-  }
+  fsl_cx_exec(f, "DELETE FROM time_fudge");
   if(rc) fsl_cx_transaction_end(f, true);
   else rc = fsl_cx_transaction_end(f, false);
   return rc;
@@ -23384,13 +22913,16 @@ int fsl__crosslink_begin(fsl_cx * const f){
   rc = fsl_cx_transaction_begin(f);
   if(rc) return rc;
   rc = fsl_cx_exec_multi(f,
-     "CREATE TEMP TABLE pending_xlink(id TEXT PRIMARY KEY)WITHOUT ROWID;"
-     "CREATE TEMP TABLE time_fudge("
+     "CREATE TEMP TABLE IF NOT EXISTS "
+     "pending_xlink(id TEXT PRIMARY KEY)WITHOUT ROWID;"
+     "CREATE TEMP TABLE IF NOT EXISTS time_fudge("
      "  mid INTEGER PRIMARY KEY,"    /* The rid of a manifest */
      "  m1 REAL,"                    /* The timestamp on mid */
      "  cid INTEGER,"                /* A child or mid */
      "  m2 REAL"                     /* Timestamp on the child */
-     ");");
+     ");"
+     "DELETE FROM pending_xlink; "
+     "DELETE FROM time_fudge;");
   if(0==rc){
     f->cache.isCrosslinking = true;
   }else{
@@ -23655,7 +23187,6 @@ int fsl_delta_create2( unsigned char const *zSrc, fsl_size_t lenSrc,
   int lastRead = -1;           /* Last byte of zSrc read by a COPY command */
   int rc;                      /* generic return code checker. */
   unsigned int olen = 0;       /* current output length. */
-  unsigned int total = 0;      /* total byte count. */
   fsl_delta_hash h;
   unsigned char theBuf[IntegerBufSize] = {0,};
   unsigned char * intBuf = theBuf;
@@ -23665,7 +23196,7 @@ int fsl_delta_create2( unsigned char const *zSrc, fsl_size_t lenSrc,
 #ifdef OUT
 #undef OUT
 #endif
-#define OUT(BLOB,LEN) rc=out(outState, BLOB, LEN); if(0 != rc) {fsl_free(collide); return rc;} else total += LEN
+#define OUT(BLOB,LEN) rc=out(outState, BLOB, LEN); if(0 != rc) {fsl_free(collide); return rc;} else (void)0
 #define OUTCH(CHAR) OUT(CHAR,1)
 #define PINT(I) intBuf = theBuf; olen=fsl_delta_int_put(I, &intBuf); OUT(theBuf,olen)
   PINT(lenOut);
@@ -25636,7 +25167,6 @@ static int sbsDiff(
   int r;        /* Index into R[] */
   int nr;       /* Number of COPY/DELETE/INSERT triples to process */
   int mxr;      /* Maximum value for r */
-  int na, nb;   /* Number of lines shown from A and B */
   int i, j;     /* Loop counters */
   int m, ma, mb;/* Number of lines to output */
   int skip;     /* Number of lines to skip */
@@ -25706,29 +25236,11 @@ static int sbsDiff(
     }
 #endif
     /* For the current block comprising nr triples, figure out
-       how many lines of A and B are to be displayed
-    */
+       how many lines to skip. */
     if( R[r]>nContext ){
-      na = nb = nContext;
       skip = R[r] - nContext;
     }else{
-      na = nb = R[r];
       skip = 0;
-    }
-    for(i=0; i<nr; i++){
-      na += R[r+i*3+1];
-      nb += R[r+i*3+2];
-    }
-    if( R[r+nr*3]>nContext ){
-      na += nContext;
-      nb += nContext;
-    }else{
-      na += R[r+nr*3];
-      nb += R[r+nr*3];
-    }
-    for(i=1; i<nr; i++){
-      na += R[r+i*3];
-      nb += R[r+i*3];
     }
 
     /* Draw the separator between blocks */
@@ -26926,7 +26438,7 @@ static int fdb__format(
   unsigned int contextLines; /* Lines of context above and below each change */
   unsigned short passNumber = 0;
   int rc = 0;
-
+  
 #define RC if(rc) goto end
   pass_again:
   contextLines = diff_opt_context_lines(pOpt);
@@ -30251,9 +29763,9 @@ int fsl_stream_compare( fsl_input_f in1, void * in1State,
     printf pfexp;                                                   \
   } while(0)
 
-int fsl_repo_leaves_rebuild(fsl_cx * f){
-  fsl_db * db = f ? fsl_cx_db_repo(f) : NULL;
-  return !db ? FSL_RC_MISUSE : fsl_db_exec_multi(db,
+int fsl_repo_leaves_rebuild(fsl_cx * const f){
+  fsl_db * const db = fsl_cx_db_repo(f);
+  int rc = fsl_db_exec_multi(db,
     "DELETE FROM leaf;"
     "INSERT OR IGNORE INTO leaf"
     "  SELECT cid FROM plink"
@@ -30265,6 +29777,7 @@ int fsl_repo_leaves_rebuild(fsl_cx * f){
                        " WHERE tagid=%d AND rid=plink.cid),'trunk')",
     FSL_TAGID_BRANCH, FSL_TAGID_BRANCH
   );
+  return rc ? fsl_cx_uplift_db_error2(f, db, rc) : 0;
 }
 
 fsl_int_t fsl_count_nonbranch_children(fsl_cx * const f, fsl_id_t rid){
@@ -30402,7 +29915,7 @@ int fsl__repo_leafdo_pending_checks(fsl_cx * const f){
   return rc;
 }
 
-int fsl_leaves_compute(fsl_cx * f, fsl_id_t vid,
+int fsl_leaves_compute(fsl_cx * const f, fsl_id_t vid,
                        fsl_leaves_compute_e closeMode){
   fsl_db * const db = fsl_needs_repo(f);
   if(!db) return FSL_RC_NOT_A_REPO;
@@ -30544,12 +30057,12 @@ int fsl_leaves_compute(fsl_cx * f, fsl_id_t vid,
   goto end;
 }
 
-bool fsl_leaves_computed_has(fsl_cx * f){
+bool fsl_leaves_computed_has(fsl_cx * const f){
   return fsl_db_exists(fsl_cx_db_repo(f),
                        "SELECT 1 FROM leaves");
 }
 
-fsl_int_t fsl_leaves_computed_count(fsl_cx * f){
+fsl_int_t fsl_leaves_computed_count(fsl_cx * const f){
   int32_t rv = -1;
   fsl_db * const db = fsl_cx_db_repo(f);
   int const rc = fsl_db_get_int32(db, &rv,
@@ -30563,14 +30076,14 @@ fsl_int_t fsl_leaves_computed_count(fsl_cx * f){
   return rv;
 }
 
-fsl_id_t fsl_leaves_computed_latest(fsl_cx * f){
+fsl_id_t fsl_leaves_computed_latest(fsl_cx * const f){
   fsl_id_t rv = 0;
   fsl_db * const db = fsl_cx_db_repo(f);
   int const rc =
     fsl_db_get_id(db, &rv,
-                    "SELECT rid FROM leaves, event"
-                    " WHERE event.objid=leaves.rid"
-                    " ORDER BY event.mtime DESC");
+                  "SELECT rid FROM leaves, event"
+                  " WHERE event.objid=leaves.rid"
+                  " ORDER BY event.mtime DESC");
   if(rc){
     fsl_cx_uplift_db_error2(f, db, rc);
     assert(!rv);
@@ -30580,8 +30093,10 @@ fsl_id_t fsl_leaves_computed_latest(fsl_cx * f){
   return rv;
 }
 
-void fsl_leaves_computed_cleanup(fsl_cx * f){
-  fsl_db_exec(fsl_cx_db_repo(f), "DROP TABLE IF EXISTS leaves");
+void fsl_leaves_computed_cleanup(fsl_cx * const f){
+  fsl_cx_exec(f, "DROP TABLE IF EXISTS temp.leaves");
+  /* Potential TODO: if we run into locking problems in
+     dropping this, switch to DELETE ... */
 }
 
 #undef MARKER
@@ -33348,7 +32863,8 @@ int fsl_repo_create(fsl_cx * f, fsl_repo_create_opt const * opt ){
   return rc;
 }
 
-static int fsl_repo_dir_names_rid( fsl_cx * f, fsl_id_t rid, fsl_list * tgt,
+static int fsl_repo_dir_names_rid( fsl_cx * const f, fsl_id_t rid,
+                                   fsl_list * const tgt,
                                    bool addSlash){
   fsl_db * dbR = fsl_needs_repo(f);
   fsl_deck D = fsl_deck_empty;
@@ -33375,15 +32891,14 @@ static int fsl_repo_dir_names_rid( fsl_cx * f, fsl_id_t rid, fsl_list * tgt,
   if(rc) goto end;
   rc = fsl_deck_F_rewind(d);
   while( !rc && !(rc=fsl_deck_F_next(d, &fc)) && fc ){
-    //if(!fc->name) continue;
     assert(fc->name && *fc->name);
     if(!st.stmt){
       rc = fsl_db_exec(dbR, "CREATE TEMP TABLE IF NOT EXISTS "
-                       "%b(n TEXT UNIQUE ON CONFLICT IGNORE)",
+                       "\"%b\"(n TEXT UNIQUE ON CONFLICT IGNORE)",
                        &tname);
       if(!rc){
         rc = fsl_db_prepare(dbR, &st,
-                            "INSERT INTO %b(n) "
+                            "INSERT INTO \"%b\"(n) "
                             "VALUES(fsl_dirpart(?,%d))",
                             &tname, addSlash ? 1 : 0);
       }
@@ -33405,7 +32920,7 @@ static int fsl_repo_dir_names_rid( fsl_cx * f, fsl_id_t rid, fsl_list * tgt,
   if(!rc && (count>0)){
     fsl_stmt_finalize(&st);
     rc = fsl_db_prepare(dbR, &st,
-                        "SELECT n FROM %b WHERE n "
+                        "SELECT n FROM \"%b\" WHERE n "
                         "IS NOT NULL ORDER BY n %s",
                         &tname,
                         fsl_cx_filename_collation(f));
@@ -33438,7 +32953,7 @@ static int fsl_repo_dir_names_rid( fsl_cx * f, fsl_id_t rid, fsl_list * tgt,
   fsl_stmt_finalize(&st);
   fsl_deck_clean(d);
   if(tname.used){
-    fsl_db_exec(dbR, "DROP TABLE IF EXISTS %b", &tname);
+    fsl_db_exec(dbR, "DROP TABLE IF EXISTS \"%b\"", &tname);
   }
   fsl_buffer_clear(&tname);
   return rc;
@@ -38639,6 +38154,543 @@ int fsl__ticket_rebuild(fsl_cx * const f, char const * zTktKCard){
 }
 
 /* end of file ticket.c */
+/* start of file udf.c */
+/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
+/* vim: set ts=2 et sw=2 tw=80: */
+/*
+  Copyright 2013-2021 The Libfossil Authors, see LICENSES/BSD-2-Clause.txt
+
+  SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+  SPDX-FileCopyrightText: 2021 The Libfossil Authors
+  SPDX-ArtifactOfProjectName: Libfossil
+  SPDX-FileType: Code
+
+  Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
+*/
+/*************************************************************************
+  This file houses fsl_cx-related sqlite3 User Defined Functions (UDFs).
+*/
+#if !defined(FSL_ENABLE_SQLITE_REGEXP)
+#  define FSL_ENABLE_SQLITE_REGEXP 0
+#endif
+#if FSL_ENABLE_SQLITE_REGEXP
+#endif
+#include "sqlite3.h"
+#include <assert.h>
+
+/* Only for debugging */
+#include <stdio.h>
+#define MARKER(pfexp)                                               \
+  do{ printf("MARKER: %s:%d:%s():\t",__FILE__,__LINE__,__func__);   \
+    printf pfexp;                                                   \
+  } while(0)
+
+
+/**
+   SQL function for debugging.
+  
+   The print() function writes its arguments to fsl_output()
+   if the bound fsl_cx->cxConfig.sqlPrint flag is true.
+*/
+static void fsl_db_sql_print(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  fsl_cx * f = (fsl_cx*)sqlite3_user_data(context);
+  assert(f);
+  if( f->cxConfig.sqlPrint ){
+    int i;
+    for(i=0; i<argc; i++){
+      char c = i==argc-1 ? '\n' : ' ';
+      fsl_outputf(f, "%s%c", sqlite3_value_text(argv[i]), c);
+    }
+  }
+}
+
+/**
+   SQL function to return the number of seconds since 1970.  This is
+   the same as strftime('%s','now') but is more compact.
+*/
+static void fsl_db_now_udf(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  sqlite3_result_int64(context, (sqlite3_int64)time(0));
+}
+
+/**
+   SQL function to convert a Julian Day to a Unix timestamp.
+*/
+static void fsl_db_j2u_udf(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  double const jd = (double)sqlite3_value_double(argv[0]);
+  sqlite3_result_int64(context, (sqlite3_int64)fsl_julian_to_unix(jd));
+}
+
+/**
+   SQL function FSL_CKOUT_DIR([bool includeTrailingSlash=1]) returns
+   the top-level checkout directory, optionally (by default) with a
+   trailing slash. Returns NULL if the fsl_cx instance bound to
+   sqlite3_user_data() has no checkout.
+*/
+static void fsl_db_cx_chkout_dir_udf(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  fsl_cx * f = (fsl_cx*)sqlite3_user_data(context);
+  int const includeSlash = argc
+    ? sqlite3_value_int(argv[0])
+    : 1;
+  if(f && f->ckout.dir && f->ckout.dirLen){
+    sqlite3_result_text(context, f->ckout.dir,
+                        (int)f->ckout.dirLen
+                        - (includeSlash ? 0 : 1),
+                        SQLITE_TRANSIENT);
+  }else{
+    sqlite3_result_null(context);
+  }
+}
+
+
+/**
+    SQL Function to return the check-in time for a file.
+    Requires (vid,fid) RID arguments, as described for
+    fsl_mtime_of_manifest_file().
+ */
+static void fsl_db_checkin_mtime_udf(
+                                     sqlite3_context *context,
+                                     int argc,
+                                     sqlite3_value **argv
+){
+  fsl_cx * f = (fsl_cx*)sqlite3_user_data(context);
+  fsl_time_t mtime = 0;
+  int rc;
+  fsl_id_t vid, fid;
+  assert(f);
+  vid = (fsl_id_t)sqlite3_value_int(argv[0]);
+  fid = (fsl_id_t)sqlite3_value_int(argv[1]);
+  rc = fsl_mtime_of_manifest_file(f, vid, fid, &mtime);
+  if( rc==0 ){
+    sqlite3_result_int64(context, mtime);
+  }else{
+    sqlite3_result_error(context, "fsl_mtime_of_manifest_file() failed", -1); 
+  }
+}
+
+
+/**
+   SQL UDF binding for fsl_content_get().
+
+   FSL_CONTENT(RID INTEGER | SYMBOLIC_NAME) returns the
+   undeltified/uncompressed content of the [blob] record identified by
+   the given RID or symbolic name.
+*/
+static void fsl_db_content_udf(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  fsl_cx * const f = (fsl_cx*)sqlite3_user_data(context);
+  fsl_id_t rid = 0;
+  char const * arg;
+  int rc;
+  fsl_buffer b = fsl_buffer_empty;
+  assert(f);
+  if(1 != argc){
+    sqlite3_result_error(context, "Expecting one argument", -1);
+    return;
+  }
+  if(SQLITE_INTEGER==sqlite3_value_type(argv[0])){
+    rid = (fsl_id_t)sqlite3_value_int64(argv[0]);
+    arg = NULL;
+  }else{
+    arg = (const char*)sqlite3_value_text(argv[0]);
+    if(!arg){
+      sqlite3_result_error(context, "Invalid argument", -1);
+      return;
+    }
+    rc = fsl_sym_to_rid(f, arg, FSL_SATYPE_ANY, &rid);
+    if(rc) goto cx_err;
+    else if(!rid){
+      sqlite3_result_error(context, "No blob found", -1);
+      return;
+    }
+  }
+  rc = fsl_content_get(f, rid, &b);
+  if(rc) goto cx_err;
+  /* Curiously, i'm seeing no difference in allocation counts here whether
+     we copy the blob here or pass off ownership... */
+  sqlite3_result_blob(context, b.mem, (int)b.used, fsl_free);
+  b = fsl_buffer_empty;
+  return;
+  cx_err:
+  fsl_buffer_clear(&b);
+  assert(f->error.msg.used);
+  if(FSL_RC_OOM==rc){
+    sqlite3_result_error_nomem(context);
+  }else{
+    assert(f->error.msg.used);
+    sqlite3_result_error(context, (char const *)f->error.msg.mem,
+                         (int)f->error.msg.used);
+  }
+}
+
+/**
+   SQL UDF FSL_SYM2RID(SYMBOLIC_NAME) resolves the name to a [blob].[rid]
+   value or triggers an error if it cannot be resolved.
+ */
+static void fsl_db_sym2rid_udf(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  fsl_cx * const f = (fsl_cx*)sqlite3_user_data(context);
+  char const * arg;
+  assert(f);
+  if(1 != argc){
+    sqlite3_result_error(context, "Expecting one argument", -1);
+    return;
+  }
+  arg = (const char*)sqlite3_value_text(argv[0]);
+  if(!arg){
+    sqlite3_result_error(context, "Expecting a STRING argument", -1);
+  }else{
+    fsl_id_t rid = 0;
+    int const rc = fsl_sym_to_rid(f, arg, FSL_SATYPE_ANY, &rid);
+    if(rc){
+      if(FSL_RC_OOM==rc){
+        sqlite3_result_error_nomem(context);
+      }else{
+        assert(f->error.msg.used);
+        sqlite3_result_error(context, (char const *)f->error.msg.mem,
+                             (int)f->error.msg.used);
+      }
+      fsl_cx_err_reset(f)
+        /* This is arguable but keeps this error from poluting
+           down-stream code (seen it happen in unit tests).  The irony
+           is, it's very possible/likely that the error will propagate
+           back up into f->error at some point.
+        */;
+    }else{
+      assert(rid>0);
+      sqlite3_result_int64(context, rid);
+    }
+  }
+}
+
+static void fsl_db_dirpart_udf(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  char const * arg;
+  int rc;
+  fsl_buffer b = fsl_buffer_empty;
+  int fSlash = 0;
+  if(argc<1 || argc>2){
+    sqlite3_result_error(context,
+                         "Expecting (string) or (string,bool) arguments",
+                         -1);
+    return;
+  }
+  arg = (const char*)sqlite3_value_text(argv[0]);
+  if(!arg){
+    sqlite3_result_error(context, "Invalid argument", -1);
+    return;
+  }
+  if(argc>1){
+    fSlash = sqlite3_value_int(argv[1]);
+  }
+  rc = fsl_file_dirpart(arg, -1, &b, fSlash ? 1 : 0);
+  if(!rc){
+    if(b.used && *b.mem){
+#if 0
+      sqlite3_result_text(context, (char const *)b.mem,
+                          (int)b.used, SQLITE_TRANSIENT);
+#else
+      sqlite3_result_text(context, (char const *)b.mem,
+                          (int)b.used, fsl_free);
+      b = fsl_buffer_empty /* we passed ^^^^^ on ownership of b.mem */;
+#endif
+    }else{
+      sqlite3_result_null(context);
+    }
+  }else{
+    if(FSL_RC_OOM==rc){
+      sqlite3_result_error_nomem(context);
+    }else{
+      sqlite3_result_error(context, "fsl_dirpart() failed!", -1);
+    }
+  }
+  fsl_buffer_clear(&b);
+}
+
+
+/*
+   Implement the user() SQL function.  user() takes no arguments and
+   returns the user ID of the current user.
+*/
+static void fsl_db_user_udf(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  fsl_cx * f = (fsl_cx*)sqlite3_user_data(context);
+  assert(f);
+  if(f->repo.user){
+    sqlite3_result_text(context, f->repo.user, -1, SQLITE_STATIC);
+  }else{
+    sqlite3_result_null(context);
+  }
+}
+
+/**
+   SQL function:
+
+   fsl_is_enqueued(vfile.id)
+   fsl_if_enqueued(vfile.id, X, Y)
+
+   On the commit command, when filenames are specified (in order to do
+   a partial commit) the vfile.id values for the named files are
+   loaded into the fsl_cx state.  This function looks at that state to
+   see if a file is named in that list.
+
+   In the first form (1 argument) return TRUE if either no files are
+   named (meaning that all changes are to be committed) or if id is
+   found in the list.
+
+   In the second form (3 arguments) return argument X if true and Y if
+   false unless Y is NULL, in which case always return X.
+*/
+static void fsl_db_selected_for_checkin_udf(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  int rc = 0;
+  fsl_cx * f = (fsl_cx*)sqlite3_user_data(context);
+  fsl_id_bag * bag = &f->ckin.selectedIds;
+  assert(argc==1 || argc==3);
+  if( bag->entryCount ){
+    fsl_id_t const iId = (fsl_id_t)sqlite3_value_int64(argv[0]);
+    rc = iId ? (fsl_id_bag_contains(bag, iId) ? 1 : 0) : 0;
+  }else{
+    rc = 1;
+  }
+  if(1==argc){
+    sqlite3_result_int(context, rc);
+  }else{
+    assert(3 == argc);
+    assert( rc==0 || rc==1 );
+    if( sqlite3_value_type(argv[2-rc])==SQLITE_NULL ) rc = 1-rc;
+    sqlite3_result_value(context, argv[2-rc]);
+  }
+}
+
+/**
+   fsl_match_vfile_or_dir(p1,p2)
+
+   A helper for resolving expressions like:
+
+   WHERE pathname='X' C OR
+      (pathname>'X/' C AND pathname<'X0' C)
+
+   i.e. is 'X' a match for the LHS or is it a directory prefix of
+   LHS?
+
+   C = empty or COLLATE NOCASE, depending on the case-sensitivity
+   setting of the fsl_cx instance associated with
+   sqlite3_user_data(context). p1 is typically vfile.pathname or
+   vfile.origname, and p2 is the string being compared against that.
+
+   Resolves to NULL if either argument is NULL, 0 if the comparison
+   shown above is false, 1 if the comparison is an exact match, or 2
+   if p2 is a directory prefix part of p1.
+*/
+static void fsl_db_match_vfile_or_dir(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  fsl_cx * f = (fsl_cx*)sqlite3_user_data(context);
+  char const * p1;
+  char const * p2;
+  fsl_buffer * b = 0;
+  int rc = 0;
+  assert(f);
+  if(2 != argc){
+    sqlite3_result_error(context, "Expecting two arguments", -1);
+    return;
+  }
+  p1 = (const char*)sqlite3_value_text(argv[0]);
+  p2 = (const char*)sqlite3_value_text(argv[1]);
+  if(!p1 || !p2){
+    sqlite3_result_null(context);
+    return;
+  }
+  int (*cmp)(char const *, char const *) =
+    f->cache.caseInsensitive ? fsl_stricmp : fsl_strcmp;
+  if(0==cmp(p1, p2)){
+    sqlite3_result_int(context, 1);
+    return;
+  }
+  b = fsl__cx_scratchpad(f);
+  rc = fsl_buffer_appendf(b, "%s/", p2);
+  if(rc) goto oom;
+  else if(cmp(p1, fsl_buffer_cstr(b))>0){
+    b->mem[b->used-1] = '0';
+    if(cmp(p1, fsl_buffer_cstr(b))<0)
+    rc = 2;
+  }
+  assert(0==rc || 2==rc);
+  sqlite3_result_int(context, rc);
+  end:
+  fsl__cx_scratchpad_yield(f, b);
+  return;
+  oom:
+  sqlite3_result_error_nomem(context);
+  goto end;
+}
+
+/**
+   F(glob-list-name, filename)
+
+   Returns 1 if the 2nd argument matches any glob in the fossil glob
+   list named by the first argument. The first argument must be a name
+   resolvable via fsl_glob_name_to_category() or an error is
+   triggered. The second value is intended to be a string, but NULL is
+   accepted (but never matches anything).
+
+   If no match is found, 0 is returned. An empty glob list never matches
+   anything.
+*/
+static void fsl_db_cx_glob_udf(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  fsl_cx * const f = (fsl_cx*)sqlite3_user_data(context);
+  fsl_list * li = NULL;
+  fsl_glob_category_e globType;
+  char const * p1;
+  char const * p2;
+  p2 = (const char*)sqlite3_value_text(argv[1])/*value to check*/;
+  if(NULL==p2 || 0==p2[0]){
+    sqlite3_result_int(context, 0);
+    return;
+  }
+  p1 = (const char*)sqlite3_value_text(argv[0])/*glob set name*/;
+  globType  = fsl_glob_name_to_category(p1);
+  if(FSL_GLOBS_INVALID==globType){
+    char buf[100] = {0};
+    buf[sizeof(buf)-1] = 0;
+    fsl_snprintf(buf, (fsl_size_t)sizeof(buf)-1,
+                 "Unknown glob pattern name: %#.*s",
+                 50, p1 ? p1 : "NULL");
+    sqlite3_result_error(context, buf, -1);
+    return;
+  }
+  fsl_cx_glob_list(f, globType, &li, false);
+  assert(li);
+  sqlite3_result_int(context, fsl_glob_list_matches(li, p2) ? 1 : 0);
+}
+
+
+/**
+   Plug in fsl_cx-specific db functionality into the given db handle.
+   This must only be passed the MAIN db handle for the context.
+*/
+int fsl__cx_init_db(fsl_cx * const f, fsl_db * const db){
+  int rc;
+  assert(!f->dbMain);
+  assert(db==&f->dbMem && "Currently the case - may change later.");
+  if(f->cxConfig.traceSql){
+    fsl_db_sqltrace_enable(db, stdout);
+  }
+  f->dbMain = db;
+  db->role = FSL_DBROLE_MAIN;
+  /* This all comes from db.c:db_open()... */
+  /* FIXME: check result codes here. */
+  sqlite3 * const dbh = db->dbh;
+  sqlite3_busy_timeout(dbh, 5000 /* historical value */);
+  sqlite3_wal_autocheckpoint(dbh, 1);  /* Set to checkpoint frequently */
+  rc = fsl_cx_exec_multi(f,
+                         "PRAGMA foreign_keys=OFF;"
+                         "PRAGMA main.journal_mode=OFF;"
+                         "PRAGMA main.temp_store=FILE;");
+  if(rc) goto end;
+  sqlite3_create_function(dbh, "now", 0, SQLITE_ANY, 0,
+                          fsl_db_now_udf, 0, 0);
+  sqlite3_create_function(dbh, "fsl_ci_mtime", 2,
+                          SQLITE_ANY | SQLITE_DETERMINISTIC, f,
+                          fsl_db_checkin_mtime_udf, 0, 0);
+  sqlite3_create_function(dbh, "fsl_user", 0,
+                          SQLITE_ANY | SQLITE_DETERMINISTIC, f,
+                          fsl_db_user_udf, 0, 0);
+  sqlite3_create_function(dbh, "fsl_print", -1,
+                          SQLITE_UTF8
+                          /* not strictly SQLITE_DETERMINISTIC
+                             because it produces output */,
+                          f, fsl_db_sql_print,0,0);
+  sqlite3_create_function(dbh, "fsl_content", 1,
+                          SQLITE_ANY | SQLITE_DETERMINISTIC, f,
+                          fsl_db_content_udf, 0, 0);
+  sqlite3_create_function(dbh, "fsl_sym2rid", 1,
+                          SQLITE_ANY | SQLITE_DETERMINISTIC, f,
+                          fsl_db_sym2rid_udf, 0, 0);
+  sqlite3_create_function(dbh, "fsl_dirpart", 1,
+                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, NULL,
+                          fsl_db_dirpart_udf, 0, 0);
+  sqlite3_create_function(dbh, "fsl_dirpart", 2,
+                          SQLITE_UTF8 | SQLITE_DETERMINISTIC, NULL,
+                          fsl_db_dirpart_udf, 0, 0);
+  sqlite3_create_function(dbh, "fsl_j2u", 1,
+                          SQLITE_ANY | SQLITE_DETERMINISTIC, NULL,
+                          fsl_db_j2u_udf, 0, 0);
+  /*
+    fsl_i[sf]_selected() both require access to the f's list of
+    files being considered for commit.
+  */
+  sqlite3_create_function(dbh, "fsl_is_enqueued", 1, SQLITE_UTF8, f,
+                          fsl_db_selected_for_checkin_udf,0,0 );
+  sqlite3_create_function(dbh, "fsl_if_enqueued", 3, SQLITE_UTF8, f,
+                          fsl_db_selected_for_checkin_udf,0,0 );
+
+  sqlite3_create_function(dbh, "fsl_ckout_dir", -1,
+                          SQLITE_UTF8 | SQLITE_DETERMINISTIC,
+                          f, fsl_db_cx_chkout_dir_udf,0,0 );
+  sqlite3_create_function(dbh, "fsl_match_vfile_or_dir", 2,
+                          SQLITE_UTF8 | SQLITE_DETERMINISTIC,
+                          f, fsl_db_match_vfile_or_dir,0,0 );
+  sqlite3_create_function(dbh, "fsl_glob", 2,
+                          SQLITE_UTF8 | SQLITE_DETERMINISTIC,
+                          /* noting that ^^^^^ it's only deterministic
+                             for a given statement execution IF no SQL
+                             triggers an effect which forces the globs to
+                             reload. That "shouldn't ever happen." */
+                          f, fsl_db_cx_glob_udf, 0, 0 );
+
+#if 0
+  /* functions registered in v1 by db.c:db_open(). */
+  /* porting cgi() requires access to the HTTP/CGI
+     layer. i.e. this belongs downstream. */
+  sqlite3_create_function(dbh, "cgi", 1, SQLITE_ANY, 0, db_sql_cgi, 0, 0);
+  sqlite3_create_function(dbh, "cgi", 2, SQLITE_ANY, 0, db_sql_cgi, 0, 0);
+  re_add_sql_func(db) /* Requires the regex bits. */;
+#endif
+  end:
+  return rc;
+}
+
+
+#undef MARKER
+/* end of file udf.c */
 /* start of file utf8.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
@@ -39747,8 +39799,9 @@ int fsl_vpath_shortest( fsl_cx * const f, fsl_vpath * const path,
 
 /**
    Creates, if needed, the [ancestor] table, else clears its
-   contents. Returns 
- */
+   contents. Returns 0 on success, non-0 on db error (in which case
+   f's error state is updated).
+*/
 static int fsl__init_ancestor(fsl_cx * const f){
   fsl_db * const db = fsl_cx_db_repo(f);
   int rc;
