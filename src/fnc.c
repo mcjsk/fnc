@@ -71,8 +71,9 @@
 #define FNC_VERSION	VERSION  /* cf. Makefile */
 
 /* Utility macros. */
-#define MIN(a, b)	(((a) < (b)) ? (a) : (b))
-#define MAX(a, b)	(((a) > (b)) ? (a) : (b))
+#define MIN(_a, _b)	((_a) < (_b) ? (_a) : (_b))
+#define MAX(_a, _b)	((_a) > (_b) ? (_a) : (_b))
+#define ABS(_n)		((_n) >= 0 ? (_n) : -(_n))
 #if !defined(CTRL)
 #define CTRL(key)	((key) & 037)	/* CTRL+<key> input. */
 #endif
@@ -89,8 +90,9 @@
 
 /* Application macros. */
 #define PRINT_VERSION	STRINGIFY(FNC_VERSION)
-#define DIFF_DEF_CTXT	5		/* Default diff context lines. */
-#define DIFF_MAX_CTXT	64		/* Max diff context lines. */
+#define DEF_DIFF_CTX	5		/* Default diff context lines. */
+#define MAX_DIFF_CTX	64		/* Max diff context lines. */
+#define HSPLIT_SCALE	0.4		/* Default horizontal split scale. */
 #define SPIN_INTERVAL	200		/* Status line progress indicator. */
 #define SPINNER		"\\|/-\0"
 #define NULL_DEVICE	"/dev/null"
@@ -176,7 +178,7 @@ static struct fnc_setup {
 	} filter_types;			/* Only load commits of <type>. */
 	union {
 		const char	 *zlimit;
-		int		  limit;
+		long		  limit;
 	} nrecords;			/* Number of commits to load. */
 	const char	*filter_tag;	/* Only load commits with <tag>. */
 	const char	*filter_branch;	/* Only load commits from <branch>. */
@@ -481,6 +483,12 @@ enum fnc_view_id {
 	FNC_VIEW_BRANCH
 };
 
+enum fnc_view_mode {
+	VIEW_SPLIT_NONE,
+	VIEW_SPLIT_VERT,
+	VIEW_SPLIT_HRZN
+};
+
 enum fnc_search_mvmnt {
 	SEARCH_DONE,
 	SEARCH_FORWARD,
@@ -493,27 +501,6 @@ enum fnc_search_state {
 	SEARCH_COMPLETE,
 	SEARCH_NO_MATCH,
 	SEARCH_FOR_END
-};
-
-/*
- * User-definable setting that must map to SETTINGS in "settings.h".
- */
-enum fnc_colour_obj {
-	FNC_COLOUR_COMMIT = 1,
-	FNC_COLOUR_USER,
-	FNC_COLOUR_DATE,
-	FNC_COLOUR_DIFF_META,
-	FNC_COLOUR_DIFF_MINUS,
-	FNC_COLOUR_DIFF_PLUS,
-	FNC_COLOUR_DIFF_CHUNK,
-	FNC_COLOUR_DIFF_TAGS,
-	FNC_COLOUR_TREE_LINK,
-	FNC_COLOUR_TREE_DIR,
-	FNC_COLOUR_TREE_EXEC,
-	FNC_COLOUR_BRANCH_OPEN,
-	FNC_COLOUR_BRANCH_CLOSED,
-	FNC_COLOUR_BRANCH_CURRENT,
-	FNC_COLOUR_BRANCH_PRIVATE
 };
 
 enum fnc_diff_type {
@@ -660,6 +647,7 @@ struct fnc_tl_view_state {
 	const char		*curr_ckout_uuid;
 	char			*path;	     /* Match commits involving path. */
 	int			 selected_idx;
+	int			 nscrolled;
 	sig_atomic_t		 quit;
 	pthread_t		 thread_id;
 	bool			 colour;
@@ -839,14 +827,15 @@ struct fnc_view {
 		struct fnc_branch_view_state	branch;
 	} state;
 	enum fnc_view_id	 vid;
+	enum fnc_view_mode	 mode;
 	enum fnc_search_state	 search_status;
 	enum fnc_search_mvmnt	 searching;
-	int			 nlines;
-	int			 ncols;
+	int			 nlines;	/* Dependent on split height. */
+	int			 ncols;		/* Dependent on split width. */
 	int			 start_ln;
 	int			 start_col;
-	int			 lines;	/* Duplicate curses LINES macro. */
-	int			 cols;	/* Duplicate curses COLS macro. */
+	int			 lines;		/* Always curses LINES macro */
+	int			 cols;		/* Always curses COLS macro. */
 	bool			 focus_child;
 	bool			 active; /* Only 1 parent or child at a time. */
 	bool			 egress;
@@ -886,6 +875,9 @@ static int		 write_commit_line(struct fnc_view *,
 			    struct fnc_commit_artifact *, int);
 static int		 view_input(struct fnc_view **, int *,
 			    struct fnc_view *, struct view_tailhead *);
+static int		 cycle_view(struct fnc_view *);
+static int		 toggle_fullscreen(struct fnc_view **,
+			    struct fnc_view *);
 static int		 help(struct fnc_view *);
 static int		 padpopup(struct fnc_view *, int, int, FILE *,
 			    const char *);
@@ -893,19 +885,24 @@ static void		 centerprint(WINDOW *, int, int, int, const char *,
 			    chtype);
 static int		 tl_input_handler(struct fnc_view **, struct fnc_view *,
 			    int);
+static int		 move_tl_cursor_down(struct fnc_view *, bool);
+static void		 move_tl_cursor_up(struct fnc_view *, bool, bool);
 static int		 timeline_scroll_down(struct fnc_view *, int);
 static void		 timeline_scroll_up(struct fnc_tl_view_state *, int);
 static void		 select_commit(struct fnc_tl_view_state *);
-static int		 view_is_parent(struct fnc_view *);
+static int		 open_commit_diff_view(struct fnc_view **,
+			    struct fnc_view *);
+static int		 view_set_split(struct fnc_view *, int *, int *, int *);
+static int		 view_split_start_col(int);
+static int		 view_split_start_ln(int);
 static int		 make_splitscreen(struct fnc_view *);
 static int		 make_fullscreen(struct fnc_view *);
-static int		 view_split_start_col(int);
 static int		 view_search_start(struct fnc_view *);
 static int		 tl_search_init(struct fnc_view *);
 static int		 tl_search_next(struct fnc_view *);
 static bool		 find_commit_match(struct fnc_commit_artifact *,
 			    regex_t *);
-static int		 init_diff_commit(struct fnc_view **, int,
+static int		 init_diff_commit(struct fnc_view **, int, int,
 			    struct fnc_commit_artifact *, struct fnc_view *);
 static int		 open_diff_view(struct fnc_view *,
 			    struct fnc_commit_artifact *, int, bool, bool, bool,
@@ -940,9 +937,10 @@ static int		 match_line(const char *, regex_t *, size_t,
 			    regmatch_t *);
 static int		 write_matched_line(int *, const char *, int, int,
 			    WINDOW *, regmatch_t *);
-static void		 draw_vborder(struct fnc_view *);
+static void		 drawborder(struct fnc_view *);
 static int		 diff_input_handler(struct fnc_view **,
 			    struct fnc_view *, int);
+static int		 request_tl_commits(struct fnc_view *);
 static int		 set_selected_commit(struct fnc_diff_view_state *,
 			    struct commit_entry *);
 static int		 diff_search_init(struct fnc_view *);
@@ -1043,13 +1041,14 @@ static int		 match_branchlist_entry(struct fnc_branchlist_entry *,
 static int		 close_branch_view(struct fnc_view *);
 static void		 fnc_free_branches(struct fnc_branchlist_head *);
 static void		 fnc_branch_close(struct fnc_branch *);
+static int		 view_is_parent(struct fnc_view *);
 static void		 view_set_child(struct fnc_view *, struct fnc_view *);
 static int		 view_close_child(struct fnc_view *);
 static int		 close_tree_view(struct fnc_view *);
 static int		 close_timeline_view(struct fnc_view *);
 static int		 close_diff_view(struct fnc_view *);
 static int		 view_resize(struct fnc_view *);
-static int		 screen_is_split(struct fnc_view *);
+static bool		 screen_is_split(struct fnc_view *);
 static bool		 screen_is_shared(struct fnc_view *);
 static void		 fnc_resizeterm(void);
 static int		 join_tl_thread(struct fnc_tl_view_state *);
@@ -1059,7 +1058,7 @@ static int		 fsl_file_artifact_free(void *, void *);
 static void		 sigwinch_handler(int);
 static void		 sigpipe_handler(int);
 static void		 sigcont_handler(int);
-static int		 strtonumcheck(int *, const char *, const int,
+static int		 strtonumcheck(long *, const char *, const int,
 			    const int);
 static int		 fnc_date_to_mtime(double *, const char *, int);
 static char		*fnc_strsep (char **, const char *);
@@ -1071,15 +1070,15 @@ static int		 init_unveil(const char *, const char *, bool);
 static int		 set_colours(struct fnc_colours *, enum fnc_view_id);
 static int		 set_colour_scheme(struct fnc_colours *,
 			    const int (*)[2], const char **, int);
-static int		 init_colour(enum fnc_colour_obj);
-static char		*fnc_conf_get(enum fnc_colour_obj, bool);
-static int		 default_colour(enum fnc_colour_obj);
-static int		 fnc_conf_set(enum fnc_colour_obj, const char *, bool);
+static int		 init_colour(enum fnc_opt_id);
+static int		 default_colour(enum fnc_opt_id);
 static void		 free_colours(struct fnc_colours *);
 static bool		 fnc_home(struct fnc_view *);
-static int		 fnc_conf_ls_settings(bool);
-static int		 fnc_conf_str2enum(const char *);
-static const char	*fnc_conf_enum2str(int);
+static char		*fnc_conf_getopt(enum fnc_opt_id, bool);
+static int		 fnc_conf_setopt(enum fnc_opt_id, const char *, bool);
+static int		 fnc_conf_lsopt(bool);
+static enum fnc_opt_id	 fnc_conf_str2enum(const char *);
+static const char	*fnc_conf_enum2str(enum fnc_opt_id);
 static struct fnc_colour	*get_colour(struct fnc_colours *, int);
 static struct fnc_colour	*match_colour(struct fnc_colours *,
 				    const char *);
@@ -1873,6 +1872,11 @@ view_loop(struct fnc_view *view)
 			if (view->parent) {
 				view->parent->child = NULL;
 				view->parent->focus_child = false;
+				/* Restore fullscreen line height. */
+				view->parent->nlines = view->parent->lines;
+				rc = view_resize(view->parent);
+				if (rc)
+					goto end;
 			} else
 				TAILQ_REMOVE(&views, view, entries);
 
@@ -2343,7 +2347,7 @@ draw_commits(struct fnc_view *view)
 		type = fsl_strdup(s->selected_commit->commit->type);
 	}
 
-	if (s->thread_cx.ncommits_needed > 0) {
+	if (tcx->ncommits_needed > 0 && !tcx->timeline_end) {
 		if ((idxstr = fsl_mprintf(" [%d/%d] %s",
 		    entry ? entry->idx + 1 : 0, s->commits.ncommits,
 		    (view->searching && !view->search_status) ?
@@ -2456,7 +2460,8 @@ draw_commits(struct fnc_view *view)
 	entry = s->first_commit_onscreen;
 	s->last_commit_onscreen = s->first_commit_onscreen;
 	while (entry) {
-		if (ncommits >= view->nlines - 1)
+		if (ncommits >= (view->mode == VIEW_SPLIT_HRZN ?
+		    view->nlines - 1 : view->lines - 1))
 			break;
 		if (ncommits == s->selected_idx)
 			wattr_on(view->window, A_REVERSE, NULL);
@@ -2467,7 +2472,7 @@ draw_commits(struct fnc_view *view)
 		s->last_commit_onscreen = entry;
 		entry = TAILQ_NEXT(entry, entries);
 	}
-	draw_vborder(view);
+	drawborder(view);
 
 end:
 	free(branch);
@@ -2535,7 +2540,7 @@ formatln(wchar_t **ptr, int *wstrlen, const char *mbstr, int column_limit,
 		} else if (width == -1) {
 			if (wline[i] == L'\t') {
 				width = TABSIZE -
-				    ((cols + column_limit) % TABSIZE);
+				    ((cols + start_column) % TABSIZE);
 			} else {
 				width = 1;
 				wline[i] = L'.';
@@ -2753,12 +2758,15 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 		rec_sigwinch = 0;
 		rec_sigcont = 0;
 		TAILQ_FOREACH(v, views, entries) {
-			if ((rc = view_resize(v)))
+			rc = view_resize(v);
+			if (rc)
 				return rc;
-			if ((rc = v->input(new, v, KEY_RESIZE)))
+			rc = v->input(new, v, KEY_RESIZE);
+			if (rc)
 				return rc;
 			if (v->child) {
-				if ((rc = view_resize(v->child)))
+				rc = view_resize(v->child);
+				if (rc)
 					return rc;
 				rc = v->child->input(new, v->child, KEY_RESIZE);
 				if (rc)
@@ -2769,15 +2777,7 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 
 	switch (ch) {
 	case '\t':
-		if (view->child) {
-			view->active = false;
-			view->child->active = true;
-			view->focus_child = true;
-		} else if (view->parent) {
-			view->active = false;
-			view->parent->active = true;
-			view->parent->focus_child = false;
-		}
+		rc = cycle_view(view);
 		break;
 	case KEY_F(1):
 	case 'H':
@@ -2789,29 +2789,7 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 		view->egress = true;
 		break;
 	case 'f':
-		if (view_is_parent(view)) {
-			if (view->child == NULL)
-				break;
-			if (screen_is_split(view->child)) {
-				view->active = false;
-				view->child->active = true;
-				rc = make_fullscreen(view->child);
-			} else
-				rc = make_splitscreen(view->child);
-			if (rc)
-				break;
-			rc = view->child->input(new, view->child, KEY_RESIZE);
-		} else {
-			if (screen_is_split(view)) {
-				view->parent->active = false;
-				view->active = true;
-				rc = make_fullscreen(view);
-			} else
-				rc = make_splitscreen(view);
-			if (rc)
-				break;
-			rc = view->input(new, view, KEY_RESIZE);
-		}
+		rc = toggle_fullscreen(new, view);
 		break;
 	case '/':
 		if (view->search_init)
@@ -2839,6 +2817,58 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 	default:
 		rc = view->input(new, view, ch);
 		break;
+	}
+
+	return rc;
+}
+
+static int
+cycle_view(struct fnc_view *view)
+{
+	int rc = FSL_RC_OK;
+
+	if (view->child) {
+		view->active = false;
+		view->child->active = true;
+		view->focus_child = true;
+	} else if (view->parent) {
+		view->active = false;
+		view->parent->active = true;
+		view->parent->focus_child = false;
+		if (view->mode == VIEW_SPLIT_HRZN && !screen_is_split(view))
+			rc = make_fullscreen(view->parent);
+	}
+
+	return rc;
+}
+
+static int
+toggle_fullscreen(struct fnc_view **new, struct fnc_view *view)
+{
+	int	rc = FSL_RC_OK;
+
+	if (view_is_parent(view)) {
+		if (view->child == NULL)
+			return rc;
+		if (screen_is_split(view->child)) {
+			view->active = false;
+			view->child->active = true;
+			rc = make_fullscreen(view->child);
+		} else
+			rc = make_splitscreen(view->child);
+		if (rc)
+			return rc;
+		rc = view->child->input(new, view->child, KEY_RESIZE);
+	} else {
+		if (screen_is_split(view)) {
+			view->parent->active = false;
+			view->active = true;
+			rc = make_fullscreen(view);
+		} else
+			rc = make_splitscreen(view);
+		if (rc)
+			return rc;
+		rc = view->input(new, view, KEY_RESIZE);
 	}
 
 	return rc;
@@ -3146,7 +3176,7 @@ static int
 tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 {
 	struct fnc_tl_view_state	*s = &view->state.timeline;
-	struct fnc_view			*branch_view = NULL, *diff_view = NULL;
+	struct fnc_view			*branch_view = NULL;
 	struct fnc_view			*tree_view = NULL;
 	int				 rc = 0, start_col = 0;
 
@@ -3155,28 +3185,11 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case 'j':
 	case '.':
 	case '>':
-		if (s->first_commit_onscreen == NULL)
-			break;
-		if (s->selected_idx < MIN(view->nlines - 2,
-		    s->commits.ncommits - 1))
-			++s->selected_idx;
-		else if ((rc = timeline_scroll_down(view, 1)))
-			break;
-		select_commit(s);
+		rc = move_tl_cursor_down(view, false);
 		break;
 	case KEY_NPAGE:
 	case CTRL('f'): {
-		struct commit_entry *first;
-		if ((first = s->first_commit_onscreen) == NULL)
-			break;
-		if ((rc = timeline_scroll_down(view, view->nlines - 1)))
-			break;
-		if (first == s->first_commit_onscreen && s->selected_idx <
-		    MIN(view->nlines - 2, s->commits.ncommits - 1))
-			/* At bottom of timeline. */
-			s->selected_idx = MIN(view->nlines - 2,
-			    s->commits.ncommits - 1);
-		select_commit(s);
+		rc = move_tl_cursor_down(view, true);
 		break;
 	}
 	case KEY_END:
@@ -3188,34 +3201,18 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case KEY_UP:
 	case '<':
 	case ',':
-		if (s->first_commit_onscreen == NULL)
-			break;
-		if (s->selected_idx > 0)
-			--s->selected_idx;
-		else
-			timeline_scroll_up(s, 1);
-		select_commit(s);
+		move_tl_cursor_up(view, false, false);
 		break;
 	case KEY_PPAGE:
 	case CTRL('b'):
-		if (s->first_commit_onscreen == NULL)
-			break;
-		if (TAILQ_FIRST(&s->commits.head) == s->first_commit_onscreen)
-			s->selected_idx = 0;
-		else
-			timeline_scroll_up(s, view->nlines - 1);
-		select_commit(s);
+		move_tl_cursor_up(view, true, false);
 		break;
 	case 'g':
 		if (!fnc_home(view))
 			break;
 		/* FALL THROUGH */
 	case KEY_HOME:
-		if (s->first_commit_onscreen == NULL)
-			break;
-		s->selected_idx = 0;
-		timeline_scroll_up(s, s->commits.ncommits);
-		select_commit(s);
+		move_tl_cursor_up(view, false, true);
 		break;
 	case KEY_RESIZE:
 		if (s->selected_idx > view->nlines - 2)
@@ -3233,27 +3230,7 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case KEY_ENTER:
 	case ' ':
 	case '\r':
-		if (s->selected_commit == NULL)
-			break;
-		if (view_is_parent(view))
-			start_col = view_split_start_col(view->start_col);
-		if ((rc = init_diff_commit(&diff_view, start_col,
-		    s->selected_commit->commit, view)))
-			break;
-		view->active = false;
-		diff_view->active = true;
-		if (view_is_parent(view)) {
-			if (view->child != NULL) {
-				rc = view_close(view->child);
-				view->child = NULL;
-			}
-			if (rc)
-				return rc;
-			view->child = diff_view;
-			diff_view->parent = view;
-			view->focus_child = true;
-		} else
-			*new_view = diff_view;
+		rc = open_commit_diff_view(new_view, view);
 		break;
 	case 'b':
 		if (view_is_parent(view))
@@ -3379,14 +3356,158 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 }
 
 static int
+move_tl_cursor_down(struct fnc_view *view, bool page)
+{
+	struct fnc_tl_view_state	*s = &view->state.timeline;
+	struct commit_entry		*first;
+	int				 rc = FSL_RC_OK;
+
+	first = s->first_commit_onscreen;
+	if (first == NULL)
+		return rc;
+
+	if (s->thread_cx.timeline_end &&
+	    s->selected_commit->idx >= s->commits.ncommits - 1)
+		return rc;
+
+	if (!page &&
+	    s->selected_idx < MIN(view->nlines - 2, s->commits.ncommits - 1))
+		++s->selected_idx;
+	else {
+		rc = timeline_scroll_down(view, !page ? 1 :
+		    s->thread_cx.timeline_end ?
+		    MIN(s->commits.ncommits - s->selected_commit->idx - 1,
+		    view->nlines - 1) : view->nlines - 1);
+		if (rc)
+			return rc;
+		if (first == s->first_commit_onscreen && s->selected_idx <
+		    MIN(view->nlines - 2, s->commits.ncommits - 1)) {
+			/* End of timeline, no more commits; move cursor down */
+			int end = MIN(s->selected_idx +=
+			    s->commits.ncommits - s->selected_commit->idx - 1,
+			    MIN(view->nlines - 2, s->commits.ncommits - 1));
+			s->selected_idx = end;
+		}
+	}
+
+	if (!rc)
+		select_commit(s);
+	return rc;
+}
+
+static void
+move_tl_cursor_up(struct fnc_view *view, bool page, bool end)
+{
+	struct fnc_tl_view_state	*s = &view->state.timeline;
+
+	if (s->first_commit_onscreen == NULL)
+		return;
+
+	if ((page && TAILQ_FIRST(&s->commits.head) == s->first_commit_onscreen)
+	    || end)
+		s->selected_idx = 0;
+
+	if (!page && !end && s->selected_idx > 0)
+		--s->selected_idx;
+	else
+		timeline_scroll_up(s, end ? s->commits.ncommits : page ?
+		    view->nlines - 1 : 1);
+
+	select_commit(s);
+	return;
+}
+
+static int
+open_commit_diff_view(struct fnc_view **new_view, struct fnc_view *view)
+{
+	struct fnc_tl_view_state	*s = &view->state.timeline;
+	struct fnc_view			*diff_view;
+	int				 x = 0, y = 0, rc = FSL_RC_OK;
+
+	if (s->selected_commit == NULL)
+		return rc;
+
+	if (view_is_parent(view)) {
+		rc = view_set_split(view, &s->selected_idx, &x, &y);
+		if (rc)
+			return rc;
+	}
+
+	rc = init_diff_commit(&diff_view, x, y, s->selected_commit->commit,
+	    view);
+	if (rc)
+		return rc;
+
+	view->active = false;
+	diff_view->active = true;
+	diff_view->mode = view->mode;
+	diff_view->nlines = view->lines - y;
+
+	if (view_is_parent(view)) {
+		if (view->child != NULL) {
+			rc = view_close(view->child);
+			view->child = NULL;
+			if (rc)
+				return rc;
+		}
+		view->child = diff_view;
+		diff_view->parent = view;
+		view->focus_child = true;
+	} else
+		*new_view = diff_view;
+
+	return rc;
+}
+
+/*
+ * Set dimensions for splitscreen view. If FNC_VIEW_SPLIT_MODE is either unset
+ * or set to auto, determine vertical or horizontal split depending on screen
+ * estate. If set to 'v' or 'h', assign start column or start line of the split
+ * view to *start_col and *start_ln, respectively. If the line of the selected
+ * commit is in the bottom horizontal split section, scroll the timeline to
+ * offset the displacement of moving the selected commit into the top split and
+ * deduct the offset from *selected.
+ */
+static int
+view_set_split(struct fnc_view *view, int *selected, int *start_col,
+    int *start_ln)
+{
+	char	*mode;
+	int	 offset, rc = FSL_RC_OK;
+
+	mode = fnc_conf_getopt(FNC_VIEW_SPLIT_MODE, false);
+
+	if (!mode || mode[0] != 'h')
+		*start_col = view_split_start_col(view->start_col);
+
+	if (!*start_col && (!mode || mode[0] != 'v')) {
+		*start_ln = view_split_start_ln(view->lines);
+		view->mode = VIEW_SPLIT_HRZN;
+		view->nlines = *start_ln;
+		rc = view_resize(view);
+		if (rc)
+			goto end;
+		view->nlines = *start_ln - 1;
+		if (*selected >= view->nlines - 1) {
+			offset = ABS(view->nlines - *selected - 2);
+			rc = timeline_scroll_down(view, offset);
+			*selected -= offset;
+		}
+	}
+end:
+	fsl_free(mode);
+	return rc;
+}
+
+static int
 timeline_scroll_down(struct fnc_view *view, int maxscroll)
 {
 	struct fnc_tl_view_state	*s = &view->state.timeline;
 	struct commit_entry		*pentry;
 	int				 rc = 0, nscrolled = 0, ncommits_needed;
 
-	if (s->last_commit_onscreen == NULL)
-		return 0;
+	if (s->last_commit_onscreen == NULL || !maxscroll)
+		return rc;
 
 	ncommits_needed = s->last_commit_onscreen->idx + 1 + maxscroll;
 	if (s->commits.ncommits < ncommits_needed &&
@@ -3400,10 +3521,11 @@ timeline_scroll_down(struct fnc_view *view, int maxscroll)
 
 	do {
 		pentry = TAILQ_NEXT(s->last_commit_onscreen, entries);
-		if (pentry == NULL)
+		if (pentry == NULL && view->mode != VIEW_SPLIT_HRZN)
 			break;
 
-		s->last_commit_onscreen = pentry;
+		s->last_commit_onscreen = pentry ?
+		    pentry : s->last_commit_onscreen;
 
 		pentry = TAILQ_NEXT(s->first_commit_onscreen, entries);
 		if (pentry == NULL)
@@ -3411,6 +3533,7 @@ timeline_scroll_down(struct fnc_view *view, int maxscroll)
 		s->first_commit_onscreen = pentry;
 	} while (++nscrolled < maxscroll);
 
+	s->nscrolled += view->mode == VIEW_SPLIT_HRZN ? nscrolled : 0;
 	return rc;
 }
 
@@ -3454,16 +3577,23 @@ select_commit(struct fnc_tl_view_state *s)
 static int
 make_splitscreen(struct fnc_view *view)
 {
-	int	 rc = 0;
+	int	 rc = FSL_RC_OK;
 
-	view->start_ln = 0;
-	view->start_col = view_split_start_col(0);
-	view->nlines = LINES;
+	view->start_ln = view->mode == VIEW_SPLIT_HRZN ?
+	    view_split_start_ln(view->nlines) : 0;
+	view->start_col = view->mode != VIEW_SPLIT_HRZN ?
+	    view_split_start_col(0) : 0;
+	view->nlines = LINES - view->start_ln;
 	view->ncols = COLS - view->start_col;
 	view->lines = LINES;
 	view->cols = COLS;
-	if ((rc = view_resize(view)))
+
+	rc = view_resize(view);
+	if (rc)
 		return rc;
+
+	if (view->parent && view->mode == VIEW_SPLIT_HRZN)
+		view->parent->nlines = view->lines - view->nlines - 1;
 
 	if (mvwin(view->window, view->start_ln, view->start_col) == ERR)
 		return RC(FSL_RC_ERROR, "%s", "mvwin");
@@ -3474,7 +3604,7 @@ make_splitscreen(struct fnc_view *view)
 static int
 make_fullscreen(struct fnc_view *view)
 {
-	int	 rc = 0;
+	int	 rc = FSL_RC_OK;
 
 	view->start_col = 0;
 	view->start_ln = 0;
@@ -3482,7 +3612,9 @@ make_fullscreen(struct fnc_view *view)
 	view->ncols = COLS;
 	view->lines = LINES;
 	view->cols = COLS;
-	if ((rc = view_resize(view)))
+
+	rc = view_resize(view);
+	if (rc)
 		return rc;
 
 	if (mvwin(view->window, view->start_ln, view->start_col) == ERR)
@@ -3492,9 +3624,10 @@ make_fullscreen(struct fnc_view *view)
 }
 
 /*
- * Only open a new view in a splitscreen if the console is >= 120 columns wide.
- * Otherwise, open in the current view. If splitting the screen, make the new
- * panel the largest of 80 columns or half the current column width.
+ * Find start column for vertical split. If terminal width is < 120 columns,
+ * return 0 (i.e., do not split; open new view in the existing one). If >= 120,
+ * return the largest of 80 columns or 50% of the current view width subtracted
+ * from COLS so that the child view will be no smaller than 80 columns wide.
  */
 static int
 view_split_start_col(int start_col)
@@ -3502,6 +3635,37 @@ view_split_start_col(int start_col)
 	if (start_col > 0 || COLS < 120)
 		return 0;
 	return (COLS - MAX(COLS / 2, 80));
+}
+
+/*
+ * Find start line for horizontal split. If FNC_VIEW_SPLIT_HEIGHT is set as
+ * either an absolute line value or % equalling less than lines - 2, subtract
+ * from lines and return. If invalid or not set, return HSPLIT_SCALE(lines).
+ */
+static int
+view_split_start_ln(int lines)
+{
+	char		*height = NULL;
+	long		 n = 0;
+	int		 rc = FSL_RC_OK;
+
+	height = fnc_conf_getopt(FNC_VIEW_SPLIT_HEIGHT, false);
+
+	if (height && height[fsl_strlen(height) - 1] == '%') {
+		n = strtol(height, NULL, 10);
+		if (n > INT_MAX || (errno == ERANGE && n == LONG_MAX))
+			rc = RC(fsl_errno_to_rc(errno, FSL_RC_RANGE),
+			    "%s", "strtol");
+		if (n < INT_MIN || (errno == ERANGE && n == LONG_MIN))
+			rc = RC(fsl_errno_to_rc(errno, FSL_RC_RANGE),
+			    "%s", "strtol");
+		if (!rc)
+			n = lines * ((float)n / 100);
+	} else if (height)
+		rc = strtonumcheck(&n, height, 0, lines);
+
+	fsl_free(height);
+	return !rc && n && n < (lines - 2) ? lines - n : lines * HSPLIT_SCALE;
 }
 
 static int
@@ -3824,17 +3988,17 @@ fsl_file_artifact_free(void *elem, void *state)
 }
 
 static int
-init_diff_commit(struct fnc_view **new_view, int start_col,
+init_diff_commit(struct fnc_view **new_view, int start_col, int start_ln,
     struct fnc_commit_artifact *commit, struct fnc_view *timeline_view)
 {
 	struct fnc_view			*diff_view;
 	int				 rc = 0;
 
-	diff_view = view_open(0, 0, 0, start_col, FNC_VIEW_DIFF);
+	diff_view = view_open(0, 0, start_ln, start_col, FNC_VIEW_DIFF);
 	if (diff_view == NULL)
 		return RC(FSL_RC_ERROR, "%s", "view_open");
 
-	rc = open_diff_view(diff_view, commit, DIFF_DEF_CTXT, fnc_init.ws,
+	rc = open_diff_view(diff_view, commit, DEF_DIFF_CTX, fnc_init.ws,
 	    fnc_init.invert, !fnc_init.quiet, timeline_view, true, NULL);
 	if (!rc)
 		*new_view = diff_view;
@@ -5099,7 +5263,7 @@ write_diff(struct fnc_view *view, char *headln)
 	else
 		s->last_line_onscreen = s->first_line_onscreen;
 
-	draw_vborder(view);
+	drawborder(view);
 
 	if (s->eof) {
 		while (nprintln < view->nlines) {
@@ -5134,10 +5298,10 @@ view_is_parent(struct fnc_view *view)
 	return view->parent == NULL;
 }
 
-static int
+static bool
 screen_is_split(struct fnc_view *view)
 {
-	return view->start_col > 0;
+	return view->start_col > 0 || view->start_ln > 0;
 }
 
 static int
@@ -5205,22 +5369,28 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 }
 
 static void
-draw_vborder(struct fnc_view *view)
+drawborder(struct fnc_view *view)
 {
 	const struct fnc_view	*view_above;
 	char			*codeset = nl_langinfo(CODESET);
 	PANEL			*panel;
 
 	if (view->parent)
-		draw_vborder(view->parent);
+		drawborder(view->parent);
 
 	panel = panel_above(view->panel);
 	if (panel == NULL)
 		return;
 
 	view_above = panel_userptr(panel);
-	mvwvline(view->window, view->start_ln, view_above->start_col - 1,
-	    (strcmp(codeset, "UTF-8") == 0) ? ACS_VLINE : '|', view->nlines);
+	if (view->mode == VIEW_SPLIT_HRZN)
+		mvwhline(view->window, view_above->start_ln - 1,
+		    view->start_col, (strcmp(codeset, "UTF-8") == 0) ?
+		    ACS_HLINE : '-', view->ncols);
+	else
+		mvwvline(view->window, view->start_ln,
+		    view_above->start_col - 1, (strcmp(codeset, "UTF-8") == 0) ?
+		    ACS_VLINE : '|', view->nlines);
 #ifdef __linux__
 	wnoutrefresh(view->window);
 #endif
@@ -5352,7 +5522,7 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		break;
 	case '+':
 	case '=':
-		if (s->context < DIFF_MAX_CTXT) {
+		if (s->context < MAX_DIFF_CTX) {
 			++s->context;
 			show_diff_status(view);
 			rc = create_diff(s);
@@ -5389,9 +5559,28 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		show_diff_status(view);
 		rc = create_diff(s);
 		break;
+	case 'q':
+		if (s->timeline_view && view->mode == VIEW_SPLIT_HRZN)
+			/* May need more commits to fill fullscreen. */
+			rc = request_tl_commits(s->timeline_view);
+		/* FALL THROUGH */
 	default:
 		break;
 	}
+
+	return rc;
+}
+
+static int
+request_tl_commits(struct fnc_view *view)
+{
+	struct fnc_tl_view_state	*state = &view->state.timeline;
+	int				 rc = FSL_RC_OK;
+
+	state->thread_cx.ncommits_needed = state->nscrolled;
+	rc = signal_tl_thread(view, 1);
+	state->nscrolled = 0;
+	view->mode = VIEW_SPLIT_NONE;
 
 	return rc;
 }
@@ -5526,7 +5715,7 @@ fnc_resizeterm(void)
 static int
 view_resize(struct fnc_view *view)
 {
-	int	 nlines, ncols;
+	int	 nlines, ncols, rc = FSL_RC_OK;
 
 	if (view->lines > LINES)
 		nlines = view->nlines - (view->lines - LINES);
@@ -5551,19 +5740,19 @@ view_resize(struct fnc_view *view)
 
 	if (view->child) {
 		view->child->start_col = view_split_start_col(view->start_col);
-		if (view->child->start_col == 0) {
-			make_fullscreen(view->child);
+		if (view->mode == VIEW_SPLIT_HRZN || !view->child->start_col) {
+			rc = make_fullscreen(view->child);
 			if (view->child->active)
 				show_panel(view->child->panel);
 			else
 				show_panel(view->panel);
 		} else {
-			make_splitscreen(view->child);
+			rc = make_splitscreen(view->child);
 			show_panel(view->child->panel);
 		}
 	}
 
-	return 0;
+	return rc;
 }
 
 /*
@@ -5739,7 +5928,8 @@ cmd_diff(fcli_command const *argv)
 	const char			*artifact1 = NULL, *artifact2 = NULL;
 	char				*path0 = NULL;
 	fsl_id_t			 prid = -1, rid = -1;
-	int				 context = DIFF_DEF_CTXT, rc = 0;
+	long				 context = DEF_DIFF_CTX;
+	int				 rc = FSL_RC_OK;
 	unsigned short			 blob = 0;
 	enum fnc_diff_type		 diff_type = FNC_DIFF_CKOUT;
 	bool				 showmeta = false;
@@ -5894,7 +6084,7 @@ cmd_diff(fcli_command const *argv)
 		if ((rc = strtonumcheck(&context, fnc_init.context, INT_MIN,
 		    INT_MAX)))
 			goto end;
-		context = MIN(DIFF_MAX_CTXT, context);
+		context = MIN(MAX_DIFF_CTX, context);
 	}
 
 	view = view_open(0, 0, 0, 0, FNC_VIEW_DIFF);
@@ -6434,7 +6624,7 @@ show_tree_view(struct fnc_view *view)
 
 	rc = draw_tree(view, treepath);
 	fsl_free(treepath);
-	draw_vborder(view);
+	drawborder(view);
 
 	return rc;
 }
@@ -7255,8 +7445,10 @@ fnc_close_repository_tree(struct fnc_repository_tree *repo)
 static int
 cmd_config(const fcli_command *argv)
 {
-	const char	*set = NULL, *value = NULL;
-	int		 setid, rc = 0;
+	const char	*opt = NULL, *value = NULL;
+	char		*prev, *v;
+	enum fnc_opt_id	 setid;
+	int		 rc = FSL_RC_OK;
 #ifdef __OpenBSD__
 	const fsl_cx	*const f = fcli_cx();
 	fsl_buffer	 buf = fsl_buffer_empty;
@@ -7272,34 +7464,34 @@ cmd_config(const fcli_command *argv)
 	if (rc || (rc = fcli_has_unused_flags(false)))
 		return rc;
 
-	set = fcli_next_arg(true);
-	if (set == NULL || fnc_init.lsconf) {
+	opt = fcli_next_arg(true);
+	if (opt == NULL || fnc_init.lsconf) {
 		if (fnc_init.unset) {
 			fnc_init.err = RC(FSL_RC_MISSING_INFO,
 			    "%s", "-u|--unset requires <setting>");
 			usage();
 			/* NOT REACHED */
 		}
-		return fnc_conf_ls_settings(fnc_init.lsconf ? false : true);
+		return fnc_conf_lsopt(fnc_init.lsconf ? false : true);
 	}
 
-	setid = fnc_conf_str2enum(set);
-	if (!setid)  /* Presently, the only valid settings are colours. */
-		return RC(FSL_RC_NOT_FOUND, "invalid setting: %s", set);
+	setid = fnc_conf_str2enum(opt);
+	if (!setid)
+		return RC(FSL_RC_NOT_FOUND, "invalid setting: %s", opt);
 
 	value = fcli_next_arg(true);
 	if (value || fnc_init.unset) {
 		if (value && fnc_init.unset)
 			return RC(FSL_RC_MISUSE, "\n--unset or set %s to %s?",
-			    set, value);
-		char *prev = fnc_conf_get(setid, true);
-		rc = fnc_conf_set(setid, value, fnc_init.unset);
+			    opt, value);
+		prev = fnc_conf_getopt(setid, true);
+		rc = fnc_conf_setopt(setid, value, fnc_init.unset);
 		if (!rc)
 			f_out("%s: %s -> %s (local)", fnc_conf_enum2str(setid),
 			    prev ? prev : "default", value ? value : "default");
 		fsl_free(prev);
 	} else {
-		char *v = fnc_conf_get(setid, true);
+		v = fnc_conf_getopt(setid, true);
 		f_out("%s = %s", fnc_conf_enum2str(setid), v ? v : "default");
 		fsl_free(v);
 	}
@@ -7308,21 +7500,15 @@ cmd_config(const fcli_command *argv)
 }
 
 static int
-fnc_conf_ls_settings(bool all)
+fnc_conf_lsopt(bool all)
 {
-	static const char *fnc_settings[] = {
-		SETTINGS(GEN_STR)
-	};
-	enum settings {
-		SETTINGS(GEN_ENUM)
-	};
 	char	*value = NULL;
 	int	 idx, last = 0;
 	size_t	 maxlen = 0;
 
 	for (idx = FNC_START_SETTINGS + 1; idx < FNC_EOF_SETTINGS; ++idx) {
-		last = (value = fnc_conf_get(idx, true)) ? idx : last;
-		maxlen = MAX(fsl_strlen(fnc_settings[idx]), maxlen);
+		last = (value = fnc_conf_getopt(idx, true)) ? idx : last;
+		maxlen = MAX(fsl_strlen(fnc_opt_name[idx]), maxlen);
 		fsl_free(value);
 	}
 
@@ -7334,9 +7520,9 @@ fnc_conf_ls_settings(bool all)
 	}
 
 	for (idx = FNC_START_SETTINGS + 1;  idx < FNC_EOF_SETTINGS;  ++idx) {
-		value = fnc_conf_get(idx, true);
+		value = fnc_conf_getopt(idx, true);
 		if (value || all)
-			f_out("%-*s%s%s%c", maxlen + 2, fnc_settings[idx],
+			f_out("%-*s%s%s%c", maxlen + 2, fnc_opt_name[idx],
 			    value ? " = " : "", value ? value : "",
 			    all ? (idx + 1 < FNC_EOF_SETTINGS ? '\n' : '\0') :
 			    idx < last ? '\n' : '\0');
@@ -7347,38 +7533,25 @@ fnc_conf_ls_settings(bool all)
 	return 0;
 }
 
-static int
+static enum fnc_opt_id
 fnc_conf_str2enum(const char *str)
 {
-	static const char *fnc_settings[] = {
-		SETTINGS(GEN_STR)
-	};
-	enum settings {
-		SETTINGS(GEN_ENUM)
-	};
-	int	idx;
+	enum fnc_opt_id	idx;
 
 	for (idx = FNC_START_SETTINGS + 1;  idx < FNC_EOF_SETTINGS;  ++idx)
-		if (!fsl_stricmp(str, fnc_settings[idx]))
+		if (!fsl_stricmp(str, fnc_opt_name[idx]))
 			return idx;
 
 	return FNC_START_SETTINGS;
 }
 
 static const char *
-fnc_conf_enum2str(int id)
+fnc_conf_enum2str(enum fnc_opt_id id)
 {
-	static const char *fnc_settings[] = {
-		SETTINGS(GEN_STR)
-	};
-	enum settings {
-		SETTINGS(GEN_ENUM)
-	};
-
 	if (id <= FNC_START_SETTINGS || id >= FNC_EOF_SETTINGS)
 		return NULL;
 
-	return fnc_settings[id];
+	return fnc_opt_name[id];
 }
 
 static int
@@ -7516,12 +7689,12 @@ set_colour_scheme(struct fnc_colours *colours, const int (*pairs)[2],
 }
 
 static int
-init_colour(enum fnc_colour_obj id)
+init_colour(enum fnc_opt_id id)
 {
 	char	*val = NULL;
 	int	 rc = 0;
 
-	val = fnc_conf_get(id, false);
+	val = fnc_conf_getopt(id, false);
 
 	if (val == NULL)
 		return default_colour(id);
@@ -7558,11 +7731,11 @@ init_colour(enum fnc_colour_obj id)
  * which the caller must free. In either case, if not found, return NULL.
  */
 static char *
-fnc_conf_get(enum fnc_colour_obj id, bool ls)
+fnc_conf_getopt(enum fnc_opt_id id, bool ls)
 {
 	fsl_cx	*const f = fcli_cx();
 	fsl_db	*db = NULL;
-	char	*colour = NULL, *colour_g = NULL;
+	char	*optval = NULL, *envvar = NULL;
 
 	db = fsl_needs_repo(f);
 
@@ -7572,64 +7745,64 @@ fnc_conf_get(enum fnc_colour_obj id, bool ls)
 		return NULL;
 	}
 
-	colour = fsl_db_g_text(db, NULL,
+	optval = fsl_db_g_text(db, NULL,
 	    "SELECT value FROM config WHERE name=%Q", fnc_conf_enum2str(id));
 
-	if (colour == NULL || ls)
-		colour_g = fsl_strdup(getenv(fnc_conf_enum2str(id)));
+	if (optval == NULL || ls)
+		envvar = fsl_strdup(getenv(fnc_conf_enum2str(id)));
 
-	if (ls && (colour || colour_g)) {
-		char *colour_ls = fsl_mprintf("%s%s%s%s%s",
-		    colour ? colour : "", colour ? " (local)" : "",
-		    colour && colour_g ? ", " : "",
-		    colour_g ? colour_g : "", colour_g ? " (envvar)" : "");
-		fsl_free(colour);
-		fsl_free(colour_g);
-		colour = colour_ls;
+	if (ls && (optval || envvar)) {
+		char *showopt = fsl_mprintf("%s%s%s%s%s",
+		    optval ? optval : "", optval ? " (local)" : "",
+		    optval && envvar ? ", " : "",
+		    envvar ? envvar : "", envvar ? " (envvar)" : "");
+		fsl_free(optval);
+		fsl_free(envvar);
+		optval = showopt;
 	}
 
-	return ls ? colour : (colour ? colour : colour_g);
+	return ls ? optval : (optval ? optval : envvar);
 }
 
 static int
-default_colour(enum fnc_colour_obj obj)
+default_colour(enum fnc_opt_id id)
 {
-	if (obj == FNC_COLOUR_COMMIT)
+	if (id == FNC_COLOUR_COMMIT)
 		return COLOR_GREEN;
-	if (obj == FNC_COLOUR_USER)
+	if (id == FNC_COLOUR_USER)
 		return COLOR_CYAN;
-	if (obj == FNC_COLOUR_DATE)
+	if (id == FNC_COLOUR_DATE)
 		return COLOR_YELLOW;
-	if (obj == FNC_COLOUR_DIFF_META)
+	if (id == FNC_COLOUR_DIFF_META)
 		return COLOR_GREEN;
-	if (obj == FNC_COLOUR_DIFF_MINUS)
+	if (id == FNC_COLOUR_DIFF_MINUS)
 		return COLOR_MAGENTA;
-	if (obj == FNC_COLOUR_DIFF_PLUS)
+	if (id == FNC_COLOUR_DIFF_PLUS)
 		return COLOR_CYAN;
-	if (obj == FNC_COLOUR_DIFF_CHUNK)
+	if (id == FNC_COLOUR_DIFF_CHUNK)
 		return COLOR_YELLOW;
-	if (obj == FNC_COLOUR_DIFF_TAGS)
+	if (id == FNC_COLOUR_DIFF_TAGS)
 		return COLOR_MAGENTA;
-	if (obj == FNC_COLOUR_TREE_LINK)
+	if (id == FNC_COLOUR_TREE_LINK)
 		return COLOR_MAGENTA;
-	if (obj == FNC_COLOUR_TREE_DIR)
+	if (id == FNC_COLOUR_TREE_DIR)
 		return COLOR_CYAN;
-	if (obj == FNC_COLOUR_TREE_EXEC)
+	if (id == FNC_COLOUR_TREE_EXEC)
 		return COLOR_GREEN;
-	if (obj == FNC_COLOUR_BRANCH_OPEN)
+	if (id == FNC_COLOUR_BRANCH_OPEN)
 		return COLOR_CYAN;
-	if (obj == FNC_COLOUR_BRANCH_CLOSED)
+	if (id == FNC_COLOUR_BRANCH_CLOSED)
 		return COLOR_MAGENTA;
-	if (obj == FNC_COLOUR_BRANCH_CURRENT)
+	if (id == FNC_COLOUR_BRANCH_CURRENT)
 		return COLOR_GREEN;
-	if (obj == FNC_COLOUR_BRANCH_PRIVATE)
+	if (id == FNC_COLOUR_BRANCH_PRIVATE)
 		return COLOR_YELLOW;
 
 	return -1;  /* Terminal default foreground colour. */
 }
 
 static int
-fnc_conf_set(enum fnc_colour_obj id, const char *val, bool unset)
+fnc_conf_setopt(enum fnc_opt_id id, const char *val, bool unset)
 {
 	fsl_cx	*const f = fcli_cx();
 	fsl_db	*db = NULL;
@@ -7718,7 +7891,8 @@ cmd_blame(fcli_command const *argv)
 	char		*path = NULL;
 	fsl_uuid_str	 commit_id = NULL;
 	fsl_id_t	 tip = 0, rid = 0;
-	int		 nlimit = 0, rc = 0;
+	long		 nlimit = 0;
+	int		 rc = 0;
 
 	rc = fcli_process_flags(argv->flags);
 	if (rc || (rc = fcli_has_unused_flags(false)))
@@ -8102,7 +8276,7 @@ show_blame_view(struct fnc_view *view)
 		cbreak();	/* Return to blocking mode. */
 
 	rc = draw_blame(view);
-	draw_vborder(view);
+	drawborder(view);
 
 	return rc;
 }
@@ -8352,7 +8526,7 @@ draw_blame(struct fnc_view *view)
 	fsl_free(line);
 	s->last_line_onscreen = lineno;
 
-	draw_vborder(view);
+	drawborder(view);
 
 	return rc;
 }
@@ -8563,7 +8737,7 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			rc = RC(FSL_RC_ERROR, "%s", "view_open");
 			break;
 		}
-		rc = open_diff_view(diff_view, commit, DIFF_DEF_CTXT,
+		rc = open_diff_view(diff_view, commit, DEF_DIFF_CTX,
 		    fnc_init.ws, fnc_init.invert, !fnc_init.quiet, NULL, true,
 		    NULL);
 		s->selected_commit = commit;
@@ -9257,7 +9431,7 @@ show_branch_view(struct fnc_view *view)
 		be = TAILQ_NEXT(be, entries);
 	}
 
-	draw_vborder(view);
+	drawborder(view);
 	return rc;
 }
 
@@ -9734,7 +9908,7 @@ fnc_show_version(void)
 }
 
 static int
-strtonumcheck(int *ret, const char *nstr, const int min, const int max)
+strtonumcheck(long *ret, const char *nstr, const int min, const int max)
 {
 	const char	*ptr;
 	int		 n;
@@ -9873,7 +10047,7 @@ fnc_make_sql_glob(char **op, char **glob, const char *str, bool fold)
 static int
 init_unveil(const char *repodb, const char *ckoutdir, bool cfg)
 {
-	/* w repo db for 'fnc config' command: fnc_conf_set(). */
+	/* w repo db for 'fnc config' command: fnc_conf_setopt(). */
 	if (unveil(repodb, cfg ? "rwc" : "rw") == -1)
 		return RC(fsl_errno_to_rc(errno, FSL_RC_ACCESS),
 		    "unveil(%s, \"rw\")", repodb);

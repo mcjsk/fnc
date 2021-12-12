@@ -943,6 +943,46 @@ Find the previous branch that matches the current search pattern.
 .El
 .El
 .Sh ENVIRONMENT
+Depending on the available screen estate determined by the LINES and COLUMNS
+environment variables,
+.Nm
+will display child views in either a horizontal or vertical split.  By default,
+if COLUMNS is \(>= 120, a child view will open in a vertical split at least 80
+columns wide.  Otherwise, the child view will open in a horizontal split that
+is approximately 60% of the terminal height.  This behaviour can be customised
+by configuring the following options as either exported environment variables
+or with
+.Nm Cm config
+as documented above.
+.Bl -tag -width FNC_VIEW_SPLIT_HEIGHT
+.It Ev FNC_VIEW_SPLIT_MODE
+Open child views in a horizontal or vertical split. Value can be one of
+.Sy auto ,
+.Sy horizontal ,
+or
+.Sy vertical .
+Default:
+.Qq auto .
+.It Ev FNC_VIEW_SPLIT_HEIGHT
+Height of the child view when opening in a horizontal split. Valid numeric
+values are 1 \(<=
+.Sy n
+< LINES.  Percentage values denoted with a postfixed
+.Sq %
+.Po
+e.g.,
+.Sy 55%
+.Pc
+are also valid.
+Default:
+.Qq 60% .
+.It Ev FNC_VIEW_SPLIT_WIDTH
+Minimum width of the child view when opening in a vertical split.  Currently a
+no-op.
+Default:
+.Qq 80 .
+.El
+.Pp
 .Nm
 displays coloured output by default in supported terminals.  Each colour object
 identified below can be defined by either exporting environment variables
