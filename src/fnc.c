@@ -2835,8 +2835,11 @@ cycle_view(struct fnc_view *view)
 		view->active = false;
 		view->parent->active = true;
 		view->parent->focus_child = false;
-		if (view->mode == VIEW_SPLIT_HRZN && !screen_is_split(view))
+		if (view->mode == VIEW_SPLIT_HRZN && !screen_is_split(view)) {
+			if (view->parent->vid == FNC_VIEW_TIMELINE)
+				rc = request_tl_commits(view->parent);
 			rc = make_fullscreen(view->parent);
+		}
 	}
 
 	return rc;
@@ -5560,9 +5563,11 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		rc = create_diff(s);
 		break;
 	case 'q':
-		if (s->timeline_view && view->mode == VIEW_SPLIT_HRZN)
+		if (s->timeline_view && view->mode == VIEW_SPLIT_HRZN) {
 			/* May need more commits to fill fullscreen. */
 			rc = request_tl_commits(s->timeline_view);
+			s->timeline_view->mode = VIEW_SPLIT_NONE;
+		}
 		/* FALL THROUGH */
 	default:
 		break;
@@ -5580,7 +5585,6 @@ request_tl_commits(struct fnc_view *view)
 	state->thread_cx.ncommits_needed = state->nscrolled;
 	rc = signal_tl_thread(view, 1);
 	state->nscrolled = 0;
-	view->mode = VIEW_SPLIT_NONE;
 
 	return rc;
 }
