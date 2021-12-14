@@ -628,7 +628,7 @@ struct fnc_tl_thread_cx {
 	 */
 	int			  rc;
 	bool			  endjmp;
-	bool			  timeline_end;
+	bool			  eotl;
 	bool			  needs_reset;
 	sig_atomic_t		 *quit;
 	pthread_cond_t		  commit_consumer;
@@ -1809,7 +1809,7 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path,
 	s->thread_cx.spin_idx = 0;
 	s->thread_cx.ncommits_needed = view->nlines - 1;
 	s->thread_cx.commits = &s->commits;
-	s->thread_cx.timeline_end = false;
+	s->thread_cx.eotl = false;
 	s->thread_cx.quit = &s->quit;
 	s->thread_cx.first_commit_onscreen = &s->first_commit_onscreen;
 	s->thread_cx.selected_commit = &s->selected_commit;
@@ -2054,7 +2054,7 @@ tl_producer_thread(void *state)
 			    "%s", "pthread_mutex_unlock");
 	}
 
-	cx->timeline_end = true;
+	cx->eotl = true;
 	return (void *)(intptr_t)rc;
 }
 
@@ -2291,7 +2291,7 @@ signal_tl_thread(struct fnc_view *view, int wait)
 	int			 rc = 0;
 
 	while (cx->ncommits_needed > 0) {
-		if (cx->timeline_end)
+		if (cx->eotl)
 			break;
 
 		/* Wake timeline thread. */
@@ -2347,7 +2347,7 @@ draw_commits(struct fnc_view *view)
 		type = fsl_strdup(s->selected_commit->commit->type);
 	}
 
-	if (tcx->ncommits_needed > 0 && !tcx->timeline_end) {
+	if (tcx->ncommits_needed > 0 && !tcx->eotl) {
 		if ((idxstr = fsl_mprintf(" [%d/%d] %s",
 		    entry ? entry->idx + 1 : 0, s->commits.ncommits,
 		    (view->searching && !view->search_status) ?
@@ -3224,7 +3224,7 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			s->selected_idx = s->commits.ncommits - 1;
 		select_commit(s);
 		if (s->commits.ncommits < view->nlines - 1 &&
-		    !s->thread_cx.timeline_end) {
+		    !s->thread_cx.eotl) {
 			s->thread_cx.ncommits_needed += (view->nlines - 1) -
 			    s->commits.ncommits;
 			rc = signal_tl_thread(view, 1);
@@ -3369,28 +3369,43 @@ move_tl_cursor_down(struct fnc_view *view, bool page)
 	if (first == NULL)
 		return rc;
 
-	if (s->thread_cx.timeline_end &&
+	if (s->thread_cx.eotl &&
 	    s->selected_commit->idx >= s->commits.ncommits - 1)
-		return rc;
+		return rc;  /* Last commit already selected. */
 
-	if (!page &&
-	    s->selected_idx < MIN(view->nlines - 2, s->commits.ncommits - 1))
-		++s->selected_idx;
-	else {
-		rc = timeline_scroll_down(view, !page ? 1 :
-		    s->thread_cx.timeline_end ?
-		    MIN(s->commits.ncommits - s->selected_commit->idx - 1,
-		    view->nlines - 1) : view->nlines - 1);
+	if (!page) {
+		/* Still more commits on this page to scroll down. */
+		if (s->selected_idx < MIN(view->nlines - 2,
+		    s->commits.ncommits - 1))
+			++s->selected_idx;
+		else  /* Last commit on screen is selected, need to scroll. */
+			rc = timeline_scroll_down(view, 1);
+	} else if (s->thread_cx.eotl) {
+		/* Last displayed commit is the end, jump to it. */
+		if (s->last_commit_onscreen->idx == s->commits.ncommits - 1)
+			s->selected_idx = s->last_commit_onscreen->idx -
+			    s->first_commit_onscreen->idx;
+		else  /* Scroll the page. */
+			rc = timeline_scroll_down(view,
+			    MIN(s->commits.ncommits -
+			    s->selected_commit->idx - 1, view->nlines - 2));
+	} else {
+		rc = timeline_scroll_down(view, view->nlines - 2);
 		if (rc)
 			return rc;
 		if (first == s->first_commit_onscreen && s->selected_idx <
 		    MIN(view->nlines - 2, s->commits.ncommits - 1)) {
 			/* End of timeline, no more commits; move cursor down */
-			int end = MIN(s->selected_idx +=
-			    s->commits.ncommits - s->selected_commit->idx - 1,
-			    MIN(view->nlines - 2, s->commits.ncommits - 1));
-			s->selected_idx = end;
+			s->selected_idx = MIN(s->commits.ncommits - 1,
+			    view->nlines - 2);
 		}
+		/*
+		 * If we've overshot (necessarily possible with horizontal
+		 * splits), select the final commit.
+		 */
+		s->selected_idx = MIN(s->selected_idx,
+		    s->last_commit_onscreen->idx -
+		    s->first_commit_onscreen->idx);
 	}
 
 	if (!rc)
@@ -3414,7 +3429,7 @@ move_tl_cursor_up(struct fnc_view *view, bool page, bool end)
 		--s->selected_idx;
 	else
 		timeline_scroll_up(s, end ? s->commits.ncommits : page ?
-		    view->nlines - 1 : 1);
+		    view->nlines - 2 : 1);
 
 	select_commit(s);
 	return;
@@ -3513,8 +3528,7 @@ timeline_scroll_down(struct fnc_view *view, int maxscroll)
 		return rc;
 
 	ncommits_needed = s->last_commit_onscreen->idx + 1 + maxscroll;
-	if (s->commits.ncommits < ncommits_needed &&
-	    !s->thread_cx.timeline_end) {
+	if (s->commits.ncommits < ncommits_needed && !s->thread_cx.eotl) {
 		/* Signal timeline thread for n commits needed. */
 		s->thread_cx.ncommits_needed += maxscroll;
 		rc = signal_tl_thread(view, 1);
@@ -3782,15 +3796,15 @@ tl_search_next(struct fnc_view *view)
 
 	while (1) {
 		if (entry == NULL) {
-			if (s->thread_cx.timeline_end && s->thread_cx.endjmp) {
+			if (s->thread_cx.eotl && s->thread_cx.endjmp) {
 				s->matched_commit = TAILQ_LAST(&s->commits.head,
 				    commit_tailhead);
 				view->search_status = SEARCH_COMPLETE;
 				s->thread_cx.endjmp = false;
 				break;
 			}
-			if (s->thread_cx.timeline_end || view->searching ==
-			    SEARCH_REVERSE) {
+			if (s->thread_cx.eotl ||
+			    view->searching == SEARCH_REVERSE) {
 				view->search_status = (s->matched_commit ==
 				    NULL ?  SEARCH_NO_MATCH : SEARCH_COMPLETE);
 				s->search_commit = NULL;
