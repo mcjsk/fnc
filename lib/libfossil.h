@@ -2515,7 +2515,8 @@ FSL_EXPORT bool fsl_is_file(const char *zFilename);
 
 /**
    Returns true if the given file is a symlink, else false. The name
-   may be absolute or relative to the current working dir.
+   may be absolute or relative to the current working dir. On Windows
+   platforms this always returns false.
 */
 FSL_EXPORT bool fsl_is_symlink(const char *zFilename);
 
@@ -2542,10 +2543,17 @@ FSL_EXPORT bool fsl_is_absolute_path(const char *zPath);
    * removing /./
    * removing /A/../
 
-   Changes are made in-place.  Return the new name length.  If the
-   slash parameter is non-zero, the trailing slash, if any, is
-   retained. If n is <0 then fsl_strlen() is used to calculate the
-   length.
+   Changes are made in-place.  Return the new name length.
+
+   If n is <0 then fsl_strlen() is used to calculate the length.
+
+   If the slash parameter is true, the trailing slash, if any, is
+   retained, else any trailing slash is removed.
+
+   As a special case, if the input string (simplified) is "/" then the
+   output string will be "/", regardless of the value of the final
+   argument. That behavior is debatable but this API is really
+   intended to be used for paths deeper than the root directory.
 */
 FSL_EXPORT fsl_size_t fsl_file_simplify_name(char *z, fsl_int_t n_, bool slash);
 
@@ -2802,6 +2810,109 @@ FSL_EXPORT void fsl_filename_free(void *pOld);
 FSL_EXPORT char *fsl_getenv(const char *zName);
 
 /**
+   Collects a list of directories intended to use as temp dirs in the
+   current environment. The returned array ends with a NULL element to
+   mark its end.  The memory's ownership is a bit awkward and
+   therefore it must be eventually freed by passing it to
+   fsl_temp_dirs_free().
+
+   No entries in the returned list contain a trailing slash unless the
+   entry is itself a reference to a Unix-style root directory (which
+   would be highly unusual).
+
+   The list of directories varies by platform:
+
+   Windows:
+
+   - `GetTempPath()`, `$TEMP`, `$TMP`, "."
+
+   Non-Windows:
+
+   - `$TMPDIR`, "/var/tmp", "/usr/tmp", "/tmp", "/temp",
+   "."
+
+   (`$X` refers to the value of environment variable `X`.)
+
+   Noting that only directories in those lists which actually exist
+   (at the time this is called) are added to the list (also noting
+   that "." always exists unless CWD is deleted while the app is
+   active). If no suitable directories are found, an empty array (with
+   a leading `NULL` element) is returned, but this would indicate
+   that, e.g., even CWD does not exist (so the app has bigger
+   problems).
+
+   `NULL` is only returned if allocation of the containing array
+   fails. Failure to allocate memory for a given directory name (as
+   those require conversion on some platforms) is ignored and such
+   entries are simply skipped over.
+
+   @see fsl_temp_dirs_free()
+   @see fsl_file_tempname()
+*/
+FSL_EXPORT char ** fsl_temp_dirs_get(void);
+
+/**
+   If aDirs is not NULL then it is expected to be an array created by
+   fsl_temp_dirs_get() and it frees the list's entries and the list
+   itself. After calling this, the argument's memory is invalidated
+   and any use of it leads to undefined results.
+
+   This is a harmless no-op if the argument is NULL.
+
+   @see fsl_temp_dirs_get()
+   @see fsl_file_tempname()
+*/
+FSL_EXPORT void fsl_temp_dirs_free(char **aDirs);
+
+/**
+   Creates a semi-random temp filename and populates the given buffer
+   with it. The second argument is an optional string to prefix each
+   filename with. If it is NULL then a library-wide default is
+   used. If it is empty then no prefix is used. The final argument is
+   expected to be NULL or a list of directories in the format
+   constructed by fsl_temp_dirs_get(). If it is not NULL, this
+   function uses the first entry in dirs which refers to an existing
+   directory. If it is NULL then the buffer is filled with the new name
+   with no directory prefix.
+
+   Returns...
+
+   - 0 on success, in which case tgt is populated with the new name.
+
+   - FSL_RC_NOT_FOUND if dirs is empty or refers only to non-existent
+     directories.
+
+   - FSL_RC_OOM if allocating memory for the target buffer fails.
+
+   - FSL_RC_RANGE if, after some hard-coded number of attempts, it is
+     unable to construct a unique filename due to name collisions in
+     the target directory. That "shouldn't ever happen."
+
+   Sidebars:
+
+   - This function does no translation or validation of the 2nd
+     argument other than to check if it is NULL. It "should" be either
+     a file base name, with no path component, or a relative path
+     component for which the caller has already created the directory.
+     e.g. use the base name of the application, e.g. "my-app".
+
+   - This function does not actually write to the filesystem, it just
+     constructs a name. There is hypothetically a window of
+     opportunity for another file with the same name to be created
+     before the caller has a chance to create the file, but the
+     chances of that actually happening are close enough to zero to
+     rule them out for all practical purposes.
+
+   - The RNG is officially unspecified. (That said:
+     sqlite3_randomness().)
+
+   @see fsl_temp_dirs_get()
+   @see fsl_temp_dirs_free()
+*/
+FSL_EXPORT int fsl_file_tempname(fsl_buffer * const tgt, char const *zPrefix,
+                                 char * const * const dirs);
+
+/**
    Returns a positive value if zFilename is a directory, 0 if
    zFilename does not exist, or a negative value if zFilename
    exists but is something other than a directory. Results are
@@ -2833,13 +2944,13 @@ FSL_EXPORT int fsl_dir_is_empty(const char *path);
 */
 FSL_EXPORT int fsl_file_unlink(const char *zFilename);
 
-
 /**
-   Renames zFrom to zTo, as per rename(3). Returns 0 on success.  On
-   error it returns FSL_RC_OOM on allocation error when converting the
-   names to platforms-specific character sets (on platforms where that
-   happens) or an FSL_RC_xxx value approximating an errno value, as
-   per fsl_errno_to_rc().
+   Renames file zFrom to zTo using the OS's equivalent of
+   `rename(2)`. Both files must be in the same filesystem and any
+   directory parts of zTo must already exist. Returns 0 on success,
+   FSL_RC_OOM if a filename conversion allocation fails (on platforms
+   which do that), or a FSL_RC_xxx counterpart of an `errno` value if
+   the `rename(2)` call fails (as per fsl_errno_to_rc()).
 */
 FSL_EXPORT int fsl_file_rename(const char *zFrom, const char *zTo);
 
@@ -2880,6 +2991,27 @@ FSL_EXPORT int fsl_file_mtime_set(const char *zFilename, fsl_time_t newMTime);
 */
 FSL_EXPORT int fsl_file_exec_set(const char *zFilename, bool isExec);
 
+/**
+   Returns true if the argument is fsl_stat()'able and has the
+   executable bit set, else false.
+*/
+FSL_EXPORT bool fsl_file_isexec(const char *zFilename);
+
+/**
+   Makes a bitwise copy of the file zFrom to file zTo, creating any
+   directories needed for the target file's if they do not already
+   exist. If the source file is executable then the target file will
+   also be made so, but any failure to do so (e.g. because the target
+   filesystem does not support it) is silently ignored.
+
+   Returns 0 on success. On error it may return any number of result
+   codes if opening a file fails, if a mkdir fails (see
+   fsl_mkdir_for_file()), or if any I/O fails.
+
+   Results are undefined if the source and target refer to the
+   same file.
+*/
+FSL_EXPORT int fsl_file_copy(char const *zFrom, char const *zTo);
 
 /**
    Create the directory with the given name if it does not already
@@ -2937,11 +3069,63 @@ FSL_EXPORT int fsl_mkdir(const char *zName, bool forceFlag);
    it is assumed to be a filename.
 
    Both "/foo/bar/my.doc" and "/foo/bar/" result in the directories
-   /foo/bar.
-
+   "/foo/bar".
 */
 FSL_EXPORT int fsl_mkdir_for_file(char const *zName, bool forceFlag);
 
+/**
+   This function expects its second argument to refer to a symlink
+   (and that the caller has already validated that it is one). The
+   `readlink(2)` system call is used to fetch the contents of that
+   link and the target buffer is populated with those contents
+   (reusing any memory the buffer may already own).
+
+   Returns 0 on success, FSL_RC_OOM if copying to the target buffer
+   fails due to an allocation error, or an error propagated from
+   `readlink()` in the form of a fsl_errno_to_rc() result.
+
+   Caveat: on Windows platforms this function simply passes the buffer
+   to fsl_buffer_reuse() and returns 0. It should arguably read the
+   contents of zFilename into the buffer in that case, on the
+   assumption that the file is a pseudo-symlink. That decision may be
+   re-evaluated if/when the library claims to have fossil-compatible
+   symlink support.
+
+   Bugs:
+
+   - This function has a limited internal buffer as a target for
+     `readlink()`. It "should be" long enough for any "reasonable"
+     uses in the scope of this library, but there's bound to be some
+     user out there who wants to use it for other contexts.
+*/
+FSL_EXPORT int fsl_symlink_read(fsl_buffer * const tgt, char const * zFilename);
+
+/**
+   Creates a symlink or pseudo-symlink named zLinkFile linking to
+   zTargetFile. If realLink is true and this is a non-Windows platform
+   then:
+
+   - fsl_file_simplify_name() is used to normalize zLinkFile.
+
+   - `symlink(2)` is used to link zTargetFile to a new link named the
+      simplified form of zLinkFile. If zLinkFile already exists, this
+      will fail.
+
+   If realLink is false or this is a Windows platform, a file is
+   created named zLinkFile containing the string zTargetFile as its
+   contents. If a file or symlink named zLinkFile already exists, it
+   is removed before writing the new contents.
+
+   In both cases, the parent directories for zLinkFile are created, if
+   needed but that process will fail if any non-directory components
+   with conflicting names are found in the to-be-mkdir'd path.
+
+   Returns 0 on success or some lower-level result code if
+   creation/writing of a directory, a symlink, or pseudo-symlink
+   fails.
+*/
+FSL_EXPORT int fsl_symlink_create(char const *zTargetFile, char const * zLinkFile,
+                                  bool realLink);
 
 /**
    Uses fsl_getenv() to look for the environment variables
@@ -6093,6 +6277,10 @@ FSL_CX_F_CALC_R_CARD = 0x01,
    the library does not currently support crosslinking for, skip over
    them instead of generating an error. For day-to-day use this is,
    perhaps counter-intuitively, generally desirable.
+
+   As of 2021-12-04, crosslinking of all core fossil artifact types is
+   supported, so this flag is effectively a no-op until/unless a new
+   artifact type is added to fossil.
 */
 FSL_CX_F_SKIP_UNKNOWN_CROSSLINKS = 0x02,
 
@@ -6462,14 +6650,16 @@ FSL_EXPORT char const * fsl_rc_cstr(int);
    compiled with, Chaos might ensue.
 
    The API does not yet have any mechanism for determining
-   compatibility between repository versions and it also currently
-   does no explicit checking to disallow incompatible versions.
+   compatibility between library versions and it also currently does
+   no explicit checking to disallow incompatible versions.
 */
 FSL_EXPORT char const * fsl_library_version();
 
 /**
-   Returns true (non-0) if yourLibVersion compares lexically
-   equal to FSL_LIBRARY_VERSION, else it returns false (0).
+   Returns true (non-0) if yourLibVersion compares lexically equal to
+   FSL_LIBRARY_VERSION, else it returns false (0). It is intended to
+   be passed the FSL_LIBRARY_VERSION string the client code was built
+   with.
 */
 FSL_EXPORT bool fsl_library_version_matches(char const * yourLibVersion);
 
@@ -7561,7 +7751,7 @@ FSL_EXPORT int fsl_cx_stat( fsl_cx * const f, bool relativeToCwd,
    If zName ends with a trailing slash, that slash is retained in
    nameOut.
 
-   This function DOES NOT resolve symlinks, stat()nig the link instead
+   This function DOES NOT resolve symlinks, stat()ing the link instead
    of what it points to.
 
    @see fsl_cx_stat()
@@ -7574,22 +7764,29 @@ FSL_EXPORT int fsl_cx_stat2( fsl_cx * const f, bool relativeToCwd,
 
 
 /**
-   Sets the case-sensitivity flag for f to the given value. This
-   flag alters how some filename-search/comparison operations
-   operate. This option is only intended to have an effect on
-   plaforms with case-insensitive filesystems.
+   Sets the case-sensitivity flag for f to the given value. This flag
+   alters how some filename-search/comparison operations operate. This
+   option is only intended to have an effect on plaforms with
+   case-insensitive filesystems.
+
+   Note that this does not save the option in the config database
+   (repo-level "case-sensitive" boolean config option). It arguably
+   should, and this behavior may change in the future.
 
    @see fsl_cx_is_case_sensitive()
 */
-FSL_EXPORT void fsl_cx_case_sensitive_set(fsl_cx * f, bool caseSensitive);
+FSL_EXPORT void fsl_cx_case_sensitive_set(fsl_cx * const f, bool caseSensitive);
 
 /**
-   Returns true (non-0) if f is set for case-sensitive filename
-   handling, else 0. Returns 0 if !f.
+   Returns true if f is set for case-sensitive filename
+   handling, else false. This setting is cached when a repository
+   is opened, but passing true for the second argument forces the
+   config option to be re-loaded from the repository db.
+   Results are undefined if !f.
 
    @see fsl_cx_case_sensitive_set()
 */
-FSL_EXPORT bool fsl_cx_is_case_sensitive(fsl_cx const * f);
+FSL_EXPORT bool fsl_cx_is_case_sensitive(fsl_cx *  const f, bool forceRecheck);
 
 /**
    If f is set to use case-sensitive filename handling,
@@ -7793,7 +7990,7 @@ FSL_EXPORT char const * fsl_cx_glob_matches( fsl_cx * const f, int gtype,
 
    To simplify this function's use via an SQL-accessible UDF, the
    `*-glob` names may be passed in without their `-glob` suffix,
-   e.g. `"igore"` instead of `"ignore-glob"`.
+   e.g. `"ignore"` instead of `"ignore-glob"`.
 */
 FSL_EXPORT fsl_glob_category_e fsl_glob_name_to_category(char const * str);
 
@@ -8029,10 +8226,19 @@ FSL_EXPORT int fsl_cx_interruptv(fsl_cx * const f, int code, char const * fmt, v
 /**
    If f's is-interrupted flag is set, this function returns its
    value. Note that there is inherently a race condition when calling
-   fsl_cx_interrupt() (to set the flag) from another thread (e.g.  a
+   fsl_cx_interrupt() (to set the flag) from another thread (e.g. a
    UI thread while showing a progress indicator).
 */
 FSL_EXPORT int fsl_cx_interrupted(fsl_cx const * const f);
+
+/**
+   Returns true if f has the "allow-symlinks" repo-level configuration
+   option set to a truthy value, else returns false. That setting is
+   cached to avoid performing a db lookup on each call, but passing
+   true for the second argument causes the repository to be
+   re-checked.
+*/
+FSL_EXPORT bool fsl_cx_allows_symlinks(fsl_cx * const f, bool forceRecheck);
 
 #if 0
 /**
@@ -8127,7 +8333,7 @@ typedef struct fsl_commit_hook fsl_commit_hook;
 /**
    Potential TODO.
 */
-FSL_EXPORT int fsl_db_before_commit_hook( fsl_db * db, fsl_commit_hook_f f,
+FSL_EXPORT int fsl_db_before_commit_hook( fsl_db * const db, fsl_commit_hook_f f,
                                int sequence, void * state );
 #endif
 
@@ -8798,10 +9004,13 @@ FSL_EXPORT int fsl_db_before_commitv( fsl_db * const db, char const * const sql,
 FSL_EXPORT int fsl_stmt_finalize( fsl_stmt * const stmt );
 
 /**
-   "Steps" the given SQL cursor one time and returns one of the
-   following: FSL_RC_STEP_ROW, FSL_RC_STEP_DONE, FSL_RC_STEP_ERROR.
-   On a db error this will update the underlying db's error state.
-   This function increments stmt->rowCount by 1 if it returns
+   "Steps" the given SQL cursor one time. The return values
+   FSL_RC_STEP_ROW and FSL_RC_STEP_DONE are both success cases, the
+   former indicating that one row has been fetches and the later
+   indicating that either no rows are left to fetch or the statement
+   is a non-fetching query.  On error some other non-zero code will be
+   returned.  On a db error this will update the underlying db's error
+   state.  This function increments stmt->rowCount by 1 if it returns
    FSL_RC_STEP_ROW.
 
    Returns FSL_RC_MISUSE if !stmt or stmt has not been prepared.
@@ -8920,9 +9129,10 @@ FSL_EXPORT char const * fsl_stmt_col_name(fsl_stmt * const stmt, int index);
    Returns the result column count for the given statement, or -1 if
    !stmt or it has not been prepared. Note that this value is cached
    when the statement is created. Note that non-fetching queries
-   (e.g. INSERT and UPDATE) have a column count of 0. Some non-SELECT
-   constructs, e.g. PRAGMA table_info(tname), behave like SELECT
-   and have a positive column count.
+   (e.g. INSERT and UPDATE) have a column count of 0 unless they have
+   a RETURNING clause. Some non-SELECT constructs, e.g. PRAGMA
+   table_info(tname) and INSERT/UPDATE/DELETE with a RETURNING clause,
+   behave like a SELECT and have a positive column count.
 
    @see fsl_stmt_param_count()
    @see fsl_stmt_col_name()
@@ -9155,9 +9365,12 @@ FSL_EXPORT int fsl_db_exec_multi( fsl_db * const db, const char * sql, ...);
 FSL_EXPORT int fsl_db_exec_multiv( fsl_db * const db, const char * sql, va_list args);
 
 /**
-   Executes a single SQL statement, skipping over any results
-   it may have. Returns 0 on success. On error db's error state
-   may be updated.
+   Executes a single SQL statement, skipping over any results it may
+   have. Returns 0 on success. On error db's error state may be
+   updated. Note that this function translates FSL_RC_STEP_DONE and
+   FSL_RC_STEP_ROW to 0. For cases where those particular result codes
+   are significant, use fsl_db_prepare() and fsl_stmt_step() (for
+   which this function is just a proxy).
 */
 FSL_EXPORT int fsl_db_exec( fsl_db * const db, char const * sql, ... );
 
@@ -9313,13 +9526,13 @@ FSL_EXPORT int32_t fsl_db_g_int32( fsl_db * const db,
    The int64 counterpart of fsl_db_get_int32(). See that function
    for the semantics.
 */
-FSL_EXPORT int fsl_db_get_int64( fsl_db * db, int64_t * rv,
+FSL_EXPORT int fsl_db_get_int64( fsl_db * const db, int64_t * rv,
                       char const * sql, ... );
 
 /**
    va_list counterpart of fsl_db_get_int64().
 */
-FSL_EXPORT int fsl_db_get_int64v( fsl_db * db, int64_t * rv,
+FSL_EXPORT int fsl_db_get_int64v( fsl_db * const db, int64_t * rv,
                        char const * sql, va_list args);
 
 /**
@@ -9327,7 +9540,7 @@ FSL_EXPORT int fsl_db_get_int64v( fsl_db * db, int64_t * rv,
    directly but provides no way of checking for errors. On error,
    or if no result is found, defaultValue is returned.
 */
-FSL_EXPORT int64_t fsl_db_g_int64( fsl_db * db, int64_t defaultValue,
+FSL_EXPORT int64_t fsl_db_g_int64( fsl_db * const db, int64_t defaultValue,
                             char const * sql, ... );
 
 
@@ -9335,13 +9548,13 @@ FSL_EXPORT int64_t fsl_db_g_int64( fsl_db * db, int64_t defaultValue,
    The fsl_id_t counterpart of fsl_db_get_int32(). See that function
    for the semantics.
 */
-FSL_EXPORT int fsl_db_get_id( fsl_db * db, fsl_id_t * rv,
+FSL_EXPORT int fsl_db_get_id( fsl_db * const db, fsl_id_t * rv,
                    char const * sql, ... );
 
 /**
    va_list counterpart of fsl_db_get_id().
 */
-FSL_EXPORT int fsl_db_get_idv( fsl_db * db, fsl_id_t * rv,
+FSL_EXPORT int fsl_db_get_idv( fsl_db * const db, fsl_id_t * rv,
                     char const * sql, va_list args);
 
 /**
@@ -9349,7 +9562,7 @@ FSL_EXPORT int fsl_db_get_idv( fsl_db * db, fsl_id_t * rv,
    directly but provides no way of checking for errors. On error,
    or if no result is found, defaultValue is returned.
 */
-FSL_EXPORT fsl_id_t fsl_db_g_id( fsl_db * db, fsl_id_t defaultValue,
+FSL_EXPORT fsl_id_t fsl_db_g_id( fsl_db * const db, fsl_id_t defaultValue,
                       char const * sql, ... );
 
 
@@ -9358,13 +9571,13 @@ FSL_EXPORT fsl_id_t fsl_db_g_id( fsl_db * db, fsl_id_t defaultValue,
    function for the semantics. If this function would fetch a
    negative value, it returns FSL_RC_RANGE and *rv is not modified.
 */
-FSL_EXPORT int fsl_db_get_size( fsl_db * db, fsl_size_t * rv,
+FSL_EXPORT int fsl_db_get_size( fsl_db * const db, fsl_size_t * rv,
                      char const * sql, ... );
 
 /**
    va_list counterpart of fsl_db_get_size().
 */
-FSL_EXPORT int fsl_db_get_sizev( fsl_db * db, fsl_size_t * rv,
+FSL_EXPORT int fsl_db_get_sizev( fsl_db * const db, fsl_size_t * rv,
                       char const * sql, va_list args);
 
 /**
@@ -9372,21 +9585,22 @@ FSL_EXPORT int fsl_db_get_sizev( fsl_db * db, fsl_size_t * rv,
    directly but provides no way of checking for errors. On error,
    or if no result is found, defaultValue is returned.
 */
-FSL_EXPORT fsl_size_t fsl_db_g_size( fsl_db * db, fsl_size_t defaultValue,
-                          char const * sql, ... );
+FSL_EXPORT fsl_size_t fsl_db_g_size( fsl_db * const db,
+                                     fsl_size_t defaultValue,
+                                     char const * sql, ... );
 
 
 /**
    The double counterpart of fsl_db_get_int32(). See that function
    for the semantics.
 */
-FSL_EXPORT int fsl_db_get_double( fsl_db * db, double * rv,
+FSL_EXPORT int fsl_db_get_double( fsl_db * const db, double * rv,
                                   char const * sql, ... );
 
 /**
    va_list counterpart of fsl_db_get_double().
 */
-FSL_EXPORT int fsl_db_get_doublev( fsl_db * db, double * rv,
+FSL_EXPORT int fsl_db_get_doublev( fsl_db * const db, double * rv,
                                    char const * sql, va_list args);
 
 /**
@@ -9394,7 +9608,7 @@ FSL_EXPORT int fsl_db_get_doublev( fsl_db * db, double * rv,
    directly but provides no way of checking for errors. On error,
    or if no result is found, defaultValue is returned.
 */
-FSL_EXPORT double fsl_db_g_double( fsl_db * db, double defaultValue,
+FSL_EXPORT double fsl_db_g_double( fsl_db * const db, double defaultValue,
                                    char const * sql, ... );
 
 /**
@@ -9407,13 +9621,13 @@ FSL_EXPORT double fsl_db_g_double( fsl_db * db, double defaultValue,
    (an SQL NULL translates as a NULL string), The caller must
    eventually free the returned string value using fsl_free().
 */
-FSL_EXPORT int fsl_db_get_text( fsl_db * db, char ** rv, fsl_size_t * rvLen,
+FSL_EXPORT int fsl_db_get_text( fsl_db * const db, char ** rv, fsl_size_t * rvLen,
                                 char const * sql, ... );
 
 /**
    va_list counterpart of fsl_db_get_text().
 */
-FSL_EXPORT int fsl_db_get_textv( fsl_db * db, char ** rv, fsl_size_t * rvLen,
+FSL_EXPORT int fsl_db_get_textv( fsl_db * const db, char ** rv, fsl_size_t * rvLen,
                       char const * sql, va_list args );
 
 /**
@@ -9424,7 +9638,7 @@ FSL_EXPORT int fsl_db_get_textv( fsl_db * db, char ** rv, fsl_size_t * rvLen,
    not NULL then if non-NULL is returned, *len will be assigned the
    byte-length of the returned string.
 */
-FSL_EXPORT char * fsl_db_g_text( fsl_db * db, fsl_size_t * len,
+FSL_EXPORT char * fsl_db_g_text( fsl_db * const db, fsl_size_t * len,
                       char const * sql,
                       ... );
 
@@ -9439,14 +9653,14 @@ FSL_EXPORT char * fsl_db_g_text( fsl_db * db, fsl_size_t * len,
    (if not NULL) is set to 0, and 0 is returned. Note that NULL is
    also a legal result (an SQL NULL translates as a NULL string),
 */
-FSL_EXPORT int fsl_db_get_blob( fsl_db * db, void ** rv, fsl_size_t * len,
+FSL_EXPORT int fsl_db_get_blob( fsl_db * const db, void ** rv, fsl_size_t * len,
                      char const * sql, ... );
 
 
 /**
    va_list counterpart of fsl_db_get_blob().
 */
-FSL_EXPORT int fsl_db_get_blobv( fsl_db * db, void ** rv, fsl_size_t * stmtLen,
+FSL_EXPORT int fsl_db_get_blobv( fsl_db * const db, void ** rv, fsl_size_t * stmtLen,
                       char const * sql, va_list args );
 
 /**
@@ -9454,12 +9668,12 @@ FSL_EXPORT int fsl_db_get_blobv( fsl_db * db, void ** rv, fsl_size_t * stmtLen,
    directly but provides no way of checking for errors. On error,
    or if no result is found, NULL is returned.
 */
-FSL_EXPORT void * fsl_db_g_blob( fsl_db * db, fsl_size_t * len,
+FSL_EXPORT void * fsl_db_g_blob( fsl_db * const db, fsl_size_t * len,
                       char const * sql,
                       ... );
 /**
    Similar to fsl_db_get_text() and fsl_db_get_blob(), but writes
-   its result to tgt, overwriting (not appennding to) any existing
+   its result to tgt, overwriting (not appending to) any existing
    memory it might hold.
 
    If asBlob is true then the underlying BLOB API is used to
@@ -9468,16 +9682,16 @@ FSL_EXPORT void * fsl_db_g_blob( fsl_db * db, fsl_size_t * len,
    know you might have binary data, be sure to pass a true value
    for asBlob to avoid any potential encoding-related problems.
 */
-FSL_EXPORT int fsl_db_get_buffer( fsl_db * db, fsl_buffer * tgt,
-                       char asBlob,
-                       char const * sql, ... );
+FSL_EXPORT int fsl_db_get_buffer( fsl_db * const db, fsl_buffer * const tgt,
+                                  bool asBlob, char const * sql,
+                                  ... );
 
 /**
    va_list counterpart of fsl_db_get_buffer().
 */
-FSL_EXPORT int fsl_db_get_bufferv( fsl_db * db, fsl_buffer * tgt,
-                        char asBlob,
-                        char const * sql, va_list args );
+FSL_EXPORT int fsl_db_get_bufferv( fsl_db * const db, fsl_buffer * const tgt,
+                                   bool asBlob, char const * sql,
+                                   va_list args );
 
 
 /**
@@ -9492,13 +9706,13 @@ FSL_EXPORT int fsl_db_get_bufferv( fsl_db * db, fsl_buffer * tgt,
    Returns FSL_RC_MISUSE if !db, db is not opened, !callback,
    !sql. Returns FSL_RC_RANGE if !*sql.
 */
-FSL_EXPORT int fsl_db_each( fsl_db * db, fsl_stmt_each_f callback,
+FSL_EXPORT int fsl_db_each( fsl_db * const db, fsl_stmt_each_f callback,
                             void * callbackState, char const * sql, ... );
 
 /**
    va_list counterpart to fsl_db_each().
 */
-FSL_EXPORT int fsl_db_eachv( fsl_db * db, fsl_stmt_each_f callback,
+FSL_EXPORT int fsl_db_eachv( fsl_db * const db, fsl_stmt_each_f callback,
                              void * callbackState, char const * sql, va_list args );
 
 
@@ -9541,7 +9755,7 @@ FSL_EXPORT char * fsl_db_unix_to_iso8601( fsl_db * const db, fsl_time_t j,
    Returns the current time in Julian Date format. Returns a negative
    value if !db or db is not opened.
 */
-FSL_EXPORT double fsl_db_julian_now(fsl_db * db);
+FSL_EXPORT double fsl_db_julian_now(fsl_db * const db);
 
 /**
    Uses the given db to convert the given time string to Julian Day
@@ -9556,7 +9770,7 @@ FSL_EXPORT double fsl_db_julian_now(fsl_db * db);
    @see fsl_julian_to_iso8601()
    @see fsl_iso8601_to_julian()
 */
-FSL_EXPORT double fsl_db_string_to_julian(fsl_db * db, char const * str);
+FSL_EXPORT double fsl_db_string_to_julian(fsl_db * const db, char const * str);
 
 /**
    Opens the given db file and populates db with its handle.  db
@@ -9783,7 +9997,7 @@ FSL_EXPORT int fsl_db_select_slistv( fsl_db * const db, fsl_list * tgt,
    byte. The returned memory must eventually be freed using
    fsl_free(). Returns NULL if !db, !n, or on a db-level error.
 */
-FSL_EXPORT char * fsl_db_random_hex(fsl_db * db, fsl_size_t n);
+FSL_EXPORT char * fsl_db_random_hex(fsl_db * const db, fsl_size_t n);
 
 /**
    Returns the "number of database rows that were changed or
@@ -12133,11 +12347,11 @@ FSL_EXPORT int fsl_deck_baseline_fetch( fsl_deck * d );
      fsl_deck_F_rewind() before doing so.
 
    - Loading a checkin's baseline (required for F-card iteration and
-   performed automatically by fsl_deck_F_rewind()).
+     performed automatically by fsl_deck_F_rewind()).
 
    Aside from such iteration-related mutable state, it is STRICTLY
    ILLEGAL to modify a deck's artifact-related state while it is
-   undergoing crosslinking. It is legal to modify its error state.
+   undergoing crosslinking.
 
 
    Potential TODO: add some client-opaque state to decks so that they
@@ -12149,10 +12363,14 @@ FSL_EXPORT int fsl_deck_baseline_fetch( fsl_deck * d );
 typedef int (*fsl_deck_xlink_f)(fsl_deck * const d, void * state);
 
 /**
-    A type for holding a callback/state pair for manifest
-    crosslinking callbacks.
+    A type for holding state for artifact crosslinking callbacks.
 */
 struct fsl_xlinker {
+  /** Human-readable name of the crosslinker, noting that each
+      registered crosslinker must have a unique name. Registering a
+      crosslinker with the same name as an existing one replaces that
+      one.
+  */
   char const * name;
   /** Callback function. */
   fsl_deck_xlink_f f;
@@ -12235,12 +12453,19 @@ fsl_xlinker * fsl_xlinker_by_name( fsl_cx * f, char const * name );
 
    Caveat: some obscure artifact crosslinking steps do not happen
    unless crosslinking takes place in the context of a
-   fsl_crosslink_begin() and fsl_crosslink_end()
+   fsl__crosslink_begin() and fsl__crosslink_end()
    session. Thus, at the time client-side crosslinker callbacks are
    called, certain crosslinking state in the database may still be
    pending. It is as yet unclear how best to resolve that minor
    discrepancy, or whether it even needs resolving.
 
+   As a rule, it is important that crosslink handler checks the
+   deck->type field of the deck they are passed, and return 0, without
+   side effects, if the type is not specifically handled by that
+   handler. Every crosslink handler is passed every crosslinked
+   artifact, but it's rare for crosslink handlers to handle more than
+   one type of artifact, except perhaps for purposes of notifying a
+   user that some progress is being made.
 
    Default (overrideable) crosslink handlers:
 
@@ -12264,13 +12489,18 @@ fsl_xlinker * fsl_xlinker_by_name( fsl_cx * f, char const * name );
 
    - Wiki artifacts: "fsl/wiki/timeline"
 
-   Sidebar: due to how tickets are crosslinked (_after_ the
-   crosslinking phase is actually finished), it is not currently
-   possible to add a custom ticket crosslink handler. Restructuring
-   that is on the TODO list.
-
    A context registers listeners under those names when it
    initializes, and clients may override them at any point after that.
+
+   Sidebar: due to how tickets are crosslinked (_after_ the general
+   crosslinking phase is actually finished and requiring state which
+   other crosslinkers do not), it is not currently possible to
+   override the ticket crosslink handler. Thus the core ticket
+   crosslinker will always run, and update the [event] table, but a
+   custom crosslinker may overwrite the resulting [event] table
+   entries (in particular, the comment). Determining whether/how
+   ticket crosslinking can be restructured to be consistent with the
+   other types is on the TODO list.
 
    Caveat: updating the timeline requires a bit of knowledge about the
    Fossil DB schema and/or conventions. Updates for certain types,
@@ -12635,7 +12865,7 @@ struct fsl_card_J {
      If true, the new value should be appended to any existing one
      with the same key, else it will replace any old one.
   */
-  char append;
+  bool append;
   /**
      For internal use only.
   */
@@ -12650,7 +12880,7 @@ struct fsl_card_J {
   char * value;
 };
 /** Empty-initialized fsl_card_J struct. */
-#define fsl_card_J_empty_m {0,0,NULL, NULL}
+#define fsl_card_J_empty_m {false,0,NULL, NULL}
 /** Empty-initialized fsl_card_J struct. */
 FSL_EXPORT const fsl_card_J fsl_card_J_empty;
 
@@ -12829,17 +13059,18 @@ FSL_EXPORT char fsl_rid_is_a_checkin(fsl_cx * f, fsl_id_t rid);
    entries appended to it equal to the number of subdirectories in
    the repo (possibly 0).
 
-   Returns non-0 on error, FSL_RC_MISUSE if !f, !tgt. On other
-   errors error tgt might have been partially populated and the
-   list contents should not be considered valid/complete.
+   Returns non-0 on error, FSL_RC_MISUSE if !tgt, FSL_RC_NOT_A_REPO if
+   f has no opened repository. On other errors error tgt might have
+   been partially populated and the list contents should not be
+   considered valid/complete. Results are undefined if f is NULL.
 
    Ownership of the returned strings is transfered to the caller,
    who must eventually free each one using
    fsl_free(). fsl_list_visit_free() is the simplest way to free
    them all at once.
 */
-FSL_EXPORT int fsl_repo_dir_names( fsl_cx * f, fsl_id_t rid,
-                                   fsl_list * tgt, bool addSlash );
+FSL_EXPORT int fsl_repo_dir_names( fsl_cx * const f, fsl_id_t rid,
+                                   fsl_list * const tgt, bool addSlash );
 
 
 /**
@@ -12851,13 +13082,12 @@ FSL_EXPORT int fsl_repo_dir_names( fsl_cx * f, fsl_id_t rid,
    then each file injected into the ZIP gets that directory
    prepended to its name.
 
-   If progressVisitor is not NULL then it is called once just
-   before each file is processed, passed the F-card for the file
-   about to be zipped and the progressState parameter. If it
-   returns non-0, ZIPping is cancelled and that error code is
-   returned. This is intended primarily for providing feedback on
-   the update process, but could also be used to cancel the
-   operation between files.
+   If progressVisitor is not NULL then it is called once just before
+   each file is processed, passed the F-card for the file about to be
+   zipped and the progressState parameter. If it returns non-0,
+   ZIPping is cancelled and that result code is returned. This is
+   intended primarily for providing feedback on the zip progress, but
+   could also be used to cancel the operation between files.
 
    As of 2021-09-05 this routine automatically adds the files
    (manifest, manifest.uuid, manifest.tags) to the zip file,
@@ -12866,19 +13096,19 @@ FSL_EXPORT int fsl_repo_dir_names( fsl_cx * f, fsl_id_t rid,
    F-cards associated with those non-files, the progressVisitor is not
    called for those.
 
-   BUG: this function does not honor symlink content in a
-   fossil-compatible fashion. If it encounters a symlink entry
-   during ZIP generation, it will fail and f's error state will be
-   updated with an explanation of this shortcoming.
+   BUG/FIXME: this function does not honor symlink content in a
+   fossil-compatible fashion. If it encounters a symlink entry during
+   ZIP generation, it will fail and f's error state will be updated
+   with an explanation of this shortcoming.
 
    @see fsl_zip_writer
    @see fsl_card_F_visitor_f()
 */
-FSL_EXPORT int fsl_repo_zip_sym_to_filename( fsl_cx * f, char const * sym,
-                                  char const * vRootDir,
-                                  char const * fileName,
-                                  fsl_card_F_visitor_f progressVisitor,
-                                  void * progressState);
+FSL_EXPORT int fsl_repo_zip_sym_to_filename( fsl_cx * const f, char const * sym,
+                                             char const * vRootDir,
+                                             char const * fileName,
+                                             fsl_card_F_visitor_f progressVisitor,
+                                             void * progressState);
 
 
 /**
@@ -15726,6 +15956,15 @@ FSL_CKUP_FCHANGE_CONFLICT_RM,
     We probably need a better name for this.
 */
 FSL_CKUP_FCHANGE_CONFLICT_SYMLINK,
+/**
+   Indicates that a merge of binary content was requested.
+
+   TODO: figure out why UPDATE uses the target version, instead of
+   triggering an error here, and why MERGE does not do the same.
+   fossil(1) simply skips over, with a warning, binaries during a
+   merge.
+*/
+FSL_CKUP_FCHANGE_CONFLICT_BINARY,
 /** File was renamed in the updated-to version. If a file is both
     modified and renamed, it is flagged as renamed instead
     of modified. */
@@ -18023,12 +18262,6 @@ struct fsl_cx {
   */
   struct {
     /**
-       If true, SOME repository-level file-name comparisons/searches
-       will work case-insensitively.
-    */
-    bool caseInsensitive;
-
-    /**
        If true, skip "dephantomization" of phantom blobs.  This is a
        detail from fossil(1) with as-yet-undetermined utility. It's
        apparently only used during the remote-sync process, which this
@@ -18061,6 +18294,12 @@ struct fsl_cx {
        verification" (a.k.a. verify-before-commit) is underway.
     */
     bool inFinalVerify;
+    /**
+       Specifies whether SOME repository-level file-name comparisons/searches
+       will work case-insensitively. <0 means not-yet-determined,
+       0 = no, >0 = yes.
+    */
+    short caseInsensitive;
 
     /**
        Cached copy of the allow-symlinks config option, because it is
@@ -18239,6 +18478,11 @@ struct fsl_cx {
       fsl_id_t * list;
       unsigned int capacity;
     } deltaIds;
+    /**
+       Holds a list of temp-dir names. Must be allocated using
+       fsl_temp_dirs_get() and freed using fsl_temp_dirs_free().
+    */
+    char **tempDirs;
   } cache;
 
   /**
@@ -18283,6 +18527,17 @@ struct fsl_cx {
        ticketchng.rid db field.
     */
     bool hasChngRid;
+
+    /**
+       The name of the ticket-table field which refers to a ticket's
+       title. Default = "title". The bytes are owned by this object.
+    */
+    char * titleColumn;
+    /**
+       The name of the ticket-table field which refers to a ticket's
+       status. Default = "status". The bytes are owned by this object.
+    */
+    char * statusColumn;
   } ticket;
 
   /*
@@ -18330,12 +18585,12 @@ struct fsl_cx {
     0/*interrupted*/,                             \
     fsl_xlinker_list_empty_m/*xlinkers*/,         \
     {/*cache*/                                    \
-      false/*caseInsensitive*/,                   \
       false/*ignoreDephantomizations*/,          \
       false/*markPrivate*/,                         \
       false/*isCrosslinking*/,                      \
       false/*xlinkClustersOnly*/,                   \
       false/*inFinalVerify*/,                       \
+      -1/*caseInsensitive*/,                   \
       -1/*allowSymlinks*/,                      \
       -1/*seenDeltaManifest*/,                  \
       -1/*searchIndexExists*/,                  \
@@ -18365,14 +18620,17 @@ struct fsl_cx {
       },                                    \
       {/*deltaIds*/                 \
         NULL/*list*/, 0/*capacity*/ \
-      }                              \
-    }/*cache*/,                           \
+      },                              \
+      NULL/*tempDirs*/ \
+    }/*cache*/,                         \
     {/*ticket*/                             \
       fsl_list_empty_m/*customFields*/,     \
       0/*hasTicket*/,                       \
       0/*hasCTime*/,                        \
       0/*hasChng*/,                         \
-      0/*hasCngRid*/                        \
+      0/*hasCngRid*/,                     \
+      NULL/*titleColumn*/,                      \
+      NULL/*statusColumn*/                    \
     }                                       \
   }
 
@@ -19111,6 +19369,19 @@ fsl_card_F * fsl__deck_F_seek(fsl_deck * const d, const char *zName);
 
 /** @internal
 
+    Ensures that f's single file content buffer is available for use
+    and returns it to the caller. If it appears to already be in use,
+    this function fails fatally via fsl__fatal(), indicating a serious
+    misuse of the internal API.
+
+    Calling this obligates the caller to call
+    fsl__cx_content_buffer_yield() as soon as they are done with the
+    buffer.
+*/
+fsl_buffer * fsl__cx_content_buffer(fsl_cx * const f);
+
+/** @internal
+
     Part of the fsl_cx::cache::fileContent optimization. This sets
     f->cache.fileContent.used to 0 and if its capacity is over a certain
     (unspecified, unconfigurable) size then it is trimmed to that
@@ -19707,21 +19978,58 @@ int fsl__db_cached_clear_role(fsl_db * const db, int role);
 
 /** @internal
 
-    UNDER CONSTRUCTION!
-
-    Part of the crosslinking bits: rebuilds the entry for the
-    ticket with the given K-card value.
+    Part of the crosslinking bits: rebuilds the entry for the ticket
+    with the given K-card value.
 */
 int fsl__ticket_rebuild(fsl_cx * const f, char const * zTktId);
+
+/** @internal
+
+   Calls all registered crosslink link listeners, passing each the
+   given deck. Returns 0 if there are no listeners or if all return 0,
+   else it propagates an error from a failed listener.
+
+   This must only be called while crosslinking is underway.
+
+   @see fsl_xlink_listener()
+*/
+int fsl__call_xlink_listeners(fsl_deck * const d);
+
+/** @internal
+
+   Copies symlink zFrom to a new symlink or pseudo-symlink named
+   zTo.
+
+   If realLink is true and this is a non-Windows platform,
+   symlink zFrom is copied to zTo.
+
+   If realLink is false or this is a Windows platform them...
+
+   - On Windows this has currently undesired, or at least, highly
+     arguable, behavior (historical, inherited from fossil(1)), in
+     that an empty file named zTo will be created. In fossil(1) this
+     function's counterpart is (apparently) never called on Windows,
+     so that behavior seems to be moot. It is, however, important that
+     this library never call it on Windows.
+
+   - On non-Windows, a pseudo-symlink will be created: the string
+     zFrom will be written to a regular file named zTo. That is, the
+     file zTo will hold, as its contents, what it would point to if
+     it were a symlink.
+*/
+int fsl__symlink_copy(char const *zFrom, char const *zTo, bool realLink);
 
 /** @internal
 
     Maximum length of a line in a text file, in bytes. (2**15 = 32k)
 */
 #define FSL__LINE_LENGTH_MASK_SZ  15
+
 /** @internal
 
- */
+    Bitmask which, when AND-ed with a number, will result in the
+    bottom FSL__LINE_LENGTH_MASK_SZ bits of that number.
+*/
 #define FSL__LINE_LENGTH_MASK     ((1<<FSL__LINE_LENGTH_MASK_SZ)-1)
 
 #if defined(__cplusplus)

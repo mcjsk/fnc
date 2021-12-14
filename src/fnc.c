@@ -1760,7 +1760,7 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path,
 		    " AND EXISTS(SELECT 1 FROM mlink"
 		    " WHERE mlink.mid = event.objid"
 		    " AND mlink.fnid IN ");
-		if (fsl_cx_is_case_sensitive(f)) {
+		if (fsl_cx_is_case_sensitive(f,false)) {
 			fsl_buffer_appendf(&sql,
 			    "(SELECT fnid FROM filename"
 			    " WHERE name = %Q OR name GLOB '%q/*')",
