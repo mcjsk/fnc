@@ -890,9 +890,12 @@ static void		 move_tl_cursor_up(struct fnc_view *, bool, bool);
 static int		 timeline_scroll_down(struct fnc_view *, int);
 static void		 timeline_scroll_up(struct fnc_tl_view_state *, int);
 static void		 select_commit(struct fnc_tl_view_state *);
-static int		 open_commit_diff_view(struct fnc_view **,
-			    struct fnc_view *);
+static int		 request_new_view(struct fnc_view **, struct fnc_view *,
+			    enum fnc_view_id, int);
+static int		 init_new_view(struct fnc_view **, struct fnc_view *,
+			    enum fnc_view_id, int, int, int);
 static int		 view_set_split(struct fnc_view *, int *, int *, int *);
+static int		 offset_selected_line(struct fnc_view *, int *);
 static int		 view_split_start_col(int);
 static int		 view_split_start_ln(int);
 static int		 make_splitscreen(struct fnc_view *);
@@ -975,7 +978,7 @@ static int		 link_tree_node(struct fnc_repository_tree *,
 static int		 show_tree_view(struct fnc_view *);
 static int		 tree_input_handler(struct fnc_view **,
 			    struct fnc_view *, int);
-static int		 blame_tree_entry(struct fnc_view **, int,
+static int		 blame_tree_entry(struct fnc_view **, int, int,
 			    struct fnc_tree_entry *, struct fnc_parent_trees *,
 			    fsl_uuid_str);
 static int		 tree_search_init(struct fnc_view *);
@@ -986,7 +989,7 @@ static int		 draw_tree(struct fnc_view *, const char *);
 static int		 timeline_tree_entry(struct fnc_view **, int,
 			    struct fnc_tree_view_state *);
 static void		 tree_scroll_up(struct fnc_tree_view_state *, int);
-static void		 tree_scroll_down(struct fnc_tree_view_state *, int);
+static int		 tree_scroll_down(struct fnc_view *, int);
 static int		 visit_subtree(struct fnc_tree_view_state *,
 			    struct fnc_tree_object *);
 static int		 tree_entry_get_symlink_target(char **,
@@ -1032,8 +1035,7 @@ static int		 tl_branch_entry(struct fnc_view **, int,
 static int		 browse_branch_tree(struct fnc_view **, int,
 			    struct fnc_branchlist_entry *);
 static void		 branch_scroll_up(struct fnc_branch_view_state *, int);
-static void		 branch_scroll_down(struct fnc_branch_view_state *,
-			    int);
+static int		 branch_scroll_down(struct fnc_view *, int);
 static int		 branch_search_next(struct fnc_view *);
 static int		 branch_search_init(struct fnc_view *);
 static int		 match_branchlist_entry(struct fnc_branchlist_entry *,
@@ -2836,8 +2838,11 @@ cycle_view(struct fnc_view *view)
 		view->parent->active = true;
 		view->parent->focus_child = false;
 		if (view->mode == VIEW_SPLIT_HRZN && !screen_is_split(view)) {
-			if (view->parent->vid == FNC_VIEW_TIMELINE)
+			if (view->parent->vid == FNC_VIEW_TIMELINE) {
 				rc = request_tl_commits(view->parent);
+				if (rc)
+					return rc;
+			}
 			rc = make_fullscreen(view->parent);
 		}
 	}
@@ -3233,7 +3238,8 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case KEY_ENTER:
 	case ' ':
 	case '\r':
-		rc = open_commit_diff_view(new_view, view);
+		rc = request_new_view(new_view, view, FNC_VIEW_DIFF,
+		    s->selected_idx);
 		break;
 	case 'b':
 		if (view_is_parent(view))
@@ -3436,43 +3442,65 @@ move_tl_cursor_up(struct fnc_view *view, bool page, bool end)
 }
 
 static int
-open_commit_diff_view(struct fnc_view **new_view, struct fnc_view *view)
+request_new_view(struct fnc_view **new_view, struct fnc_view *view,
+    enum fnc_view_id request, int idx)
 {
-	struct fnc_tl_view_state	*s = &view->state.timeline;
-	struct fnc_view			*diff_view;
-	int				 x = 0, y = 0, rc = FSL_RC_OK;
-
-	if (s->selected_commit == NULL)
-		return rc;
+	struct fnc_view	*requested = NULL;
+	int		 x = 0, y = 0, rc = FSL_RC_OK;
 
 	if (view_is_parent(view)) {
-		rc = view_set_split(view, &s->selected_idx, &x, &y);
+		rc = view_set_split(view, &idx, &x, &y);
 		if (rc)
 			return rc;
 	}
 
-	rc = init_diff_commit(&diff_view, x, y, s->selected_commit->commit,
-	    view);
-	if (rc)
+	rc = init_new_view(&requested, view, request, x, y, idx);
+	if (rc || !requested)
 		return rc;
 
 	view->active = false;
-	diff_view->active = true;
-	diff_view->mode = view->mode;
-	diff_view->nlines = view->lines - y;
+	requested->active = true;
+	requested->mode = view->mode;
+	requested->nlines = view->lines - y;
 
 	if (view_is_parent(view)) {
-		if (view->child != NULL) {
-			rc = view_close(view->child);
-			view->child = NULL;
-			if (rc)
-				return rc;
-		}
-		view->child = diff_view;
-		diff_view->parent = view;
+		rc = view_close_child(view);
+		if (rc)
+			return rc;
+		view_set_child(view, requested);
 		view->focus_child = true;
 	} else
-		*new_view = diff_view;
+		*new_view = requested;
+
+	return rc;
+}
+
+static int
+init_new_view(struct fnc_view **new_view, struct fnc_view *view,
+    enum fnc_view_id request, int x, int y, int idx)
+{
+	int rc = FSL_RC_OK;
+
+	switch (request) {
+	case FNC_VIEW_DIFF: {
+		struct fnc_tl_view_state *s = &view->state.timeline;
+		if (s->selected_commit == NULL)
+			break;
+		rc = init_diff_commit(new_view, x, y,
+		    s->selected_commit->commit, view);
+		s->selected_idx = idx;
+		break;
+	}
+	case FNC_VIEW_BLAME: {
+		struct fnc_tree_view_state *s = &view->state.tree;
+		rc = blame_tree_entry(new_view, x, y, s->selected_entry,
+		    &s->parents, s->commit_id);
+		s->selected_idx = idx;
+		/* FALL THROUGH */
+	}
+	default:
+		break;
+	}
 
 	return rc;
 }
@@ -3491,7 +3519,7 @@ view_set_split(struct fnc_view *view, int *selected, int *start_col,
     int *start_ln)
 {
 	char	*mode;
-	int	 offset, rc = FSL_RC_OK;
+	int	 rc = FSL_RC_OK;
 
 	mode = fnc_conf_getopt(FNC_VIEW_SPLIT_MODE, false);
 
@@ -3506,14 +3534,43 @@ view_set_split(struct fnc_view *view, int *selected, int *start_col,
 		if (rc)
 			goto end;
 		view->nlines = *start_ln - 1;
-		if (*selected >= view->nlines - 1) {
-			offset = ABS(view->nlines - *selected - 2);
-			rc = timeline_scroll_down(view, offset);
-			*selected -= offset;
-		}
+		rc = offset_selected_line(view, selected);
 	}
 end:
 	fsl_free(mode);
+	return rc;
+}
+
+static int
+offset_selected_line(struct fnc_view *view, int *selected)
+{
+	int	(*offset)(struct fnc_view *, int);
+	int	header, move, rc = FSL_RC_OK;
+
+	switch (view->vid) {
+	case FNC_VIEW_TIMELINE:
+		offset = &timeline_scroll_down;
+		header = 2;
+		break;
+	case FNC_VIEW_TREE:
+		offset = &tree_scroll_down;
+		header = 4;
+		break;
+	case FNC_VIEW_BRANCH:
+		offset = &branch_scroll_down;
+		header = 1;
+	default:
+		offset = NULL;
+		header = 0;
+		break;
+	}
+
+	if (*selected > view->nlines - header) {
+		move = ABS(view->nlines - *selected - header);
+		rc = offset ? offset(view, move) : rc;
+		*selected -= move;
+	}
+
 	return rc;
 }
 
@@ -6778,12 +6835,11 @@ draw_tree(struct fnc_view *view, const char *treepath)
 	if (s->first_entry_onscreen == NULL) {
 		te = &s->tree->entries[0];
 		if (s->selected_idx == 0) {
-			if (view->active)
-				wattr_on(view->window, A_REVERSE, NULL);
+			wattr_on(view->window, A_REVERSE, NULL);
 			s->selected_entry = NULL;
 		}
 		waddstr(view->window, "  ..\n");
-		if (s->selected_idx == 0 && view->active)
+		if (s->selected_idx == 0)
 			wattr_off(view->window, A_REVERSE, NULL);
 		++s->ndisplayed;
 		if (--limit <= 0)
@@ -6869,8 +6925,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 			break;
 		}
 		if (n == s->selected_idx) {
-			if (view->active)
-				wattr_on(view->window, A_REVERSE, NULL);
+			wattr_on(view->window, A_REVERSE, NULL);
 			s->selected_entry = te;
 		}
 		if (s->colour)
@@ -6882,7 +6937,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 			wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
 		if (wstrlen < view->ncols - 1)
 			waddch(view->window, '\n');
-		if (n == s->selected_idx && view->active)
+		if (n == s->selected_idx)
 			wattr_off(view->window, A_REVERSE, NULL);
 		fsl_free(line);
 		fsl_free(wcstr);
@@ -6979,7 +7034,8 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			return rc;
 		}
 		tcx = fcli_cx()->clientState.state;
-		tcx->needs_reset = true;
+		if (tcx)
+			tcx->needs_reset = true;
 		view->active = false;
 		branch_view->active = true;
 		if (view_is_parent(view)) {
@@ -7076,7 +7132,7 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		if (get_tree_entry(s->tree, s->last_entry_onscreen->idx + 1)
 		    == NULL)
 			break;	/* Reached last entry. */
-		tree_scroll_down(s, 1);
+		tree_scroll_down(view, 1);
 		break;
 	case KEY_NPAGE:
 	case CTRL('f'):
@@ -7090,7 +7146,7 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 				s->selected_idx = s->ndisplayed - 1;
 			break;
 		}
-		tree_scroll_down(s, view->nlines - 3);
+		tree_scroll_down(view, view->nlines - 3);
 		break;
 	case KEY_BACKSPACE:
 	case KEY_ENTER:
@@ -7118,6 +7174,8 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			s->first_entry_onscreen = parent->first_entry_onscreen;
 			s->selected_entry = parent->selected_entry;
 			s->selected_idx = parent->selected_idx;
+			if (s->selected_idx > view->nlines - 3)
+				offset_selected_line(view, &s->selected_idx);
 			fsl_free(parent);
 		} else if (s->selected_entry != NULL &&
 		    S_ISDIR(s->selected_entry->mode)) {
@@ -7133,24 +7191,8 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			}
 		} else if (s->selected_entry != NULL &&
 		    S_ISREG(s->selected_entry->mode)) {
-			struct fnc_view *blame_view;
-			int start_col = view_is_parent(view) ?
-			    view_split_start_col(view->start_col) : 0;
-
-			rc = blame_tree_entry(&blame_view, start_col,
-			    s->selected_entry, &s->parents, s->commit_id);
-			if (rc)
-				break;
-			view->active = false;
-			blame_view->active = true;
-			if (view_is_parent(view)) {
-				rc = view_close_child(view);
-				if (rc)
-					return rc;
-				view_set_child(view, blame_view);
-				view->focus_child = true;
-			} else
-				*new_view = blame_view;
+			rc = request_new_view(new_view, view, FNC_VIEW_BLAME,
+			    s->selected_idx);
 		}
 		break;
 	case KEY_RESIZE:
@@ -7214,11 +7256,12 @@ tree_scroll_up(struct fnc_tree_view_state *s, int maxscroll)
 	}
 }
 
-static void
-tree_scroll_down(struct fnc_tree_view_state *s, int maxscroll)
+static int
+tree_scroll_down(struct fnc_view *view, int maxscroll)
 {
-	struct fnc_tree_entry	*next, *last;
-	int			 n = 0;
+	struct fnc_tree_view_state	*s = &view->state.tree;
+	struct fnc_tree_entry		*next, *last;
+	int				 n = 0;
 
 	if (s->first_entry_onscreen)
 		next = get_tree_entry(s->tree,
@@ -7227,13 +7270,16 @@ tree_scroll_down(struct fnc_tree_view_state *s, int maxscroll)
 		next = &s->tree->entries[0];
 
 	last = s->last_entry_onscreen;
-	while (next && last && n++ < maxscroll) {
-		last = get_tree_entry(s->tree, last->idx + 1);
-		if (last) {
+	while (next && n++ < maxscroll) {
+		if (last)
+			last = get_tree_entry(s->tree, last->idx + 1);
+		if (last || (view->mode == VIEW_SPLIT_HRZN && next)) {
 			s->first_entry_onscreen = next;
 			next = get_tree_entry(s->tree, next->idx + 1);
 		}
 	}
+
+	return FSL_RC_OK;
 }
 
 static int
@@ -7258,7 +7304,7 @@ visit_subtree(struct fnc_tree_view_state *s, struct fnc_tree_object *subtree)
 }
 
 static int
-blame_tree_entry(struct fnc_view **new_view, int start_col,
+blame_tree_entry(struct fnc_view **new_view, int start_col, int start_ln,
     struct fnc_tree_entry *te, struct fnc_parent_trees *parents,
     fsl_uuid_str commit_id)
 {
@@ -7272,7 +7318,7 @@ blame_tree_entry(struct fnc_view **new_view, int start_col,
 	if (rc)
 		return rc;
 
-	blame_view = view_open(0, 0, 0, start_col, FNC_VIEW_BLAME);
+	blame_view = view_open(0, 0, start_ln, start_col, FNC_VIEW_BLAME);
 	if (blame_view == NULL) {
 		rc = RC(FSL_RC_ERROR, "%s", "view_open");
 		goto end;
@@ -9569,7 +9615,7 @@ branch_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		if (TAILQ_NEXT(s->last_branch_onscreen, entries) == NULL)
 			/* Reached last entry. */
 			break;
-		branch_scroll_down(s, 1);
+		branch_scroll_down(view, 1);
 		break;
 	case KEY_PPAGE:
 	case CTRL('b'):
@@ -9585,7 +9631,7 @@ branch_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 				s->selected = s->ndisplayed - 1;
 			break;
 		}
-		branch_scroll_down(s, view->nlines - 1);
+		branch_scroll_down(view, view->nlines - 1);
 		break;
 	case CTRL('l'):
 	case 'R':
@@ -9672,9 +9718,10 @@ branch_scroll_up(struct fnc_branch_view_state *s, int maxscroll)
 	}
 }
 
-static void
-branch_scroll_down(struct fnc_branch_view_state *s, int maxscroll)
+static int
+branch_scroll_down(struct fnc_view *view, int maxscroll)
 {
+	struct fnc_branch_view_state	*s = &view->state.branch;
 	struct fnc_branchlist_entry	*next, *last;
 	int				 idx = 0;
 
@@ -9691,6 +9738,8 @@ branch_scroll_down(struct fnc_branch_view_state *s, int maxscroll)
 			next = TAILQ_NEXT(next, entries);
 		}
 	}
+
+	return FSL_RC_OK;
 }
 
 static int
