@@ -55,7 +55,7 @@
 #  define _DEFAULT_SOURCE 1
 #endif
 #if !defined(_XOPEN_SOURCE)
-#  define _XOPEN_SOURCE 500
+#  define _XOPEN_SOURCE 700
 #endif
 #else
 #if !defined(HAVE_LSTAT)
