@@ -629,7 +629,7 @@ struct fnc_tl_thread_cx {
 	int			  rc;
 	bool			  endjmp;
 	bool			  eotl;
-	bool			  needs_reset;
+	bool			  reset;
 	sig_atomic_t		 *quit;
 	pthread_cond_t		  commit_consumer;
 	pthread_cond_t		  commit_producer;
@@ -1819,7 +1819,7 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path,
 	s->thread_cx.search_status = &view->search_status;
 	s->thread_cx.regex = &view->regex;
 	s->thread_cx.path = s->path;
-	s->thread_cx.needs_reset = false;
+	s->thread_cx.reset = false;
 
 	if (s->colour) {
 		STAILQ_INIT(&s->colours);
@@ -2094,16 +2094,15 @@ build_commits(struct fnc_tl_thread_cx *cx)
 {
 	int	rc = 0;
 
-	if (cx->needs_reset) {
+	if (cx->reset) {
 		/*
-		 * XXX If a {tree,branch} view has been opened with the '{t,b}'
-		 * key binding, there may be cached statements that necessitate
-		 * the commit builder statement being reset otherwise one of the
-		 * SQLite3 APIs down the fsl_stmt_step() call stack fails. This
-		 * is irrespective of whether fsl_db_prepare_cached() was used.
+		 * If a child view was opened, there may be cached stmts that
+		 * necessitate resetting the commit builder stmt. Otherwise one
+		 * of the APIs down the fsl_stmt_step() call stack fails;
+		 * irrespective of whether fsl_db_prepare_cached() was used.
 		 */
 		fsl_size_t loaded = cx->commits->ncommits + 1;
-		cx->needs_reset = false;
+		cx->reset = false;
 		rc = fsl_stmt_reset(cx->q);
 		if (rc)
 			return RC(rc, "%s", "fsl_stmt_reset");
@@ -3254,7 +3253,6 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			view_close(branch_view);
 			return rc;
 		}
-		s->thread_cx.needs_reset = true;
 		view->active = false;
 		branch_view->active = true;
 		if (view_is_parent(view)) {
@@ -3342,7 +3340,6 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		    s->selected_commit, s->path);
 		if (rc)
 			break;
-		s->thread_cx.needs_reset = true;
 		view->active = false;
 		tree_view->active = true;
 		if (view_is_parent(view)) {
@@ -7015,7 +7012,6 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 {
 	struct fnc_view			*branch_view, *timeline_view;
 	struct fnc_tree_view_state	*s = &view->state.tree;
-	struct fnc_tl_thread_cx		*tcx = NULL;
 	struct fnc_tree_entry		*te;
 	int				 n, start_col = 0, rc = 0;
 
@@ -7033,9 +7029,6 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			view_close(branch_view);
 			return rc;
 		}
-		tcx = fcli_cx()->clientState.state;
-		if (tcx)
-			tcx->needs_reset = true;
 		view->active = false;
 		branch_view->active = true;
 		if (view_is_parent(view)) {
@@ -7635,8 +7628,18 @@ view_close_child(struct fnc_view *view)
 static void
 view_set_child(struct fnc_view *view, struct fnc_view *child)
 {
+	struct fnc_tl_thread_cx *tcx = NULL;
+
 	view->child = child;
 	child->parent = view;
+
+	/*
+	 * If the timeline is open and has not yet loaded /all/ commits, cached
+	 * stmts require resetting the commit builder stmt before restepping.
+	 */
+	tcx = fcli_cx()->clientState.state;
+	if (tcx && !tcx->eotl)
+		tcx->reset = true;
 }
 
 static int
@@ -9504,7 +9507,6 @@ branch_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 {
 	struct fnc_branch_view_state	*s = &view->state.branch;
 	struct fnc_view			*timeline_view, *tree_view;
-	/* struct fnc_tl_thread_cx		*tcx = NULL; */
 	struct fnc_branchlist_entry	*be;
 	int				 start_col = 0, n, rc = 0;
 
@@ -9552,10 +9554,6 @@ branch_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			FLAG_SET(s->branch_flags, BRANCH_SORT_MTIME);
 		fnc_free_branches(&s->branches);
 		rc = fnc_load_branches(s);
-		/* May need to reset the commit builder query. */
-		/* tcx = fcli_cx()->clientState.state; */
-		/* if (tcx) */
-		/*	tcx->needs_reset = true; */
 		break;
 	case 't':
 		if (!s->selected_branch)
