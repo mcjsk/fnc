@@ -4190,6 +4190,7 @@ create_diff(struct fnc_diff_view_state *s)
 	 * because wiki parent commits are obtained in diff_non_checkin().
 	 */
 	if (s->selected_commit->puuid) {
+		fsl_free(s->id1);
 		s->id1 = fsl_strdup(s->selected_commit->puuid);
 		if (s->id1 == NULL) {
 			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
@@ -4198,6 +4199,7 @@ create_diff(struct fnc_diff_view_state *s)
 	} else
 		s->id1 = NULL;	/* Initial commit, tag, technote, etc. */
 	if (s->selected_commit->uuid) {
+		fsl_free(s->id2);
 		s->id2 = fsl_strdup(s->selected_commit->uuid);
 		if (s->id2 == NULL) {
 			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
