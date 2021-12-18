@@ -4926,11 +4926,10 @@ int fsl_checkin_dequeue(fsl_cx * f, fsl_checkin_queue_opt const * opt){
   return rc;
 }
 
-bool fsl_checkin_is_enqueued(fsl_cx * f, char const * zName,
+bool fsl_checkin_is_enqueued(fsl_cx * const f, char const * zName,
                              bool relativeToCwd){
-  fsl_db * db;
-  if(!f || !zName || !*zName) return 0;
-  else if(!(db = fsl_needs_ckout(f))) return 0;
+  if(!zName || !*zName) return false;
+  else if(!fsl_cx_db_ckout(f)) return false;
   else if(!f->ckin.selectedIds.entryCount){
     /* Behave like fsl_is_enqueued() SQL function. */
     return true;
@@ -4954,7 +4953,6 @@ bool fsl_checkin_is_enqueued(fsl_cx * f, char const * zName,
     return rv;
   }
 }
-
 
 void fsl_checkin_discard(fsl_cx * f){
   if(f){
@@ -5779,7 +5777,7 @@ int fsl_checkin_commit(fsl_cx * f, fsl_checkin_opt const * opt,
   assert(d->f == f);
   rc = fsl_checkin_add_unsent(f, d->rid);
   RC;
-  rc = fsl__ckout_clear_merge_state(f);
+  rc = fsl__ckout_clear_merge_state(f, true);
   RC;
   /*
     todo(?) from fossil(1) follows. Most of this seems to be what the
@@ -6518,14 +6516,23 @@ bool fsl_ckout_has_changes(fsl_cx *f){
     || fsl_db_exists(db,"SELECT 1 FROM vmerge /*%s()*/", __func__);
 }
 
-int fsl__ckout_clear_merge_state( fsl_cx *f ){
-  fsl_db * const d = fsl_needs_ckout(f);
+int fsl__ckout_clear_merge_state( fsl_cx * const f, bool fullWipe ){
   int rc;
-  if(d){
-    rc = fsl_db_exec(d,"DELETE FROM vmerge /*%s()*/", __func__);
-    rc = fsl_cx_uplift_db_error2(f, d, rc);
+  if(fullWipe){
+    rc = fsl_cx_exec(f,"DELETE FROM vmerge /*%s()*/", __func__);
   }else{
-    rc = FSL_RC_NOT_A_CKOUT;
+    rc = fsl_cx_exec_multi(f,
+                     "DELETE FROM vmerge WHERE id IN("
+                     "SELECT vm.id FROM vmerge vm, vfile vf "
+                     "WHERE vm.id=vf.id AND vf.chnged=0"
+                     ");"
+                     "DELETE FROM vmerge WHERE NOT EXISTS("
+                     "SELECT 1 FROM vmerge WHERE id>0"
+                     ") AND NOT EXISTS ("
+                     "SELECT 1 FROM vfile WHERE chnged>1"
+                     ");"
+                     "/*%s()*/", __func__ );
+
   }
   return rc;
 }
@@ -7381,7 +7388,7 @@ int fsl_repo_ckout(fsl_cx * f, fsl_ckup_opt const * cOpt){
   end:
   if(!rc){
     rc = fsl_vfile_unload_except(f, cOpt->checkinRid);
-    if(!rc) rc = fsl__ckout_clear_merge_state(f);
+    if(!rc) rc = fsl__ckout_clear_merge_state(f, true);
   }
   /*
     TODO: if "repo-cksum" config db setting is set, confirm R-card of
@@ -8343,58 +8350,49 @@ int fsl__ckout_symlink_create(fsl_cx * const f, char const *zTgtFile,
    fx_revert_rmdir for an eventual rmdir() attempt on it in
    fsl_revert_rmdir_fini().
 */
-static int fsl_revert_rmdir_queue(fsl_cx * f, fsl_db * db, fsl_stmt * st,
+static int fsl_revert_rmdir_queue(fsl_cx * const f, fsl_db * const db,
+                                  fsl_stmt * const st,
                                   char const * zFilename){
   int rc = 0;
   if( !st->stmt ){
-    rc = fsl_db_exec(db, "CREATE TEMP TABLE IF NOT EXISTS "
+    rc = fsl_cx_exec(f, "CREATE TEMP TABLE IF NOT EXISTS "
                      "fx_revert_rmdir(n TEXT PRIMARY KEY) "
                      "WITHOUT ROWID /* %s() */", __func__);
-    if(rc) goto dberr;
-    rc = fsl_db_prepare(db, st, "INSERT OR IGNORE INTO "
-                        "fx_revert_rmdir(n) "
-                        "VALUES(fsl_dirpart(?,0)) /* %s() */",
-                        __func__);
-    if(rc) goto dberr;
+    if(0==rc) rc = fsl_cx_prepare(f, st, "INSERT OR IGNORE INTO "
+                                  "fx_revert_rmdir(n) "
+                                  "VALUES(fsl_dirpart(?,0)) /* %s() */",
+                                  __func__);
   }
-  rc = fsl_stmt_bind_step(st, "s", zFilename);
-  if(rc) goto dberr;
-  end:
+  if(0==rc){
+    rc = fsl_stmt_bind_step(st, "s", zFilename);
+    if(rc) rc = fsl_cx_uplift_db_error2(f, db, rc);
+  }
   return rc;
-  dberr:
-  rc = fsl_cx_uplift_db_error2(f, db, rc);
-  goto end;
 }
 
 /**
    Attempts to rmdir all dirs queued by fsl_revert_rmdir_queue(). Silently
    ignores rmdir failure but will return non-0 for db errors.
 */
-static int fsl_revert_rmdir_fini(fsl_cx * f, fsl_db * db){
+static int fsl_revert_rmdir_fini(fsl_cx * const f){
   int rc;
   fsl_stmt st = fsl_stmt_empty;
   fsl_buffer * const b = fsl__cx_scratchpad(f);
-  rc = fsl_db_prepare(db, &st,
+  rc = fsl_cx_prepare(f, &st,
                       "SELECT fsl_ckout_dir()||n "
                       "FROM fx_revert_rmdir "
                       "ORDER BY length(n) DESC /* %s() */",
                       __func__);
-  if(rc) goto dberr;
-  while(FSL_RC_STEP_ROW == fsl_stmt_step(&st)){
+  while(0==rc && FSL_RC_STEP_ROW == fsl_stmt_step(&st)){
     fsl_size_t nDir = 0;
     char const * zDir = fsl_stmt_g_text(&st, 0, &nDir);
     fsl_buffer_reuse(b);
     rc = fsl_buffer_append(b, zDir, (fsl_int_t)nDir);
-    if(rc) break;
-    fsl_ckout_rm_empty_dirs(f, b);
+    if(0==rc) fsl_ckout_rm_empty_dirs(f, b);
   }
-  end:
   fsl__cx_scratchpad_yield(f, b);
   fsl_stmt_finalize(&st);
   return rc;
-  dberr:
-  rc = fsl_cx_uplift_db_error2(f, db, rc);
-  goto end;
 }
 
 int fsl_ckout_revert( fsl_cx * const f,
@@ -8437,8 +8435,8 @@ int fsl_ckout_revert( fsl_cx * const f,
       assert(0==*zNorm);
     }
   }
-  rc = fsl_db_transaction_begin(db);
-  if(rc) goto dberr;
+  rc = fsl_cx_transaction_begin(f);
+  if(rc) goto end;
   inTrans = true;
   if(opt->scanForChanges){
     rc = fsl_vfile_changes_scan(f, 0, 0);
@@ -8477,14 +8475,16 @@ int fsl_ckout_revert( fsl_cx * const f,
                            ")", -1);
   }
   assert(!rc);
-  rc = fsl_db_prepare(db, &q, "%b /* %s() */", sql, __func__);
+  rc = fsl_cx_prepare(f, &q, "%b /* %s() */", sql, __func__);
   fsl__cx_scratchpad_yield(f, sql);
   sql = 0;
-  if(rc) goto dberr;
+  if(rc) goto end;
+#if 0
   if((!zNorm || !*zNorm) && !opt->vfileIds){
-    rc = fsl__ckout_clear_merge_state(f);
+    rc = fsl__ckout_clear_merge_state(f, false);
     if(rc) goto end;
   }
+#endif
   while((FSL_RC_STEP_ROW==fsl_stmt_step(&q))){
     fsl_id_t const id = fsl_stmt_g_id(&q, 0);
     fsl_id_t const rid = fsl_stmt_g_id(&q, 1);
@@ -8495,9 +8495,9 @@ int fsl_ckout_revert( fsl_cx * const f,
       zNameOrig ? !!fsl_strcmp(zName, zNameOrig) : false;
     fsl_ckout_revert_e changeType = FSL_REVERT_NONE;
     if(!rid){ // Added but not yet checked in.
-      rc = fsl_db_exec(db, "DELETE FROM vfile WHERE id=%" FSL_ID_T_PFMT,
+      rc = fsl_cx_exec(f, "DELETE FROM vfile WHERE id=%" FSL_ID_T_PFMT,
                        id);
-      if(rc) goto dberr;
+      if(rc) goto end;
       changeType = FSL_REVERT_UNMANAGE;
     }else{
       int wasWritten = 0;
@@ -8526,12 +8526,12 @@ int fsl_ckout_revert( fsl_cx * const f,
            name is left in the filesystem. */
       }
       if(!vfUpdate.stmt){
-        rc = fsl_db_prepare(db, &vfUpdate,
+        rc = fsl_cx_prepare(f, &vfUpdate,
                             "UPDATE vfile SET chnged=0, deleted=0, "
                             "pathname=coalesce(origname,pathname), "
                             "origname=NULL "
                             "WHERE id=?1 /*%s()*/", __func__);
-        if(rc) goto dberr;
+        if(rc) goto end;
       }
       rc = fsl_stmt_bind_step(&vfUpdate, "R", id)
         /* Has to be done before fsl__vfile_to_ckout() because that
@@ -8565,7 +8565,7 @@ int fsl_ckout_revert( fsl_cx * const f,
   fsl_stmt_finalize(&vfUpdate);
   if(qRmdir.stmt){
     fsl_stmt_finalize(&qRmdir);
-    if(!rc) rc = fsl_revert_rmdir_fini(f, db);
+    if(!rc) rc = fsl_revert_rmdir_fini(f);
     fsl_db_exec(db, "DROP TABLE IF EXISTS fx_revert_rmdir /* %s() */",
                 __func__);
   }
@@ -8573,6 +8573,9 @@ int fsl_ckout_revert( fsl_cx * const f,
     fsl_db_exec_multi(db, "DROP TABLE IF EXISTS fx_revert_id "
                       "/* %s() */", __func__)
       /* Ignoring result code */;
+  }
+  if(0==rc){
+    rc = fsl__ckout_clear_merge_state(f, false);
   }
   if(inTrans){
     int const rc2 = fsl_db_transaction_end(db, !!rc);
@@ -9776,7 +9779,7 @@ int fcli_ckout_show_info(bool useUtc){
   f_out("%*s %s\n", lblWidth, "checkout-root:",
         fsl_cx_ckout_dir_name(f, NULL));
 
-  rc = fsl_db_prepare(dbR, &st, "SELECT "
+  rc = fsl_cx_prepare(f, &st, "SELECT "
                       /*0*/"datetime(event.mtime%s) AS timestampString, "
                       /*1*/"coalesce(euser, user) AS user, "
                       /*2*/"(SELECT group_concat(substr(tagname,5), ', ') FROM tag, tagxref "
@@ -9792,12 +9795,11 @@ int fcli_ckout_show_info(bool useUtc){
                       "ORDER BY event.mtime DESC",
                       useUtc ? "" : ", 'localtime'",
                       rid);
-  if(rc) goto dberr;
+  if(rc) goto end;
   if( FSL_RC_STEP_ROW != fsl_stmt_step(&st)){
     /* fcli_err_set(FSL_RC_ERROR, "Event data for checkout not found."); */
     f_out("\nNo 'event' data found. This is only normal for an empty repo.\n");
     goto end;
-
   }
 
   f_out("%*s %s %s %s (RID %"FSL_ID_T_PFMT")\n",
@@ -9810,13 +9812,13 @@ int fcli_ckout_show_info(bool useUtc){
   {
     /* list parent(s) */
     fsl_stmt stP = fsl_stmt_empty;
-    rc = fsl_db_prepare(dbR, &stP, "SELECT "
+    rc = fsl_cx_prepare(f, &stP, "SELECT "
                         "uuid, pid, isprim "
                         "FROM plink JOIN blob ON pid=rid "
                         "WHERE cid=%"FSL_ID_T_PFMT" "
                         "ORDER BY isprim DESC, mtime DESC /*sort*/",
                         rid);
-    if(rc) goto dberr;
+    if(rc) goto end;
     while( FSL_RC_STEP_ROW == fsl_stmt_step(&stP) ){
       char const * zLabel = fsl_stmt_g_int32(&stP,2)
         ? "parent:" : "merged-from:";
@@ -9827,15 +9829,39 @@ int fcli_ckout_show_info(bool useUtc){
     fsl_stmt_finalize(&stP);
   }
   {
+    /* list merge parent(s) */
+    fsl_stmt stP = fsl_stmt_empty;
+    rc = fsl_cx_prepare(f, &stP, "SELECT "
+                        "mhash, id FROm vmerge WHERE id<=0");
+    if(rc) goto end;
+    while( FSL_RC_STEP_ROW == fsl_stmt_step(&stP) ){
+      char const * zClass;
+      int32_t const id = fsl_stmt_g_int32(&stP,1);
+      switch(id){
+        case FSL_MERGE_TYPE_INTEGRATE: zClass = "integrate-merge:"; break;
+        case FSL_MERGE_TYPE_BACKOUT: zClass = "backout-merge:"; break;
+        case FSL_MERGE_TYPE_CHERRYPICK: zClass = "cherrypick-merge:"; break;
+        case FSL_MERGE_TYPE_NORMAL: zClass = "merged-with:"; break;
+        default:
+          fsl__fatal(FSL_RC_RANGE,
+                     "Unexpected value %"PRIi32" in vmerge.id",id);
+          break;
+      }
+      f_out("%*s %s\n", lblWidth, zClass,
+            fsl_stmt_g_text(&stP, 0, NULL));
+    }
+    fsl_stmt_finalize(&stP);
+  }
+  {
     /* list children */
     fsl_stmt stC = fsl_stmt_empty;
-    rc = fsl_db_prepare(dbR, &stC, "SELECT "
+    rc = fsl_cx_prepare(f, &stC, "SELECT "
                         "uuid, cid, isprim "
                         "FROM plink JOIN blob ON cid=rid "
                         "WHERE pid=%"FSL_ID_T_PFMT" "
                         "ORDER BY isprim DESC, mtime DESC /*sort*/",
                         rid);
-    if(rc) goto dberr;
+    if(rc) goto end;
     while( FSL_RC_STEP_ROW == fsl_stmt_step(&stC) ){
       char const * zLabel = fsl_stmt_g_int32(&stC,2)
         ? "child:" : "merged-into:";
@@ -9855,10 +9881,6 @@ int fcli_ckout_show_info(bool useUtc){
   f_out("%*s %s\n", lblWidth, "comment:",
         fsl_stmt_g_text(&st, 3, NULL));
 
-  dberr:
-  if(rc){
-    fsl_cx_uplift_db_error(f, dbR);
-  }
   end:
   fsl_stmt_finalize(&st);
 
@@ -11272,7 +11294,7 @@ int fsl_mtime_of_manifest_file(fsl_cx * const f, fsl_id_t vid, fsl_id_t fid,
 }
 
 int fsl_card_F_content( fsl_cx * f, fsl_card_F const * fc,
-                        fsl_buffer * dest ){
+                        fsl_buffer * const dest ){
   if(!f || !fc || !dest) return FSL_RC_MISUSE;
   else if(!fc->uuid){
     return fsl_cx_err_set(f, FSL_RC_RANGE,
@@ -26833,12 +26855,7 @@ int fsl_diff_v2_raw(fsl_buffer const * pv1,
 }
 
 
-/**
-   Allocator for fsl_diff_builder instances. If extra is >0 then that
-   much extra space is allocated as part of the same block and the
-   pimpl member of the returned object is pointed to that space.
-*/
-static fsl_diff_builder * fsl__diff_builder_alloc(fsl_size_t extra){
+fsl_diff_builder * fsl_diff_builder_alloc(fsl_size_t extra){
   fsl_diff_builder * rc =
     (fsl_diff_builder*)fsl_malloc(sizeof(fsl_diff_builder) + extra);
   if(rc){
@@ -26866,8 +26883,96 @@ static int fdb__outf(fsl_diff_builder * const b,
 }
 
 
+/**
+   Column indexes for DiffCounter::cols.
+*/
+enum DiffCounterCols {
+DICO_NUM1 = 0, DICO_TEXT1,
+DICO_MOD,
+DICO_NUM2, DICO_TEXT2,
+DICO_count
+};
+/**
+   Internal state for the text-mode split diff builder. Used for
+   calculating column widths in the builder's first pass so that
+   the second pass can output everything in a uniform width.
+*/
+struct DiffCounter {
+  /**
+     Largest column width we've yet seen. These are only updated for
+     DICO_TEXT1 and DICO_TEXT2. The others currently have fixed widths.
+
+     FIXME: these are in bytes, not text columns. The current code may
+     truncate multibyte characters.
+  */
+  uint32_t maxWidths[DICO_count];
+  /**
+     Max line numbers seen for the LHS/RHS input files. This is likely
+     much higher than the number of diff lines.
+
+     This can be used, e.g., to size and allocate a curses PAD in the
+     second pass of the start() method.
+  */
+  uint32_t lineCount[2];
+  /**
+     The actual number of lines needed for rendering the file.
+  */
+  uint32_t displayLines;
+};
+typedef struct DiffCounter DiffCounter;
+static const DiffCounter DiffCounter_empty = {{1,10,3,1,10},{0,0},0};
+#define DICOSTATE(VNAME) DiffCounter * const VNAME = (DiffCounter *)b->pimpl
+
+static int maxColWidth(fsl_diff_builder const * const b,
+                       DiffCounter const * const sst,
+                       int mwIndex){
+  static const short minColWidth =
+    10/*b->opt.columnWidth values smaller than this are treated as
+        this value*/;
+  switch(mwIndex){
+    case DICO_NUM1:
+    case DICO_NUM2:
+    case DICO_MOD: return sst->maxWidths[mwIndex];
+    case DICO_TEXT1: case DICO_TEXT2: break;
+    default:
+      assert(!"internal API misuse: invalid column index.");
+      break;
+  }
+  int const y =
+    (b->opt->columnWidth>0
+     && b->opt->columnWidth<=sst->maxWidths[mwIndex])
+    ? (int)b->opt->columnWidth
+    : (int)sst->maxWidths[mwIndex];
+  return minColWidth > y ? minColWidth : y;
+}
+
+static void fdb__dico_update_maxlen(DiffCounter * const sst,
+                                    int col,
+                                    char const * const z,
+                                    uint32_t n){
+  if(sst->maxWidths[col]<n){
+#if 0
+    sst->maxWidths[col] = n;
+#else
+    n = (uint32_t)fsl_strlen_utf8(z, (fsl_int_t)n);
+    if(sst->maxWidths[col]<n) sst->maxWidths[col] = n;
+#endif
+  }
+}
+
 static int fdb__debug_start(fsl_diff_builder * const b){
-  int rc = fdb__outf(b, "DEBUG builder starting up.\n");
+  int rc = fdb__outf(b, "DEBUG builder starting pass #%d.\n",
+                     b->passNumber);
+  if(1==b->passNumber){
+    DICOSTATE(sst);
+    *sst = DiffCounter_empty;
+    if(b->opt->nameLHS) ++sst->displayLines;
+    if(b->opt->nameRHS) ++sst->displayLines;
+    if(b->opt->hashLHS) ++sst->displayLines;
+    if(b->opt->hashRHS) ++sst->displayLines;
+    ++b->fileCount;
+    return rc;
+  }
   if(0==rc && b->opt->nameLHS){
     rc = fdb__outf(b,"LHS: %s\n", b->opt->nameLHS);
   }
@@ -26888,66 +26993,122 @@ static int fdb__debug_chunkHeader(fsl_diff_builder* const b,
                                   uint32_t lnnoLHS, uint32_t linesLHS,
                                   uint32_t lnnoRHS, uint32_t linesRHS ){
 #if 1
+  if(1==b->passNumber){
+    DICOSTATE(sst);
+    ++sst->displayLines;
+    return 0;
+  }
   return fdb__outf(b, "@@ -%" PRIu32 ",%" PRIu32
-                   " +%" PRIu32 ",%" PRIu32 " @@\n",
-                   lnnoLHS, linesLHS, lnnoRHS, linesRHS);
+                " +%" PRIu32 ",%" PRIu32 " @@\n",
+                lnnoLHS, linesLHS, lnnoRHS, linesRHS);
 #else
   return 0;
 #endif
 }
 
-static int fdb__debug_skip(fsl_diff_builder * const p, uint32_t n){
-  const int rc = fdb__outf(p, "SKIP %u (%u..%u left and %u..%u right)\n",
-                           n, p->lnLHS+1, p->lnLHS+n, p->lnRHS+1, p->lnRHS+n);
-  p->lnLHS += n;
-  p->lnRHS += n;
+static int fdb__debug_skip(fsl_diff_builder * const b, uint32_t n){
+  if(1==b->passNumber){
+    DICOSTATE(sst);
+    b->lnLHS += n;
+    b->lnRHS += n;
+    ++sst->displayLines;
+    return 0;
+  }
+  const int rc = fdb__outf(b, "SKIP %u (%u..%u left and %u..%u right)\n",
+                           n, b->lnLHS+1, b->lnLHS+n, b->lnRHS+1, b->lnRHS+n);
+  b->lnLHS += n;
+  b->lnRHS += n;
   return rc;
 }
-static int fdb__debug_common(fsl_diff_builder * const p, fsl_dline const * pLine){
-  ++p->lnLHS;
-  ++p->lnRHS;
-  return fdb__outf(p, "COMMON  %8u %8u %.*s\n",
-                   p->lnLHS, p->lnRHS, (int)pLine->n, pLine->z);
+static int fdb__debug_common(fsl_diff_builder * const b, fsl_dline const * pLine){
+  DICOSTATE(sst);
+  ++b->lnLHS;
+  ++b->lnRHS;
+  if(1==b->passNumber){
+    ++sst->displayLines;
+    fdb__dico_update_maxlen(sst, DICO_TEXT1, pLine->z, pLine->n);
+    fdb__dico_update_maxlen(sst, DICO_TEXT2, pLine->z, pLine->n);
+    return 0;
+  }
+  return fdb__outf(b, "COMMON  %8u %8u %.*s\n",
+                   b->lnLHS, b->lnRHS, (int)pLine->n, pLine->z);
 }
-static int fdb__debug_insertion(fsl_diff_builder * const p, fsl_dline const * pLine){
-  p->lnRHS++;
-  return fdb__outf(p, "INSERT           %8u %.*s\n",
-                   p->lnRHS, (int)pLine->n, pLine->z);
+static int fdb__debug_insertion(fsl_diff_builder * const b, fsl_dline const * pLine){
+  DICOSTATE(sst);
+  ++b->lnRHS;
+  if(1==b->passNumber){
+    ++sst->displayLines;
+    fdb__dico_update_maxlen(sst, DICO_TEXT1, pLine->z, pLine->n);
+    return 0;
+  }
+  return fdb__outf(b, "INSERT           %8u %.*s\n",
+                   b->lnRHS, (int)pLine->n, pLine->z);
 }
-static int fdb__debug_deletion(fsl_diff_builder * const p, fsl_dline const * pLine){
-  p->lnLHS++;
-  return fdb__outf(p, "DELETE  %8u          %.*s\n",
-                   p->lnLHS, (int)pLine->n, pLine->z);
+static int fdb__debug_deletion(fsl_diff_builder * const b, fsl_dline const * pLine){
+  DICOSTATE(sst);
+  ++b->lnLHS;
+  if(1==b->passNumber){
+    ++sst->displayLines;
+    fdb__dico_update_maxlen(sst, DICO_TEXT2, pLine->z, pLine->n);
+    return 0;
+  }
+  return fdb__outf(b, "DELETE  %8u          %.*s\n",
+                   b->lnLHS, (int)pLine->n, pLine->z);
 }
-static int fdb__debug_replacement(fsl_diff_builder * const p,
-                              fsl_dline const * lineLhs,
-                              fsl_dline const * lineRhs) {
-  int rc;
-  p->lnLHS++;
-  p->lnRHS++;
-  rc = fdb__outf(p, "REPLACE %8u          %.*s\n",
-      p->lnLHS, (int)lineLhs->n, lineLhs->z);
+static int fdb__debug_replacement(fsl_diff_builder * const b,
+                                  fsl_dline const * lineLhs,
+                                  fsl_dline const * lineRhs) {
+#if 0
+  int rc = b->deletion(b, lineLhs);
+  if(0==rc) rc = b->insertion(b, lineRhs);
+  return rc;
+#else    
+  DICOSTATE(sst);
+  ++b->lnLHS;
+  ++b->lnRHS;
+  if(1==b->passNumber){
+    ++sst->displayLines;
+    fdb__dico_update_maxlen(sst, DICO_TEXT1, lineLhs->z, lineLhs->n);
+    fdb__dico_update_maxlen(sst, DICO_TEXT2, lineRhs->z, lineRhs->n);
+    return 0;
+  }
+  int rc = fdb__outf(b, "REPLACE %8u          %.*s\n",
+                     b->lnLHS, (int)lineLhs->n, lineLhs->z);
   if(!rc){
-    rc = fdb__outf(p, "            %8u %.*s\n",
-                   p->lnRHS, (int)lineRhs->n, lineRhs->z);
+    rc = fdb__outf(b, "            %8u %.*s\n",
+                   b->lnRHS, (int)lineRhs->n, lineRhs->z);
   }
   return rc;
+#endif
 }
                  
 static int fdb__debug_edit(fsl_diff_builder * const b,
-                           fsl_dline const * pX,
-                           fsl_dline const * pY){
+                           fsl_dline const * lineLHS,
+                           fsl_dline const * lineRHS){
+#if 0
+  int rc = b->deletion(b, lineLHS);
+  if(0==rc) rc = b->insertion(b, lineRHS);
+  return rc;
+#else    
   int rc = 0;
+  DICOSTATE(sst);
+  ++b->lnLHS;
+  ++b->lnRHS;
+  if(1==b->passNumber){
+    sst->displayLines += 4
+      /* this is actually 3 or 4, but we don't know that from here */;
+    fdb__dico_update_maxlen(sst, DICO_TEXT1, lineLHS->z, lineLHS->n);
+    fdb__dico_update_maxlen(sst, DICO_TEXT2, lineRHS->z, lineRHS->n);
+    return 0;
+  }
   int i, j;
   int x;
   fsl_dline_change chng = fsl_dline_change_empty;
 #define RC if(rc) goto end
-  b->lnLHS++;
-  b->lnRHS++;
   rc = fdb__outf(b, "EDIT    %8u          %.*s\n",
-                 b->lnLHS, (int)pX->n, pX->z);
+                 b->lnLHS, (int)lineLHS->n, lineLHS->z);
   RC;
-  fsl_dline_change_spans(pX, pY, &chng);
+  fsl_dline_change_spans(lineLHS, lineRHS, &chng);
   for(i=x=0; i<chng.n; i++){
     int ofst = chng.a[i].iStart1;
     int len = chng.a[i].iLen1;
@@ -26958,14 +27119,14 @@ static int fdb__debug_edit(fsl_diff_builder * const b,
         RC;
       }
       while( ofst > x ){
-        if( (pX->z[x]&0xc0)!=0x80 ){
+        if( (lineLHS->z[x]&0xc0)!=0x80 ){
           rc = fdb__out(b, " ", 1);
           RC;
         }
         x++;
       }
       for(j=0; j<len; j++, x++){
-        if( (pX->z[x]&0xc0)!=0x80 ){
+        if( (lineLHS->z[x]&0xc0)!=0x80 ){
           rc = fdb__out(b, &c, 1);
           RC;
         }
@@ -26977,7 +27138,7 @@ static int fdb__debug_edit(fsl_diff_builder * const b,
     RC;
   }
   rc = fdb__outf(b, "                 %8u %.*s\n",
-                 b->lnRHS, (int)pY->n, pY->z);
+                 b->lnRHS, (int)lineRHS->n, lineRHS->z);
   RC;
   for(i=x=0; i<chng.n; i++){
     int ofst = chng.a[i].iStart2;
@@ -26989,14 +27150,14 @@ static int fdb__debug_edit(fsl_diff_builder * const b,
         RC;
       }
       while( ofst > x ){
-        if( (pY->z[x]&0xc0)!=0x80 ){
+        if( (lineRHS->z[x]&0xc0)!=0x80 ){
           rc = fdb__out(b, " ", 1);
           RC;
         }
         x++;
       }
       for(j=0; j<len; j++, x++){
-        if( (pY->z[x]&0xc0)!=0x80 ){
+        if( (lineRHS->z[x]&0xc0)!=0x80 ){
           rc = fdb__out(b, &c, 1);
           RC;
         }
@@ -27009,19 +27170,37 @@ static int fdb__debug_edit(fsl_diff_builder * const b,
   end:
 #undef RC
   return rc;
+#endif
 }
 
 static int fdb__debug_finish(fsl_diff_builder * const b){
-  return fdb__outf(b, "END with %u lines left and %u lines right\n",
-                   b->lnLHS, b->lnRHS);
+  DICOSTATE(sst);
+  if(1==b->passNumber){
+    sst->lineCount[0] = b->lnLHS;
+    sst->lineCount[1] = b->lnRHS;
+    return 0;
+  }
+  int rc = fdb__outf(b, "END with %u LHS file lines "
+                     "and %u RHS lines (max. %u display lines)\n",
+                     b->lnLHS, b->lnRHS, sst->displayLines);
+  if(0==rc){
+    rc = fdb__outf(b,"Col widths: num left=%u, col left=%u, "
+                   "modifier=%u, num right=%u, col right=%u\n",
+                   sst->maxWidths[0], sst->maxWidths[1],
+                   sst->maxWidths[2], sst->maxWidths[3],
+                   sst->maxWidths[4]);
+  }
+  return rc;
 }
 
-static void fdb__generic_finalize(fsl_diff_builder * const b){
+void fsl_diff_builder_finalizer(fsl_diff_builder * const b){
+  *b = fsl_diff_builder_empty;
   fsl_free(b);
 }
 
 static fsl_diff_builder * fsl__diff_builder_debug(void){
-  fsl_diff_builder * rc = fsl__diff_builder_alloc(0);
+  fsl_diff_builder * rc =
+    fsl_diff_builder_alloc((fsl_size_t)sizeof(DiffCounter));
   if(rc){
     rc->chunkHeader = fdb__debug_chunkHeader;
     rc->start = fdb__debug_start;
@@ -27032,8 +27211,11 @@ static fsl_diff_builder * fsl__diff_builder_debug(void){
     rc->replacement = fdb__debug_replacement;
     rc->edit = fdb__debug_edit;
     rc->finish = fdb__debug_finish;
-    rc->finalize = fdb__generic_finalize;
-    assert(!rc->pimpl);
+    rc->finalize = fsl_diff_builder_finalizer;
+    rc->twoPass = true;
+    assert(0!=rc->pimpl);
+    DiffCounter * const sst = (DiffCounter*)rc->pimpl;
+    *sst = DiffCounter_empty;
     assert(0==rc->implFlags);
     assert(0==rc->lnLHS);
     assert(0==rc->lnRHS);
@@ -27126,27 +27308,27 @@ static int fdb__json1_replacement(fsl_diff_builder * const b,
 }
                  
 static int fdb__json1_edit(fsl_diff_builder * const b,
-                           fsl_dline const * pX,
-                           fsl_dline const * pY){
+                           fsl_dline const * lineLHS,
+                           fsl_dline const * lineRHS){
   int rc = 0;
   int i,x;
   fsl_dline_change chng = fsl_dline_change_empty;
 
 #define RC if(rc) goto end
   rc = fdb__out(b, "5,[", 3); RC;
-  fsl_dline_change_spans(pX, pY, &chng);
+  fsl_dline_change_spans(lineLHS, lineRHS, &chng);
   for(i=x=0; i<(int)chng.n; i++){
-    rc = fdb__outj(b, pX->z + x, (int)chng.a[i].iStart1 - x); RC;
+    rc = fdb__outj(b, lineLHS->z + x, (int)chng.a[i].iStart1 - x); RC;
     x = chng.a[i].iStart1;
     rc = fdb__out(b, ",", 1); RC;
-    rc = fdb__outj(b, pX->z + x, (int)chng.a[i].iLen1); RC;
+    rc = fdb__outj(b, lineLHS->z + x, (int)chng.a[i].iLen1); RC;
     x += chng.a[i].iLen1;
     rc = fdb__out(b, ",", 1); RC;
-    rc = fdb__outj(b, pY->z + chng.a[i].iStart2,
+    rc = fdb__outj(b, lineRHS->z + chng.a[i].iStart2,
                    (int)chng.a[i].iLen2); RC;
   }
   rc = fdb__out(b, ",", 1); RC;
-  rc = fdb__outj(b, pX->z + x, (int)(pX->n - x)); RC;
+  rc = fdb__outj(b, lineLHS->z + x, (int)(lineLHS->n - x)); RC;
   rc = fdb__out(b, "],\n",3); RC;
   end:
   return rc;
@@ -27158,7 +27340,7 @@ static int fdb__json1_finish(fsl_diff_builder * const b){
 }
 
 static fsl_diff_builder * fsl__diff_builder_json1(void){
-  fsl_diff_builder * rc = fsl__diff_builder_alloc(0);
+  fsl_diff_builder * rc = fsl_diff_builder_alloc(0);
   if(rc){
     rc->chunkHeader = NULL;
     rc->start = fdb__json1_start;
@@ -27169,7 +27351,7 @@ static fsl_diff_builder * fsl__diff_builder_json1(void){
     rc->replacement = fdb__json1_replacement;
     rc->edit = fdb__json1_edit;
     rc->finish = fdb__json1_finish;
-    rc->finalize = fdb__generic_finalize;
+    rc->finalize = fsl_diff_builder_finalizer;
     assert(!rc->pimpl);
     assert(0==rc->implFlags);
     assert(0==rc->lnLHS);
@@ -27281,7 +27463,7 @@ static void fdb__utxt_finalize(fsl_diff_builder * const b){
 }
 
 static fsl_diff_builder * fsl__diff_builder_utxt(void){
-  fsl_diff_builder * rc = fsl__diff_builder_alloc(0);
+  fsl_diff_builder * rc = fsl_diff_builder_alloc(0);
   if(!rc) return NULL;
   rc->chunkHeader = fdb__utxt_chunkHeader;
   rc->start = fdb__utxt_start;
@@ -27391,28 +27573,28 @@ static int fdb__tcl_replacement(fsl_diff_builder * const b,
 }
                  
 static int fdb__tcl_edit(fsl_diff_builder * const b,
-                         fsl_dline const * pX,
-                         fsl_dline const * pY){
+                         fsl_dline const * lineLHS,
+                         fsl_dline const * lineRHS){
   int rc = 0;
   int i, x;
   fsl_dline_change chng = fsl_dline_change_empty;
 #define RC if(rc) goto end
   BR_OPEN;
   rc = fdb__out(b, "EDIT", 4); RC;
-  fsl_dline_change_spans(pX, pY, &chng);
+  fsl_dline_change_spans(lineLHS, lineRHS, &chng);
   for(i=x=0; i<chng.n; i++){
     rc = fdb__out(b, " ", 1); RC;
-    rc = fdb__outtcl(b, pX->z + x, chng.a[i].iStart1 - x, ' '); RC;
+    rc = fdb__outtcl(b, lineLHS->z + x, chng.a[i].iStart1 - x, ' '); RC;
     x = chng.a[i].iStart1;
-    rc = fdb__outtcl(b, pX->z + x, chng.a[i].iLen1, ' '); RC;
+    rc = fdb__outtcl(b, lineLHS->z + x, chng.a[i].iLen1, ' '); RC;
     x += chng.a[i].iLen1;
-    rc = fdb__outtcl(b, pY->z + chng.a[i].iStart2,
+    rc = fdb__outtcl(b, lineRHS->z + chng.a[i].iStart2,
                      chng.a[i].iLen2, 0); RC;
   }
   assert(0==rc);
-  if( x < pX->n ){
+  if( x < lineLHS->n ){
     rc = fdb__out(b, " ", 1); RC;
-    rc = fdb__outtcl(b, pX->z + x, pX->n - x, 0); RC;
+    rc = fdb__outtcl(b, lineLHS->z + x, lineLHS->n - x, 0); RC;
   }
   BR_CLOSE; RC;
   rc = fdb__out(b, "\n", 1);
@@ -27440,7 +27622,7 @@ static void fdb__tcl_finalize(fsl_diff_builder * const b){
 
 static fsl_diff_builder * fsl__diff_builder_tcl(void){
   fsl_diff_builder * rc =
-    fsl__diff_builder_alloc((fsl_size_t)sizeof(DiBuTcl));
+    fsl_diff_builder_alloc((fsl_size_t)sizeof(DiBuTcl));
   if(rc){
     rc->chunkHeader = NULL;
     rc->start = fdb__tcl_start;
@@ -27463,78 +27645,16 @@ static fsl_diff_builder * fsl__diff_builder_tcl(void){
   return rc;
 }
 
-/**
-   Column indexes for SplitText::cols.
-*/
-enum SplitTextCols {
-STC_NUM1 = 0, STC_TEXT1,
-STC_MOD,
-STC_NUM2, STC_TEXT2,
-STC_count
-};
-/**
-   Internal state for the text-mode split diff builder.
-
-   This builder buffers its contents in 5 buffers: 2 each for the
-   LHS/RHS line numbers and content and one for the "change marker" (a
-   center column). Each of the STC_NUM1, STC_NUM2, STC_TEXT1, and
-   STC_TEXT2 columns is stored as one NUL-delimited string in each of
-   the corresponding column buffers. STC_MOD is a simple byte array,
-   with each byte corresponding two one line of the diff and marking
-   what type of linle it is (common, insertion, deletion, or
-   edit/replacement).
-
-   The STC_SKIP column is managed differently. It is zero-filled,
-   with a non-0 value at each line of the diff which represents a
-   skipped gap. Potential TODO: combine this and STC_MOD.
-*/
-struct SplitTxt {
-  /**
-     Largest column width we've yet seen. These are only updated for
-     STC_TEXT1 and STC_TEXT2. The others currently have fixed widths.
-
-     FIXME: these are in bytes, not text columns. The current code may
-     truncate multibyte characters.
-  */
-  uint32_t maxWidths[STC_count];
-};
-typedef struct SplitTxt SplitTxt;
-static const SplitTxt SplitTxt_empty = {{1,10,3,1,10}};
-#define SPLITSTATE(VNAME) SplitTxt * const VNAME = (SplitTxt *)b->pimpl
-
-static int maxColWidth(fsl_diff_builder const * const b,
-                       SplitTxt const * const sst,
-                       int mwIndex){
-  static const short minColWidth =
-    10/*b->opt.columnWidth values smaller than this are treated as
-        this value*/;
-  switch(mwIndex){
-    case STC_NUM1:
-    case STC_NUM2:
-    case STC_MOD: return sst->maxWidths[mwIndex];
-    case STC_TEXT1: case STC_TEXT2: break;
-    default:
-      assert(!"internal API misuse: invalid column index.");
-      break;
-  }
-  int const y =
-    (b->opt->columnWidth>0
-     && b->opt->columnWidth<=sst->maxWidths[mwIndex])
-    ? (int)b->opt->columnWidth
-    : (int)sst->maxWidths[mwIndex];
-  return minColWidth > y ? minColWidth : y;
-}
-
 static int fdb__splittxt_mod(fsl_diff_builder * const b, char ch){
   assert(2==b->passNumber);
   return fdb__outf(b, " %c ", ch);
 }
 
 static int fdb__splittxt_lineno(fsl_diff_builder * const b,
-                                SplitTxt const * const sst,
+                                DiffCounter const * const sst,
                                 bool isLeft, uint32_t n){
   assert(2==b->passNumber);
-  int const col = isLeft ? STC_NUM1 : STC_NUM2;
+  int const col = isLeft ? DICO_NUM1 : DICO_NUM2;
   return n
     ? fdb__outf(b, "%*" PRIu32 " ", sst->maxWidths[col], n)
     : fdb__outf(b, "%.*c ", sst->maxWidths[col], ' ');
@@ -27543,8 +27663,8 @@ static int fdb__splittxt_lineno(fsl_diff_builder * const b,
 static int fdb__splittxt_start(fsl_diff_builder * const b){
   int rc = 0;
   if(1==b->passNumber){
-    SPLITSTATE(sst);
-    *sst = SplitTxt_empty;
+    DICOSTATE(sst);
+    *sst = DiffCounter_empty;
     ++b->fileCount;
     return rc;
   }
@@ -27571,13 +27691,13 @@ static int fdb__splittxt_skip(fsl_diff_builder * const b, uint32_t n){
   b->lnLHS += n;
   b->lnRHS += n;
   if(1==b->passNumber) return 0;
-  SPLITSTATE(sst);
-  int const maxWidth1 = maxColWidth(b, sst, STC_TEXT1);
-  int const maxWidth2 = maxColWidth(b, sst, STC_TEXT2);
+  DICOSTATE(sst);
+  int const maxWidth1 = maxColWidth(b, sst, DICO_TEXT1);
+  int const maxWidth2 = maxColWidth(b, sst, DICO_TEXT2);
   return fdb__outf(b, "%.*c %.*c   %.*c %.*c\n",
-                 sst->maxWidths[STC_NUM1], '~',
+                 sst->maxWidths[DICO_NUM1], '~',
                  maxWidth1, '~',
-                 sst->maxWidths[STC_NUM2], '~',
+                 sst->maxWidths[DICO_NUM2], '~',
                  maxWidth2, '~');
 }
 
@@ -27597,13 +27717,13 @@ static int fdb__splittxt_color(fsl_diff_builder * const b,
 }
 
 static int fdb__splittxt_side(fsl_diff_builder * const b,
-                              SplitTxt * const sst,
+                              DiffCounter * const sst,
                               bool isLeft,
                               fsl_dline const * const pLine){
   int rc = fdb__splittxt_lineno(b, sst, isLeft,
                                 pLine ? (isLeft ? b->lnLHS : b->lnRHS) : 0U);
   if(0==rc){
-    uint32_t const w = maxColWidth(b, sst, isLeft ? STC_TEXT1 : STC_TEXT2);
+    uint32_t const w = maxColWidth(b, sst, isLeft ? DICO_TEXT1 : DICO_TEXT2);
     if(pLine){
       fsl_size_t const nU =
         /* Measure column width in UTF8 characters, not bytes! */
@@ -27620,29 +27740,15 @@ static int fdb__splittxt_side(fsl_diff_builder * const b,
   return rc;
 }
 
-static void fdb__splittext_update_maxlen(SplitTxt * const sst,
-                                         int col,
-                                         char const * const z,
-                                         uint32_t n){
-  if(sst->maxWidths[col]<n){
-#if 0
-    sst->maxWidths[col] = n;
-#else
-    n = (uint32_t)fsl_strlen_utf8(z, (fsl_int_t)n);
-    if(sst->maxWidths[col]<n) sst->maxWidths[col] = n;
-#endif
-  }
-}
-
 static int fdb__splittxt_common(fsl_diff_builder * const b,
                                 fsl_dline const * const pLine){
   int rc = 0;
-  SPLITSTATE(sst);
+  DICOSTATE(sst);
   ++b->lnLHS;
   ++b->lnRHS;
   if(1==b->passNumber){
-    fdb__splittext_update_maxlen(sst, STC_TEXT1, pLine->z, pLine->n);
-    fdb__splittext_update_maxlen(sst, STC_TEXT2, pLine->z, pLine->n);
+    fdb__dico_update_maxlen(sst, DICO_TEXT1, pLine->z, pLine->n);
+    fdb__dico_update_maxlen(sst, DICO_TEXT2, pLine->z, pLine->n);
     return 0;
   }
   rc = fdb__splittxt_side(b, sst, true, pLine);
@@ -27654,10 +27760,10 @@ static int fdb__splittxt_common(fsl_diff_builder * const b,
 static int fdb__splittxt_insertion(fsl_diff_builder * const b,
                                    fsl_dline const * const pLine){
   int rc = 0;
-  SPLITSTATE(sst);
+  DICOSTATE(sst);
   ++b->lnRHS;
   if(1==b->passNumber){
-    fdb__splittext_update_maxlen(sst, STC_TEXT1, pLine->z, pLine->n);
+    fdb__dico_update_maxlen(sst, DICO_TEXT1, pLine->z, pLine->n);
     return rc;
   }
   rc = fdb__splittxt_color(b, 'i');
@@ -27671,10 +27777,10 @@ static int fdb__splittxt_insertion(fsl_diff_builder * const b,
 static int fdb__splittxt_deletion(fsl_diff_builder * const b,
                                   fsl_dline const * const pLine){
   int rc = 0;
-  SPLITSTATE(sst);
+  DICOSTATE(sst);
   ++b->lnLHS;
   if(1==b->passNumber){
-    fdb__splittext_update_maxlen(sst, STC_TEXT2, pLine->z, pLine->n);
+    fdb__dico_update_maxlen(sst, DICO_TEXT2, pLine->z, pLine->n);
     return rc;
   }
   rc = fdb__splittxt_color(b, 'd');
@@ -27694,12 +27800,12 @@ static int fdb__splittxt_replacement(fsl_diff_builder * const b,
   return rc;
 #else    
   int rc = 0;
-  SPLITSTATE(sst);
+  DICOSTATE(sst);
   ++b->lnLHS;
   ++b->lnRHS;
   if(1==b->passNumber){
-    fdb__splittext_update_maxlen(sst, STC_TEXT1, lineLhs->z, lineLhs->n);
-    fdb__splittext_update_maxlen(sst, STC_TEXT2, lineRhs->z, lineRhs->n);
+    fdb__dico_update_maxlen(sst, DICO_TEXT1, lineLhs->z, lineLhs->n);
+    fdb__dico_update_maxlen(sst, DICO_TEXT2, lineRhs->z, lineRhs->n);
     return 0;
   }
   rc = fdb__splittxt_color(b, 'e');
@@ -27714,13 +27820,13 @@ static int fdb__splittxt_replacement(fsl_diff_builder * const b,
 static int fdb__splittxt_finish(fsl_diff_builder * const b){
   int rc = 0;
   if(1==b->passNumber){
-    SPLITSTATE(sst);
+    DICOSTATE(sst);
     uint32_t ln = b->lnLHS;
     /* Calculate width of line number columns. */
-    sst->maxWidths[STC_NUM1] = sst->maxWidths[STC_NUM2] = 1;
-    for(; ln>=10; ln/=10) ++sst->maxWidths[STC_NUM1];
+    sst->maxWidths[DICO_NUM1] = sst->maxWidths[DICO_NUM2] = 1;
+    for(; ln>=10; ln/=10) ++sst->maxWidths[DICO_NUM1];
     ln = b->lnRHS;
-    for(; ln>=10; ln/=10) ++sst->maxWidths[STC_NUM2];
+    for(; ln>=10; ln/=10) ++sst->maxWidths[DICO_NUM2];
   }
   return rc;
 }
@@ -27732,7 +27838,7 @@ static void fdb__splittxt_finalize(fsl_diff_builder * const b){
 
 static fsl_diff_builder * fsl__diff_builder_splittxt(void){
   fsl_diff_builder * rc =
-    fsl__diff_builder_alloc((fsl_size_t)sizeof(SplitTxt));
+    fsl_diff_builder_alloc((fsl_size_t)sizeof(DiffCounter));
   if(rc){
     rc->twoPass = true;
     rc->chunkHeader = NULL;
@@ -27746,8 +27852,8 @@ static fsl_diff_builder * fsl__diff_builder_splittxt(void){
     rc->finish = fdb__splittxt_finish;
     rc->finalize = fdb__splittxt_finalize;
     assert(0!=rc->pimpl);
-    SplitTxt * const sst = (SplitTxt*)rc->pimpl;
-    *sst = SplitTxt_empty;
+    DiffCounter * const sst = (DiffCounter*)rc->pimpl;
+    *sst = DiffCounter_empty;
   }
   return rc;
 }
@@ -27789,7 +27895,7 @@ int fsl_diff_builder_factory( fsl_diff_builder_e type,
 #undef MARKER
 #undef DTCL_BUFFER
 #undef blob_to_utf8_no_bom
-#undef SPLITSTATE
+#undef DICOSTATE
 /* end of file diff2.c */
 /* start of file encode.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
@@ -30563,6 +30669,11 @@ static const unsigned char lb_tab[] = {
 #undef US4C
 #undef US0A
 
+bool fsl_looks_like_binary(fsl_buffer const * const b){
+  return (fsl_looks_like_utf8(b, FSL_LOOKSLIKE_BINARY) & FSL_LOOKSLIKE_BINARY)
+    != FSL_LOOKSLIKE_NONE;
+}
+
 int fsl_looks_like_utf8(fsl_buffer const * const b, int stopFlags){
   fsl_size_t n = 0;
   const char *z = fsl_buffer_cstr2(b, &n);
@@ -31096,6 +31207,1279 @@ int fsl_md5_update_filename(fsl_md5_cx *cx, char const * fname){
 #undef MD5STEP
 #undef byteReverse
 /* end of file md5.c */
+/* start of file merge.c */
+/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
+/* vim: set ts=2 et sw=2 tw=80: */
+/*
+  Copyright 2013-2021 The Libfossil Authors, see LICENSES/BSD-2-Clause.txt
+
+  SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+  SPDX-FileCopyrightText: 2021 The Libfossil Authors
+  SPDX-ArtifactOfProjectName: Libfossil
+  SPDX-FileType: Code
+
+  Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
+*/
+#include <assert.h>
+#include <memory.h>
+#include <stdlib.h>
+#include <string.h> /* memmove()/strlen() */
+
+#define MARKER(pfexp)                                               \
+  do{ printf("MARKER: %s:%d:%s():\t",__FILE__,__LINE__,__func__);   \
+    printf pfexp;                                                   \
+  } while(0)
+
+#define FSL__TABLE_PIVOT "aqueue"
+
+/**
+   Sets the primary version of a merge.  The primary version is
+   one of the two files that have a common ancestor.  The other file
+   is the secondary.  There can be multiple secondaries but only a
+   single primary.  The primary must be set first.
+
+   In the merge algorithm, the file being merged in is the primary.
+   The current check-out or other files that have been merged into
+   the current checkout are the secondaries.
+
+   The act of setting the primary resets the pivot-finding algorithm.
+
+   Returns 0 on success, non-0 on serious error.
+
+   This works using a TEMP db, so does not strictly require
+   a repo or checkout.
+
+   @see fsl__pivot_set_secondary()
+   @see fsl__pivot_find()
+*/
+static int fsl__pivot_set_primary(fsl_cx * const f, fsl_id_t rid){
+  /* Set up table used to do the search */
+  int rc = fsl_cx_exec_multi(f,
+    "CREATE TEMP TABLE IF NOT EXISTS " FSL__TABLE_PIVOT "("
+    "  rid INTEGER,"              /* The record id for this version */
+    "  mtime REAL,"               /* Time when this version was created */
+    "  pending BOOLEAN,"          /* True if we have not check this one yet */
+    "  src BOOLEAN,"               /* 1 for primary.  0 for others */
+    "  PRIMARY KEY(rid,src)"
+    ") WITHOUT ROWID;"
+    "DELETE FROM " FSL__TABLE_PIVOT ";"
+    "CREATE INDEX IF NOT EXISTS " FSL__TABLE_PIVOT "_idx1 ON " FSL__TABLE_PIVOT "(pending, mtime);"
+  );
+  if(0==rc){
+    /* Insert the primary record */
+    rc = fsl_cx_exec(f,
+      "INSERT INTO " FSL__TABLE_PIVOT "(rid, mtime, pending, src)"
+      "  SELECT %" FSL_ID_T_PFMT ", mtime, 1, 1 "
+      "  FROM event WHERE objid=%" FSL_ID_T_PFMT
+      " AND type='ci' LIMIT 1",
+      rid, rid );
+  }
+  return rc;  
+}
+
+/**
+   Set a secondary file of a merge. The primary file must be set
+   first. There must be at least one secondary but there can be more
+   than one if desired.
+
+   Returns 0 on success, non-0 on db error.
+
+   @see fsl__pivot_set_primary()
+   @see fsl__pivot_find()
+*/
+static int fsl__pivot_set_secondary(fsl_cx * const f, fsl_id_t rid){
+  return fsl_cx_exec(f,
+    "INSERT OR IGNORE INTO " FSL__TABLE_PIVOT "(rid, mtime, pending, src)"
+    "  SELECT %" FSL_ID_T_PFMT ", mtime, 1, 0 "
+    "FROM event WHERE objid=%" FSL_ID_T_PFMT " AND type='ci'",
+    rid, rid
+  );
+}
+
+
+/**
+   Searches for the most recent common ancestor of the primary and one of
+   the secondaries in a merge.
+
+   On success, *outRid is set to its value and 0 is returned. If no
+   match is found, *outRid is set to 0 and 0 is returned. Returns
+   non-0 on error, indicating either a lower-level db error or an
+   allocation error.
+
+   If ignoreMerges is true, it follows only "primary" parent links.
+
+   @see fsl__pivot_set_primary()
+   @see fsl__pivot_set_secondary()
+*/
+static int fsl__pivot_find(fsl_cx * const f, bool ignoreMerges, fsl_id_t *outRid){
+  fsl_db * const db = fsl_cx_db(f);
+  int rc;
+  fsl_stmt q1 = fsl_stmt_empty, q2 = fsl_stmt_empty,
+    u1 = fsl_stmt_empty, i1 = fsl_stmt_empty;
+  fsl_id_t rid = 0;
+  if(fsl_db_g_int32(db, 0, "SELECT COUNT(distinct src) FROM " FSL__TABLE_PIVOT "")<2){
+    return fsl_cx_err_set(f, FSL_RC_MISUSE,
+                          "Pivot list [" FSL__TABLE_PIVOT "] contains neither primary "
+                          "nor secondary entries.");
+  }
+  /* Prepare queries we will be needing
+  **
+  ** The first query finds the oldest pending version on the
+  ** FSL__TABLE_PIVOT. This will be next one searched.
+  */
+  rc = fsl_cx_prepare(f, &q1,
+                      "SELECT rid FROM " FSL__TABLE_PIVOT " WHERE pending"
+                      " ORDER BY pending DESC, mtime DESC");
+  if(rc) goto end;
+
+  /* Check to see if the record :rid is a common ancestor.  The result
+  ** set contains one or more rows if it is and is the empty set if it
+  ** is not.
+  */
+  rc = fsl_cx_prepare(f, &q2,
+    "SELECT 1 FROM " FSL__TABLE_PIVOT " A, plink, " FSL__TABLE_PIVOT " B"
+    " WHERE plink.pid=?1"
+    "   AND plink.cid=B.rid"
+    "   AND A.rid=?1"
+    "   AND A.src!=B.src %s",
+    ignoreMerges ? "AND plink.isprim" : ""
+  );
+  if(rc) goto end;
+
+  /* Mark the :rid record has having been checked.  It is not the
+  ** common ancestor.
+  */
+  rc = fsl_cx_prepare(f, &u1,
+    "UPDATE " FSL__TABLE_PIVOT " SET pending=0 WHERE rid=?1"
+  );
+  if(rc) goto end;
+
+  /* Add to the queue all ancestors of :rid.
+  */
+  rc = fsl_cx_prepare(f, &i1,
+    "REPLACE INTO " FSL__TABLE_PIVOT " "
+    "SELECT plink.pid,"
+    " coalesce((SELECT mtime FROM event X WHERE X.objid=plink.pid), 0.0),"
+    " 1,"
+    " " FSL__TABLE_PIVOT ".src "
+    "  FROM plink, " FSL__TABLE_PIVOT
+    " WHERE plink.cid=?1"
+    "   AND " FSL__TABLE_PIVOT ".rid=?1 %s",
+    ignoreMerges ? "AND plink.isprim" : ""
+  );
+  if(rc) goto end;
+  while(FSL_RC_STEP_ROW==(rc = fsl_stmt_step(&q1))){
+    rid = fsl_stmt_g_id(&q1, 0);
+    fsl_stmt_reset(&q1);
+    rc = fsl_stmt_bind_step(&q2, "R", rid);
+    if(rc) break/*error or found match*/;
+    rc = fsl_stmt_bind_step(&i1, "R", rid);
+    assert(FSL_RC_STEP_ROW!=rc);
+    if(0==rc) rc = fsl_stmt_bind_step(&u1, "R", rid);
+    if(rc) break;
+    assert(FSL_RC_STEP_ROW!=rc);
+    rid = 0;
+  }
+  switch(rc){
+    case 0: break;
+    case FSL_RC_STEP_ROW:
+    case FSL_RC_STEP_DONE: rc = 0; break;
+    default:
+      rc = fsl_cx_uplift_db_error2(f, NULL, rc);
+      break;
+  }
+  end:
+  fsl_stmt_finalize(&q1);
+  fsl_stmt_finalize(&q2);
+  fsl_stmt_finalize(&u1);
+  fsl_stmt_finalize(&i1);
+  if(0==rc  && rid) *outRid = rid;
+  return rc;
+}
+
+/**
+   Searches f's current repository for the nearest fork related to
+   version vid.
+
+   More specifically: this looks for the most recent leaf that is (1)
+   not equal to vid and (2) has not already been merged into vid and
+   (3) the leaf is not closed and (4) the leaf is in the same branch
+   as vid.
+
+   If checkVmerge is true then the current checkout
+   database is also checked (via the vmerge table), in which case a
+   checkout must be opened.
+
+   On success, returns 0 and assigns *outRid to the resulting RID.
+
+   On error:
+
+   - FSL_RC_NOT_A_REPO or FSL_RC_NOT_A_CKOUT if called when no repo or
+     (if checkVmerge is true) no checkout.
+
+   - FSL_RC_NOT_FOUND: no closest merge was found.
+
+   - FSL_RC_OOM: on allocation error
+
+   - Any number of potential other errors from the db layer.
+
+   f's error state will contain more information about errors reported
+   here.
+*/
+/*static*/ int fsl__find_nearest_fork(fsl_cx * const f,
+                                  fsl_id_t vid, bool checkVmerge,
+                                  fsl_id_t * outRid){
+  fsl_db * const db = checkVmerge
+    ? fsl_needs_ckout(f) : fsl_needs_repo(f);
+  fsl_buffer * const sql = fsl__cx_scratchpad(f);
+  fsl_stmt q;
+  if(!db){
+    return checkVmerge ? FSL_RC_NOT_A_CKOUT : FSL_RC_NOT_A_REPO;
+  }
+  q = fsl_stmt_empty;
+  int rc = fsl_buffer_appendf(sql,
+    "SELECT leaf.rid"
+    "  FROM leaf, event"
+    " WHERE leaf.rid=event.objid"
+    "   AND leaf.rid!=%" FSL_ID_T_PFMT,  /* Constraint (1) */
+    vid
+  );
+  if(rc) goto end;
+  if( checkVmerge ){
+    rc = fsl_buffer_append(sql,
+      "   AND leaf.rid NOT IN (SELECT merge FROM vmerge)"
+      /* Constraint (2) */, -1 );
+    if(rc) goto end;
+  }
+  rc = fsl_buffer_appendf(sql,
+    "   AND NOT EXISTS(SELECT 1 FROM tagxref" /* Constraint (3) */
+                  "     WHERE rid=leaf.rid"
+                  "       AND tagid=%d"
+                  "       AND tagtype>0)"
+    "   AND (SELECT value FROM tagxref"      /* Constraint (4) */
+          "  WHERE tagid=%d AND rid=%" FSL_ID_T_PFMT " AND tagtype>0) ="
+          " (SELECT value FROM tagxref"
+          "  WHERE tagid=%d AND rid=leaf.rid AND tagtype>0)"
+    " ORDER BY event.mtime DESC LIMIT 1",
+                         FSL_TAGID_CLOSED,
+                         FSL_TAGID_BRANCH,
+                         vid, FSL_TAGID_BRANCH
+  );
+  if(rc) goto end;
+  rc = fsl_db_prepare(db, &q, "%b", sql);
+  if(rc){
+    rc = fsl_cx_uplift_db_error2(f, db, rc);
+    goto end;
+  }
+  rc = fsl_stmt_step(&q);
+  switch(rc){
+    case FSL_RC_STEP_ROW:
+      rc = 0;
+      *outRid = fsl_stmt_g_id(&q, 0);
+      assert(*outRid>0);
+      break;
+    case FSL_RC_STEP_DONE:
+      rc = fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
+                          "Cannot find nearest fork of RID #%"
+                          FSL_ID_T_PFMT ".", vid);
+      break;
+    default:
+      rc = fsl_cx_uplift_db_error2(f, db, rc);
+      break;
+  }
+  end:
+  fsl_stmt_finalize(&q);
+  fsl__cx_scratchpad_yield(f, sql);
+  return rc;
+}
+
+/**
+   Name for the merge algo's version of the fv table, noting that it
+   differs enough from the update algo's version that they do not
+   map 1-to-1 without some degree of pain which might make sense
+   once merge is in the library and working.
+*/
+#define FSL__TABLE_FVM "fvm"
+
+static int fsl__renames_init(fsl_cx * const f){
+  char const * const coll = fsl_cx_filename_collation(f);
+  return fsl_cx_exec_multi(f,
+    "CREATE TEMP TABLE IF NOT EXISTS " FSL__TABLE_FVM "(\n"
+    "  fn TEXT UNIQUE %s,\n"       /* The filename */
+    "  idv INTEGER DEFAULT 0,\n"   /* VFILE entry for current version */
+    "  idp INTEGER DEFAULT 0,\n"   /* VFILE entry for the pivot */
+    "  idm INTEGER DEFAULT 0,\n"   /* VFILE entry for version merging in */
+    "  chnged BOOLEAN,\n"          /* True if current version has been edited */
+    "  ridv INTEGER DEFAULT 0,\n"  /* Record ID for current version */
+    "  ridp INTEGER DEFAULT 0,\n"  /* Record ID for pivot */
+    "  ridm INTEGER DEFAULT 0,\n"  /* Record ID for merge */
+    "  isexe BOOLEAN,\n"           /* Execute permission enabled */
+    "  fnp TEXT UNIQUE %s,\n"      /* The filename in the pivot */
+    "  fnm TEXT UNIQUE %s,\n"      /* The filename in the merged version */
+    "  fnn TEXT UNIQUE %s,\n"      /* The filename in the name pivot */
+    "  islinkv BOOLEAN,\n"         /* True if current version is a symlink */
+    "  islinkm BOOLEAN\n"          /* True if merged version in is a symlink */
+    ");"
+    "DELETE FROM " FSL__TABLE_FVM ";",
+    coll, coll, coll, coll);
+}
+
+static int fsl__renames_finalize(fsl_cx * const f){
+  return fsl_cx_exec(f,
+                     //"DROP TABLE IF EXISTS " FSL__TABLE_FVM
+                     "DELETE FROM " FSL__TABLE_FVM);
+}
+
+static int fsl__renames_add(fsl_cx * const f,
+                            char const * zFnCol,
+                            fsl_id_t vid, fsl_id_t nid,
+                            bool reverseOk){
+  int rc;
+  uint32_t i; /* loop counter */
+  uint32_t nChng; /* # of entries in aChng */
+  fsl_id_t * aChng = 0; /* Array of filename changes */
+  fsl_stmt q1 = fsl_stmt_empty, q2 = fsl_stmt_empty;
+  fsl_db * const db = fsl_cx_db_repo(f);
+  rc = fsl__find_filename_changes(f, nid, vid, reverseOk, &nChng, &aChng);
+  if(rc) goto end;
+  else if(0==nChng) return 0;
+  rc = fsl_cx_prepare(f, &q1,
+                      "SELECT name FROM filename WHERE fnid=?1");
+  if(0==rc){
+    rc = fsl_cx_prepare(f, &q2,
+                        "SELECT name FROM filename WHERE fnid=?1");
+  }
+  for(i=0; 0==rc && i < nChng; ++i){
+    char const *zN;
+    char const *zV;
+    rc = fsl_stmt_bind_step(&q1, "R", aChng[i*2]);
+    if(FSL_RC_STEP_ROW==rc){
+      rc = fsl_stmt_bind_step(&q2, "R", aChng[i*2+1]);
+      if(FSL_RC_STEP_ROW==rc) rc = 0;
+    }
+    if(rc){
+      rc = fsl_cx_uplift_db_error2(f, NULL, rc);
+      break;
+    }
+    rc = fsl_stmt_get_text(&q1, 0, &zN, NULL);
+    if(0==rc) rc = fsl_stmt_get_text(&q2, 0, &zV, NULL);
+    if(rc){
+      rc = fsl_cx_uplift_db_error2(f, db, rc);
+      break;
+    }
+    rc = fsl_cx_exec(f,"INSERT OR IGNORE INTO " FSL__TABLE_FVM
+                     "(%s,fnn) VALUES(%Q,%Q)",
+                     zFnCol, zV, zN);
+    if(0==rc && 0==fsl_db_changes_recent(db)){
+      rc = fsl_cx_exec_multi(f, "UPDATE " FSL__TABLE_FVM
+                             " SET %s=%Q WHERE fnn=%Q",
+                             zFnCol, zV, zN);
+    }
+  }
+  end:
+  fsl_stmt_finalize(&q1);
+  fsl_stmt_finalize(&q2);
+  fsl_free(aChng);
+  return rc;
+}
+
+/**
+   Part of fsl_ckout_merge() related to collecting filenames and
+   setting up renames. Returns 0 on success.
+*/
+static int fsl__renames_tweak(fsl_cx * const f, fsl_id_t mid,
+                              fsl_id_t pid, fsl_id_t vid,
+                              fsl_id_t nid,
+                              fsl_merge_opt const * const mOpt){
+  int rc = 0;
+  char vAncestor = 'p'; /* If P is an ancestor of V then 'p', else 'n' */
+
+  rc = fsl__renames_init(f);
+  if(0==rc) rc = fsl__renames_add(f, "fn", vid, nid, false);
+  if(0==rc) rc = fsl__renames_add(f, "fnp", pid, nid, false);
+  if(0==rc) rc = fsl__renames_add(f, "fnm", mid, nid,
+                                  FSL_MERGE_TYPE_BACKOUT==mOpt->mergeType);
+  /*
+    It goes without saying that all of the SQL wizardry which follows
+    was implemented by D. Richard Hipp. Its usage here does not imply
+    any real understanding of it on the fossil-to-libfossil porter's
+    part.
+  */
+  if(rc) goto end;
+  else if(nid!=pid){
+    /* See forum thread https://fossil-scm.org/forum/forumpost/549700437b
+    **
+    ** If a filename changes between nid and one of the other check-ins
+    ** pid, vid, or mid, then it might not have changed for all of them.
+    ** try to fill in the appropriate filename in all slots where the
+    ** name is missing.
+    **
+    ** This does not work if
+    **   (1) The filename changes more than once in between nid and vid/mid
+    **   (2) Two or more filenames swap places - for example if A is renamed
+    **       to B and B is renamed to A.
+    ** The Fossil merge algorithm breaks down in those cases.  It will need
+    ** to be completely rewritten to handle such complex cases.  Such cases
+    ** appear to be rare, and also confusing to humans.
+    */
+    rc = fsl_cx_exec(f,
+      "UPDATE OR IGNORE " FSL__TABLE_FVM
+      " SET fnp=vfile.pathname FROM vfile"
+      " WHERE fnp IS NULL"
+      " AND vfile.pathname = " FSL__TABLE_FVM ".fnn"
+      " AND vfile.vid=%" FSL_ID_T_PFMT,
+      pid
+    );
+    if(rc) goto end;
+    rc = fsl_cx_exec(f,
+      "UPDATE OR IGNORE " FSL__TABLE_FVM
+      " SET fn=vfile.pathname FROM vfile"
+      " WHERE fn IS NULL"
+      " AND vfile.pathname = "
+      "   coalesce(" FSL__TABLE_FVM ".fnp," FSL__TABLE_FVM ".fnn)"
+      " AND vfile.vid=%" FSL_ID_T_PFMT,
+      vid
+    );
+    if(rc) goto end;
+    rc = fsl_cx_exec(f,
+      "UPDATE OR IGNORE " FSL__TABLE_FVM
+      " SET fnm=vfile.pathname FROM vfile"
+      " WHERE fnm IS NULL"
+      " AND vfile.pathname ="
+      "  coalesce(" FSL__TABLE_FVM ".fnp," FSL__TABLE_FVM ".fnn)"
+      " AND vfile.vid=%" FSL_ID_T_PFMT,
+      mid
+    );
+    if(rc) goto end;
+    rc = fsl_cx_exec(f,
+      "UPDATE OR IGNORE " FSL__TABLE_FVM
+      " SET fnp=vfile.pathname FROM vfile"
+      " WHERE fnp IS NULL"
+      " AND vfile.pathname"
+      "   IN (" FSL__TABLE_FVM ".fnm," FSL__TABLE_FVM ".fn)"
+      " AND vfile.vid=%" FSL_ID_T_PFMT,
+      pid
+    );
+    if(rc) goto end;
+    rc = fsl_cx_exec(f,
+      "UPDATE OR IGNORE " FSL__TABLE_FVM
+      " SET fn=vfile.pathname FROM vfile"
+      " WHERE fn IS NULL"
+      " AND vfile.pathname = " FSL__TABLE_FVM ".fnm"
+      " AND vfile.vid=%" FSL_ID_T_PFMT,
+      vid
+    );
+    if(rc) goto end;
+    rc = fsl_cx_exec(f,
+      "UPDATE OR IGNORE " FSL__TABLE_FVM
+      " SET fnm=vfile.pathname FROM vfile"
+      " WHERE fnm IS NULL"
+      " AND vfile.pathname = " FSL__TABLE_FVM ".fn"
+      " AND vfile.vid=%" FSL_ID_T_PFMT,
+      mid
+    );
+    if(rc) goto end;
+  }
+  assert(0==rc);
+  if(mOpt->baselineRid>0){
+    fsl_db * const db = fsl_cx_db_repo(f);
+    fsl_db_err_reset(db);
+    vAncestor = fsl_db_exists(db,
+      "WITH RECURSIVE ancestor(id) AS ("
+      "  VALUES(%" FSL_ID_T_PFMT ")"
+      "  UNION"
+      "  SELECT pid FROM plink, ancestor"
+      "   WHERE cid=ancestor.id"
+      "   AND pid!=%" FSL_ID_T_PFMT
+      "   AND cid!=%" FSL_ID_T_PFMT ")"
+      "SELECT 1 FROM ancestor"
+      "  WHERE id=%" FSL_ID_T_PFMT " LIMIT 1",
+      vid, nid, pid, pid
+    ) ? 'p' : 'n';
+    assert(0==fsl_db_err_get(db, NULL, NULL));
+  }
+
+  /*
+  ** Add files found in V
+  */
+  rc = fsl_cx_exec_multi(f,
+    "UPDATE OR IGNORE " FSL__TABLE_FVM
+    " SET fn=coalesce(fn%c,fnn) WHERE fn IS NULL;"
+    "REPLACE INTO "
+    FSL__TABLE_FVM "(fn,fnp,fnm,fnn,idv,ridv,islinkv,isexe,chnged)"
+    " SELECT pathname, fnp, fnm, fnn, id, rid, islink, vf.isexe, vf.chnged"
+    "   FROM vfile vf"
+    "   LEFT JOIN " FSL__TABLE_FVM " ON fn=coalesce(origname,pathname)"
+    "    AND rid>0 AND vf.chnged NOT IN (3,5)"
+    "  WHERE vid=%" FSL_ID_T_PFMT ";",
+    vAncestor, vid
+  );
+  if(rc) goto end;
+  /*
+  ** Add files found in P
+  */
+  rc = fsl_cx_exec_multi(f,
+    "UPDATE OR IGNORE " FSL__TABLE_FVM " SET fnp=coalesce(fnn,"
+    "   (SELECT coalesce(origname,pathname) FROM vfile WHERE id=idv))"
+    " WHERE fnp IS NULL;"
+    "INSERT OR IGNORE INTO " FSL__TABLE_FVM "(fnp)"
+    " SELECT coalesce(origname,pathname) FROM vfile WHERE vid=%" FSL_ID_T_PFMT ";",
+    pid
+  );
+  if(rc) goto end;
+
+  /*
+  ** Add files found in M
+  */
+  rc = fsl_cx_exec_multi(f,
+    "UPDATE OR IGNORE " FSL__TABLE_FVM " SET fnm=fnp WHERE fnm IS NULL;"
+    "INSERT OR IGNORE INTO " FSL__TABLE_FVM "(fnm)"
+    " SELECT pathname FROM vfile WHERE vid=%" FSL_ID_T_PFMT ";",
+    mid
+  );
+  if(rc) goto end;
+
+  /*
+  ** Compute the file version ids for P and M
+  */
+  if( pid==vid ){
+    rc = fsl_cx_exec_multi(f,
+      "UPDATE " FSL__TABLE_FVM " SET idp=idv, ridp=ridv"
+      " WHERE ridv>0 AND chnged NOT IN (3,5)"
+    );
+  }else{
+    rc = fsl_cx_exec_multi(f,
+      "UPDATE " FSL__TABLE_FVM
+      " SET idp=coalesce(vfile.id,0), ridp=coalesce(vfile.rid,0)"
+      " FROM vfile"
+      " WHERE vfile.vid=%" FSL_ID_T_PFMT
+      " AND " FSL__TABLE_FVM ".fnp=vfile.pathname",
+      pid
+    );
+  }
+  if(rc) goto end;
+  rc = fsl_cx_exec_multi(f,
+    "UPDATE " FSL__TABLE_FVM " SET"
+    " idm=coalesce(vfile.id,0),"
+    " ridm=coalesce(vfile.rid,0),"
+    " islinkm=coalesce(vfile.islink,0),"
+    " isexe=coalesce(vfile.isexe," FSL__TABLE_FVM ".isexe)"
+    " FROM vfile"
+    " WHERE vid=%" FSL_ID_T_PFMT " AND fnm=pathname",
+    mid
+  );
+  if(rc) goto end;
+
+  /*
+  ** Update the execute bit on files where it's changed from P->M but
+  ** not P->V
+  */
+  if(!mOpt->dryRun){
+    fsl_stmt q = fsl_stmt_empty;
+    rc = fsl_cx_prepare(f, &q,
+      "SELECT idv, fn, " FSL__TABLE_FVM ".isexe "
+      "FROM " FSL__TABLE_FVM ", vfile p, vfile v"
+      " WHERE p.id=idp AND v.id=idv AND " FSL__TABLE_FVM ".isexe!=p.isexe"
+      " AND v.isexe=p.isexe"
+    );
+    if(rc) goto end;
+    fsl_buffer * const fnAbs =
+      fsl__cx_scratchpad(f)/*absolute filenames*/;
+    rc = fsl_buffer_reserve(fnAbs, f->ckout.dirLen + 256);
+    if(0==rc){
+      rc = fsl_buffer_append(fnAbs, f->ckout.dir, f->ckout.dirLen);
+    }
+    while( 0==rc && FSL_RC_STEP_ROW==fsl_stmt_step(&q) ){
+      fsl_id_t const idv = fsl_stmt_g_id(&q, 0);
+      int const isExe = fsl_stmt_g_int32(&q, 2);
+      fsl_size_t nName = 0;
+      const char *zName = 0;
+      rc = fsl_stmt_get_text(&q, 1, &zName, &nName);
+      if(rc) break;
+      fnAbs->mem[f->ckout.dirLen] = 0;
+      fnAbs->used = f->ckout.dirLen;
+      rc = fsl_buffer_append(fnAbs, zName, (fsl_int_t)nName);
+      if(rc) break;
+      fsl_file_exec_set( fsl_buffer_cstr(fnAbs), !!isExe )
+        /* Ignoring error */;
+      rc = fsl_cx_exec(f, "UPDATE vfile SET isexe=%d "
+                       "WHERE id=%" FSL_ID_T_PFMT,
+                       isExe, idv);
+    }
+    fsl__cx_scratchpad_yield(f, fnAbs);
+    fsl_stmt_finalize(&q);
+  }
+  end:
+  return rc;
+}/*fsl__renames_tweak()*/
+
+/**
+   Adds an an entry in the vmerge table for the given id and rid.
+   Returns 0 on success, uplifts any db error into f's error state.
+*/
+static int fsl__vmerge_insert(fsl_cx * const f, fsl_id_t id, fsl_id_t rid){
+  return fsl_cx_exec(f,
+    "INSERT OR IGNORE INTO vmerge(id,merge,mhash)"
+    "VALUES(%" FSL_ID_T_PFMT ",%" FSL_ID_T_PFMT
+    ",(SELECT uuid FROM blob WHERE rid=%" FSL_ID_T_PFMT "))",
+    id, rid, rid
+  );
+}
+
+#define fsl_merge_state_empty_m {        \
+  NULL/*f*/,                             \
+  NULL/*opt*/,                           \
+  NULL/*filename*/,                      \
+  NULL/*prevName*/,                      \
+  FSL_MERGE_FCHANGE_NONE/*fileChangeType*/ \
+}
+/**
+   Initialized-with-defaults fsl_merge_state instance,
+   intended for use in non-const copy initialization.
+*/
+const fsl_merge_state fsl_merge_state_empty = fsl_merge_state_empty_m;
+
+int fsl_ckout_merge(fsl_cx * const f, fsl_merge_opt const * const opt){
+  /**
+     Notation:
+
+     V (vid)  The current checkout
+     M (mid)  The version being merged in
+     P (pid)  The "pivot" - the most recent common ancestor of V and M.
+     N (nid)  The "name pivot" - for detecting renames
+
+     What follows was initially based on:
+
+     https://fossil-scm.org/home/file/src/merge.c?ci=e340af58a249dc09&ln=331-1065
+  */
+  int rc = 0;
+  fsl_db * const db = fsl_needs_ckout(f);
+  bool inTrans = false;
+  fsl_id_t const vid = f->ckout.rid /* current checkout (V) */;
+  fsl_id_t pid = 0 /* pivot RID (P): most recent common ancestor of V and M*/;
+  fsl_id_t mid = opt->mergeRid /* merge-in version (M) */;
+  fsl_id_t nid = 0 /* "name pivot" version (N) */;
+  bool doIntegrate = FSL_MERGE_TYPE_INTEGRATE==opt->mergeType;
+  fsl_stmt q = fsl_stmt_empty;
+  fsl_buffer * const absPath = fsl__cx_scratchpad(f);
+  fsl_merge_state mState = fsl_merge_state_empty;
+  if(!db) rc = FSL_RC_NOT_A_CKOUT;
+  else if(0==vid){
+    rc = fsl_cx_err_set(f, FSL_RC_MISUSE,
+                        "Cannot merge into empty top-level checkin.");
+  }else if(FSL_MERGE_TYPE_CHERRYPICK==opt->mergeType
+           && opt->baselineRid>0){
+    rc = fsl_cx_err_set(f, FSL_RC_MISUSE,
+                          "Cannot use the baselineRid option "
+                          "with a cherry-pick merge.");
+  }
+  if(!rc) rc = fsl_cx_transaction_begin(f);
+  if(rc) goto end;
+  inTrans = true;
+  if((pid = opt->baselineRid)>0){
+    if(!fsl_rid_is_version(f, pid)){
+      rc = fsl_cx_err_set(f, FSL_RC_TYPE,
+                          "Baseline RID #%" FSL_ID_T_PFMT
+                          " does not refer to a checkin version.");
+      goto end;
+    }
+  }
+  if(FSL_MERGE_TYPE_CHERRYPICK==opt->mergeType
+     || FSL_MERGE_TYPE_BACKOUT==opt->mergeType){
+    pid = fsl_db_g_id(db, 0, "SELECT pid FROM plink WHERE cid=%"
+                           FSL_ID_T_PFMT " AND isprim",
+                           mid);
+    if(0==pid){
+      rc = fsl_cx_err_set(f, FSL_RC_NOT_FOUND, "Cannot find an ancestor "
+                          "for to-merge RID #%" FSL_ID_T_PFMT ".",
+                          mid);
+      goto end;
+    }
+  }else{
+    if(opt->baselineRid<=0){
+      fsl_stmt q = fsl_stmt_empty;
+      rc = fsl__pivot_set_primary(f, mid);
+      if(0==rc) rc = fsl__pivot_set_secondary(f, vid);
+      if(rc) goto end;
+      rc = fsl_cx_prepare(f, &q, "SELECT merge FROM vmerge WHERE id=0");
+      while( 0==rc && FSL_RC_STEP_ROW==fsl_stmt_step(&q) ){
+        rc = fsl__pivot_set_secondary(f, fsl_stmt_g_id(&q, 0));
+      }
+      fsl_stmt_finalize(&q);
+      if(0==rc) rc = fsl__pivot_find(f, false, &pid);
+      if(rc) goto end;
+      else if( pid<=0 ){
+        rc = fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
+                            "Cannot find a common ancestor between "
+                            "RID #%" FSL_ID_T_PFMT
+                            " and RID #%" FSL_ID_T_PFMT ".",
+                            pid, vid);
+        goto end;
+      }
+    }
+    rc = fsl__pivot_set_primary(f, mid);
+    if(0==rc) rc = fsl__pivot_set_secondary(f, vid);
+    if(0==rc) rc = fsl__pivot_find(f, true, &nid);
+    if(rc) goto end;
+    else if( nid!=pid ){
+      rc = fsl__pivot_set_primary(f, nid);
+      if(0==rc) rc = fsl__pivot_set_secondary(f, pid);
+      if(0==rc) rc = fsl__pivot_find(f, true, &nid);
+      if(rc) goto end;
+    }
+    /* ^^^ the above block is a great example of much error checking
+       intrudes on the library API compared to fossil(1). */
+  }
+  if( FSL_MERGE_TYPE_BACKOUT == opt->mergeType ){
+    fsl_id_t const t = pid;
+    pid = mid;
+    mid = t;
+  }
+  if(0==nid) nid = pid;
+  if(opt->debug){
+    MARKER(("pid=%" FSL_ID_T_PFMT
+            ", mid=%" FSL_ID_T_PFMT
+            ", nid=%" FSL_ID_T_PFMT
+            ", vid=%" FSL_ID_T_PFMT
+            " integrate=%d\n",
+            pid, mid, nid, vid, doIntegrate));
+  }
+  if(mid == pid){
+    rc = fsl_cx_err_set(f, FSL_RC_RANGE, "Cowardly refusing to perform "
+                        "no-op merge from/to RID #%" FSL_ID_T_PFMT ".",
+                        mid);
+    goto end;
+  }else if(mid == vid){
+    rc = fsl_cx_err_set(f, FSL_RC_RANGE, "Cowardly refusing to merge "
+                        "version [%S] into itself.", f->ckout.uuid);
+    goto end;
+  }else if(!fsl_rid_is_version(f, pid)){
+    rc = fsl_cx_err_set(f, FSL_RC_TYPE,
+                        "RID #%" FSL_ID_T_PFMT " does not refer "
+                        "to a checkin version.", pid);
+    goto end;
+  }else{
+    uint32_t missing = 0;
+    rc = fsl_vfile_load(f, mid, false, &missing);
+    if(0==rc && 0==missing){
+      rc = fsl_vfile_load(f, pid, false, &missing);
+    }
+    if(0==rc && missing){
+      rc = fsl_cx_err_set(f, FSL_RC_PHANTOM,
+                          "Cannot merge due to missing content in one "
+                          "or more participating versions.");
+    }
+    if(rc) goto end;
+  }
+  if( doIntegrate && (fsl_content_is_private(f, mid)
+                      || !fsl_rid_is_leaf(f, mid)) ){
+    doIntegrate = false;
+  }
+  if(opt->scanForChanges){
+    rc = fsl_vfile_changes_scan(f, vid, FSL_VFILE_CKSIG_ENOTFILE);
+    if(rc) goto end;
+  }
+  rc = fsl__renames_tweak(f, mid, pid, vid, nid, opt);
+  if(rc) goto end;
+  if(opt->debug){
+    MARKER(("pid=%" FSL_ID_T_PFMT
+            ", mid=%" FSL_ID_T_PFMT
+            ", nid=%" FSL_ID_T_PFMT
+            ", vid=%" FSL_ID_T_PFMT
+            " integrate=%d\n",
+            pid, mid, nid, vid, doIntegrate));
+    MARKER(("Contents of " FSL__TABLE_FVM ":\n"));
+    if(1==opt->debug){
+      fsl_db_each(db, fsl_stmt_each_f_dump, NULL,
+                  "SELECT fn,fnp,fnm,chnged,ridv,ridp,ridm, "
+                  " isexe,islinkv islinkm, fnn "
+                  " FROM " FSL__TABLE_FVM
+                  " WHERE chnged OR (ridv!=ridm AND ridm!=ridp)"
+                  " ORDER BY fn, fnp, fnm ");
+    }else{
+      fsl_db_each(db, fsl_stmt_each_f_dump, NULL,
+                  "SELECT * FROM " FSL__TABLE_FVM
+                  " ORDER BY fn, fnp, fnm");
+    }
+    MARKER(("Contents of " FSL__TABLE_PIVOT ":\n"));
+    fsl_db_each(db, fsl_stmt_each_f_dump, NULL,
+                "SELECT * FROM " FSL__TABLE_PIVOT
+                " ORDER BY src DESC, rid, pending, src");
+    MARKER(("Contents of [vmerge]:\n"));
+    fsl_db_each(db, fsl_stmt_each_f_dump, NULL,
+                "SELECT * FROM vmerge order by merge");
+  }
+  mState.f = f;
+  mState.opt = opt;
+#define MCB(FCT,RMI,FN) \
+  mState.fileChangeType = FCT; \
+  mState.fileRmInfo = RMI; \
+  mState.filename = FN; \
+  rc = opt->callback(&mState); \
+  mState.priorName = NULL
+#define MCB2(FCT,FN) MCB(FCT,FSL_CKUP_RM_NOT,FN)
+  /************************************************************************
+  ** All of the information needed to do the merge is now contained in the
+  ** FV table.  Starting here, we begin to actually carry out the merge.
+  **
+  ** First, find files in M and V but not in P and report conflicts.
+  ** The file in M will be ignored.  It will be treated as if it
+  ** does not exist.
+  */
+  rc = fsl_cx_prepare(f, &q, "SELECT idm FROM " FSL__TABLE_FVM
+                      " WHERE idp=0 AND idv>0 AND idm>0");
+  if(rc) goto end;
+  while( 0==rc && FSL_RC_STEP_ROW==(rc = fsl_stmt_step(&q)) ){
+    fsl_id_t const idm = fsl_stmt_g_id(&q, 0);
+    rc = fsl_cx_exec(f, "UPDATE " FSL__TABLE_FVM
+                     " SET idm=0 WHERE idm=%" FSL_ID_T_PFMT, idm);
+    if(0==rc && opt->callback){
+      fsl_buffer * const bName = fsl__cx_scratchpad(f);
+      rc = fsl_db_get_buffer(db, bName, false,
+                             "SELECT pathname FROM vfile WHERE id=%" FSL_ID_T_PFMT,
+                             idm);
+      if(0==rc){
+        MCB2(FSL_MERGE_FCHANGE_CONFLICT_ANCESTOR,
+             fsl_buffer_cstr(bName));
+      }
+      fsl__cx_scratchpad_yield(f, bName);
+    }
+  }
+  fsl_stmt_finalize(&q);
+  switch(rc){
+    case 0:
+    case FSL_RC_STEP_DONE: rc = 0; break;
+    default: goto end;
+  }
+
+  /*
+  ** Find files that have changed from P->M but not P->V.
+  ** Copy the M content over into V.
+  */
+  rc = fsl_cx_prepare(f, &q,
+    "SELECT idv, ridm, fn, islinkm FROM " FSL__TABLE_FVM
+    " WHERE idp>0 AND idv>0 AND idm>0"
+    "   AND ridm!=ridp AND ridv=ridp AND NOT chnged"
+  );
+  if(rc) goto end;
+  while( 0==rc && (FSL_RC_STEP_ROW==fsl_stmt_step(&q)) ){
+    fsl_id_t const idv = fsl_stmt_g_id(&q, 0);
+    fsl_id_t const ridm = fsl_stmt_g_id(&q, 1);
+    int const islinkm = fsl_stmt_g_int32(&q, 3);
+    /* Copy content from idm over into idv.  Overwrite idv. */
+    if(opt->debug){
+      const char *zName = fsl_stmt_g_text(&q, 2, NULL);
+      MARKER(("COPIED (M)=>(V) %s\n", zName));
+    }
+    if( !opt->dryRun ){
+      //undo_save(zName);
+      rc = fsl_cx_exec(f,
+        "UPDATE vfile SET mtime=0, mrid=%" FSL_ID_T_PFMT
+        ", chnged=%d, islink=%d,"
+        " mhash=CASE WHEN rid<>%" FSL_ID_T_PFMT
+        " THEN (SELECT uuid FROM blob WHERE blob.rid=%" FSL_ID_T_PFMT ") END"
+        " WHERE id=%" FSL_ID_T_PFMT,
+        ridm, doIntegrate ? 4 : 2, islinkm, ridm, ridm, idv
+      );
+      if(0==rc) rc = fsl__vfile_to_ckout(f, idv, NULL);
+    }
+    if(0==rc && opt->callback){
+      const char *zName = 0;
+      rc = fsl_stmt_get_text(&q, 2, &zName, NULL);
+      if(0==rc){
+        MCB2(FSL_MERGE_FCHANGE_COPIED,zName);
+      }
+    }
+  }
+  fsl_stmt_finalize(&q);
+  switch(rc){
+    case 0:
+    case FSL_RC_STEP_DONE: rc = 0; break;
+    default: goto end;
+  }
+
+  /*
+  ** Do a three-way merge on files that have changes on both P->M and P->V.
+  */
+  rc = fsl_cx_prepare(f, &q,
+    "SELECT ridm, idv, ridp, ridv,"
+    " FSL_GLOB('binary-glob'," FSL__TABLE_FVM ".fn),"
+    " fn, isexe, islinkv, islinkm FROM " FSL__TABLE_FVM
+    " WHERE idp>0 AND idv>0 AND idm>0"
+    "   AND ridm!=ridp AND (ridv!=ridp OR chnged)"
+  );
+  if(0==rc){
+    rc = fsl_buffer_append( absPath, f->ckout.dir, (fsl_int_t)f->ckout.dirLen);
+  }
+  while( 0==rc && (FSL_RC_STEP_ROW==fsl_stmt_step(&q)) ){
+    fsl_id_t const ridm = fsl_stmt_g_id(&q, 0);
+    fsl_id_t const idv = fsl_stmt_g_id(&q, 1);
+    fsl_id_t const ridp = fsl_stmt_g_id(&q, 2);
+    fsl_id_t const  ridv = fsl_stmt_g_id(&q, 3);
+    int32_t isBinary = fsl_stmt_g_int32(&q, 4);
+    int32_t const isExe = fsl_stmt_g_int32(&q, 6);
+    int32_t const islinkv = fsl_stmt_g_int32(&q, 7);
+    int32_t const islinkm = fsl_stmt_g_int32(&q, 8);
+    char const *zFullPath;
+    const char *zName = NULL;
+    fsl_size_t nName = 0;
+    rc = fsl_stmt_get_text(&q, 5, &zName, &nName);
+    if(rc){
+      rc = fsl_cx_uplift_db_error2(f, NULL, rc);
+      break;
+    }
+    /* Do a 3-way merge of idp->idm into idp->idv.  The results go into idv. */
+    if(opt->debug){
+      MARKER(("MERGE %s  (pivot=%d v1=%d v2=%d)\n",
+              zName, (int)ridp, (int)ridm, (int)ridv));
+    }
+    if( islinkv || islinkm ){
+      //MARKER(("***** Cannot merge symlink %s\n", zName));
+      if(opt->callback){
+        MCB2(FSL_MERGE_FCHANGE_CONFLICT_SYMLINK,zName);
+      }
+    }else if(isBinary){
+      if(opt->callback){
+        MCB2(FSL_MERGE_FCHANGE_CONFLICT_BINARY,zName);
+      }
+    }else{
+      fsl_buffer m = fsl_buffer_empty;
+      fsl_buffer p = fsl_buffer_empty;
+      fsl_buffer r = fsl_buffer_empty;
+      //if( !dryRunFlag ) undo_save(zName);
+      if(opt->debug){
+        MARKER(("Merge: %s\n", zName));
+      }
+      absPath->used = f->ckout.dirLen;
+      rc = fsl_buffer_append(absPath, zName, (fsl_int_t)nName);
+      if(rc) break;
+      zFullPath = fsl_buffer_cstr(absPath);
+      rc = fsl_content_get(f, ridp, &p);
+      if(0==rc) rc = fsl_content_get(f, ridm, &m);
+      if(0==rc){
+        //unsigned mergeFlags = dryRunFlag ? MERGE_DRYRUN : 0;
+        //if(keepMergeFlag!=0) mergeFlags |= MERGE_KEEP_FILES;
+        //rc = merge_3way(&p, zFullPath, &m, &r, mergeFlags);
+        unsigned int nConflict = 0;
+        fsl_buffer * const contentLocal = fsl__cx_content_buffer(f);
+        rc = fsl_buffer_fill_from_filename(contentLocal, zFullPath);
+        if(0==rc){
+          rc = fsl_buffer_merge3( &p, contentLocal, &m, &r, &nConflict );
+          switch(rc){
+            case 0:
+              if(opt->debug){
+                MARKER(("%swriting merged file w/ %u conflict(s): %s\n",
+                        opt->dryRun ? "Not " : "", nConflict, zName));
+              }
+              if(!opt->dryRun){
+                rc = fsl_buffer_to_filename(&r, zFullPath);
+                if(0==rc) fsl_file_exec_set(zFullPath, !!isExe);
+              }
+              break;
+            case FSL_RC_DIFF_BINARY:
+            case FSL_RC_TYPE:
+              /* 2021-12-15: fsl_buffer_merge3() currently returns
+                 FSL_RC_TYPE for binary, but "should" return
+                 FSL_RC_DIFF_BINARY.  Changing that is TODO. */
+              rc = 0; isBinary = 1;
+              break;
+            default: break;
+          }
+        }
+        fsl__cx_content_buffer_yield(f);
+        if(0==rc && !isBinary){
+          rc = fsl_cx_exec(f, "UPDATE vfile "
+                           "SET mtime=0 WHERE id=%" FSL_ID_T_PFMT, idv);
+        }
+        if(0==rc && opt->callback){
+          fsl_merge_fchange_e const fce =
+            isBinary
+            ? FSL_MERGE_FCHANGE_CONFLICT_BINARY
+            : (nConflict
+               ? FSL_MERGE_FCHANGE_CONFLICT_MERGED
+               : FSL_MERGE_FCHANGE_MERGED);
+          MCB2(fce,zName);
+        }
+      }
+      fsl_buffer_clear(&p);
+      fsl_buffer_clear(&m);
+      fsl_buffer_clear(&r);
+    }
+    if(0==rc) rc = fsl__vmerge_insert(f, idv, ridm);
+  }
+  fsl_stmt_finalize(&q);
+  switch(rc){
+    case 0:
+    case FSL_RC_STEP_DONE: rc = 0; break;
+    default: goto end;
+  }
+
+  /*
+  ** Drop files that are in P and V but not in M
+  */
+  rc = fsl_cx_prepare(f, &q,
+    "SELECT idv, fn, chnged FROM " FSL__TABLE_FVM
+    " WHERE idp>0 AND idv>0 AND idm=0"
+  );
+  while( 0==rc && FSL_RC_STEP_ROW==(rc=fsl_stmt_step(&q)) ){
+    fsl_id_t const idv = fsl_stmt_g_id(&q, 0);
+    int32_t const chnged = fsl_stmt_g_int32(&q, 2);
+    const char *zName;
+    fsl_size_t nName = 0;
+    rc = fsl_stmt_get_text(&q, 1, &zName, &nName);
+    if(rc) break;
+    /* Delete the file idv */
+    if(opt->debug){
+      MARKER(("DELETE %s\n", zName));
+    }
+    if( chnged ){
+      if(opt->debug){
+        MARKER(("WARNING: local edits lost for %s", zName));
+      }
+    }
+    //if( !dryRunFlag ) undo_save(zName);
+    rc = fsl_cx_exec(f,
+      "UPDATE vfile SET deleted=1 WHERE id=%" FSL_ID_T_PFMT, idv
+    );
+    if(!chnged && !opt->dryRun ){
+      /* ^^^ this differs from fossil(1), which always deletes the
+         local file regardless of whether it has local changes. */
+      absPath->used = f->ckout.dirLen;
+      rc = fsl_buffer_append(absPath, zName, (fsl_int_t)nName);
+      if(0==rc) fsl_file_unlink(fsl_buffer_cstr(absPath));
+    }
+    if(opt->callback){
+      fsl_ckup_rm_state_e const rme =
+        chnged ? FSL_CKUP_RM_KEPT : FSL_CKUP_RM;
+      MCB(FSL_MERGE_FCHANGE_RM,rme,zName);
+    }
+  }
+  fsl_stmt_finalize(&q);
+  switch(rc){
+    case 0:
+    case FSL_RC_STEP_DONE: rc = 0; break;
+    default: goto end;
+  }
+
+  /* For certain sets of renames (e.g. A -> B and B -> A), a file that is
+  ** being renamed must first be moved to a temporary location to avoid
+  ** being overwritten by another rename operation. A row is added to the
+  ** TMPRN table for each of these temporary renames.
+  */
+  rc = fsl_cx_exec_multi(f,
+    "CREATE TEMP TABLE IF NOT EXISTS tmprn(fn UNIQUE, tmpfn);"
+    "DELETE FROM tmprn;"
+  );
+
+  /*
+  ** Rename files that have taken a rename on P->M but which keep the same
+  ** name on P->V.  If a file is renamed on P->V only or on both P->V and
+  ** P->M then we retain the V name of the file.
+  */
+  rc = fsl_cx_prepare(f, &q,
+    "SELECT idv, fnp, fnm, isexe FROM " FSL__TABLE_FVM
+    " WHERE idv>0 AND idp>0 AND idm>0 AND fnp=fn AND fnm!=fnp"
+  );
+  while( 0==rc && FSL_RC_STEP_ROW==(rc=fsl_stmt_step(&q)) ){
+    fsl_id_t const idv = fsl_stmt_g_id(&q, 0);
+    int32_t const isExe = fsl_stmt_g_int32(&q, 3);
+    const char *zOldName;
+    const char *zNewName;
+    rc = fsl_stmt_get_text(&q, 1, &zOldName, NULL);
+    if(0==rc) rc = fsl_stmt_get_text(&q, 2, &zNewName, NULL);
+    if(rc) break;
+    if(opt->debug){
+      MARKER(("RENAME %s -> %s\n", zOldName, zNewName));
+    }
+    //if( !dryRunFlag ) undo_save(zOldName);
+    //if( !dryRunFlag ) undo_save(zNewName);
+    rc = fsl_cx_exec_multi(f,
+      "UPDATE vfile SET pathname=NULL, origname=pathname"
+      " WHERE vid=%" FSL_ID_T_PFMT " AND pathname=%Q;"
+      "UPDATE vfile SET pathname=%Q, origname=coalesce(origname,pathname)"
+      " WHERE id=%" FSL_ID_T_PFMT ";",
+      vid, zNewName, zNewName, idv
+    );
+    if(rc) break;
+    if( !opt->dryRun ){
+      fsl_buffer * const bFullOld = fsl__cx_scratchpad(f);
+      fsl_buffer * const bFullNew = fsl__cx_scratchpad(f);
+      fsl_buffer * const bTmp = fsl__cx_scratchpad(f);
+      char const *zFullOldPath;
+      char const *zFullNewPath;
+      bool const realSymlinks = fsl_cx_allows_symlinks(f, false);
+      rc = fsl_db_get_buffer(db, bFullOld, false,
+                             "SELECT tmpfn FROM tmprn WHERE fn=%Q", zOldName);
+      if(!rc && !bFullOld->used){
+        rc = fsl_buffer_appendf(bFullOld, "%s%s", f->ckout.dir, zOldName);
+      }
+      if(0==rc) rc = fsl_buffer_appendf(bFullNew, "%s%s", f->ckout.dir, zNewName);
+      if(rc) goto merge_rename_end;
+      zFullOldPath = fsl_buffer_cstr(bFullOld);
+      zFullNewPath = fsl_buffer_cstr(bFullNew);
+      if( fsl_file_size(zFullNewPath)>=0 ){
+        rc = fsl_file_tempname(bTmp, "", NULL);
+        if(rc) goto merge_rename_end;
+        rc = fsl_cx_exec(f, "INSERT INTO tmprn(fn,tmpfn) VALUES(%Q,%B)",
+                         zNewName, bTmp);
+        if(rc) goto merge_rename_end;
+        rc = fsl_is_symlink(zFullNewPath)
+          ? fsl__symlink_copy(zFullNewPath, fsl_buffer_cstr(bTmp), realSymlinks)
+          : fsl_file_copy(zFullNewPath, fsl_buffer_cstr(bTmp));
+        if(rc){
+          rc = fsl_cx_err_set(f, rc, "Error copying file [%s].",
+                              zFullNewPath);
+        }
+        if(rc) goto merge_rename_end;
+      }
+      rc = fsl_is_symlink(zFullOldPath)
+        ? fsl__symlink_copy(zFullOldPath, zFullNewPath, realSymlinks)
+        : fsl_file_copy(zFullOldPath, zFullNewPath);
+      if(0==rc){
+        fsl_file_exec_set(zFullNewPath, !!isExe);
+        fsl_file_unlink(zFullOldPath);
+        /* ^^^ Ignore errors: not critical here */
+      }
+      merge_rename_end:
+      fsl__cx_scratchpad_yield(f, bFullOld);
+      fsl__cx_scratchpad_yield(f, bFullNew);
+      fsl__cx_scratchpad_yield(f, bTmp);
+    }
+    if(0==rc && opt->callback){
+      mState.priorName = zOldName;
+      MCB2(FSL_MERGE_FCHANGE_RENAMED,zNewName);
+    }
+  }
+  fsl_stmt_finalize(&q);
+  switch(rc){
+    case 0:
+    case FSL_RC_STEP_DONE: rc = 0; break;
+    default: goto end;
+  }
+  /**
+     TODO??? The above loop can leave temp files laying around. We
+     should(?)  to (for each tmpfn in tmprn =>
+     unlink(tmpfn)). fossil(1) does not do that, but that seems like a
+     bug.
+  */
+  /* A file that has been deleted and replaced by a renamed file will have a
+  ** NULL pathname. Change it to something that makes the output of "status"
+  ** and similar commands make sense for such files and that will (most likely)
+  ** not be an actual existing pathname.
+  */
+  rc = fsl_cx_exec(f,
+    "UPDATE vfile SET pathname=origname || ' (overwritten by rename)'"
+    " WHERE pathname IS NULL"
+  );
+  if(rc) goto end;
+  /*
+  ** Insert into V any files that are not in V or P but are in M.
+  */
+  rc = fsl_cx_prepare(f, &q,
+    "SELECT idm, fnm FROM " FSL__TABLE_FVM
+    " WHERE idp=0 AND idv=0 AND idm>0"
+  );
+  while( 0==rc && FSL_RC_STEP_ROW==(rc=fsl_stmt_step(&q)) ){
+    fsl_id_t const idm = fsl_stmt_g_id(&q, 0);
+    const char *zName;
+    fsl_buffer * const bFullName = fsl__cx_scratchpad(f);
+    rc = fsl_cx_exec(f,
+      "REPLACE INTO vfile(vid,chnged,deleted,rid,mrid,"
+                         "isexe,islink,pathname,mhash)"
+      "  SELECT %" FSL_ID_T_PFMT ",%d,0,rid,mrid,isexe,islink,pathname,"
+            "CASE WHEN rid<>mrid"
+            " THEN (SELECT uuid FROM blob WHERE blob.rid=vfile.mrid) END "
+            "FROM vfile WHERE id=%" FSL_ID_T_PFMT,
+      vid, doIntegrate
+           ? FSL_VFILE_CHANGE_INTEGRATE_MOD
+           : FSL_VFILE_CHANGE_MERGE_ADD,
+      idm);
+    if(0==rc) rc = fsl_stmt_get_text(&q, 1, &zName, NULL);
+    if(0==rc) rc = fsl_buffer_appendf(bFullName, "%s%s", f->ckout.dir, zName);
+    if(rc) goto merge_add_end;
+    fsl_merge_fchange_e fchange;
+    if( fsl_is_file_or_link(fsl_buffer_cstr(bFullName))
+        && !fsl_db_exists(db, "SELECT 1 FROM fv WHERE fn=%Q", zName) ){
+      if(opt->debug){
+        MARKER(("ADDED %s (overwrites an unmanaged file)\n", zName));
+      }
+      fchange = FSL_MERGE_FCHANGE_CONFLICT_ADDED_UNMANAGED;
+    }else{
+      if(opt->debug){
+        MARKER(("ADDED %s\n", zName));
+      }
+      fchange = FSL_MERGE_FCHANGE_ADDED;
+    }
+    if( !opt->dryRun ){
+      //undo_save(zName);
+      rc = fsl__vfile_to_ckout(f, idm, NULL);
+    }
+    merge_add_end:
+    fsl__cx_scratchpad_yield(f, bFullName);
+    if(0==rc && opt->callback){
+      MCB2(fchange,zName);
+    }
+  }
+  fsl_stmt_finalize(&q);
+  switch(rc){
+    case 0:
+    case FSL_RC_STEP_DONE: rc = 0; break;
+    default: goto end;
+  }
+
+  fsl_id_t vmergeWho = 0;
+  switch(opt->mergeType){
+    case FSL_MERGE_TYPE_CHERRYPICK:
+      vmergeWho = mid;
+      /* For a cherry-pick merge, make the default check-in comment the same
+      ** as the check-in comment on the check-in that is being merged in. */
+      if(0==rc){
+        rc = fsl_cx_exec(f,
+               "REPLACE INTO vvar(name,value)"
+               " SELECT 'ci-comment', coalesce(ecomment,comment) FROM event"
+               "  WHERE type='ci' AND objid=%" FSL_ID_T_PFMT,
+               mid);
+      }
+      break;
+    case FSL_MERGE_TYPE_BACKOUT:
+      vmergeWho = pid;
+      break;
+    case FSL_MERGE_TYPE_INTEGRATE:
+    case FSL_MERGE_TYPE_NORMAL:
+      vmergeWho = mid;
+      break;
+  }
+  if(0==rc){
+    rc = fsl__vmerge_insert(f, (int)opt->mergeType, vmergeWho);
+  }
+#undef MCB
+#undef MCB2
+  end:
+  if(opt->debug){
+    MARKER(("fsl_ckout_merge() made it to the end with rc %s.\n",
+            fsl_rc_cstr(rc)));
+  }
+  fsl__cx_scratchpad_yield(f, absPath);
+  if(0==rc){
+    fsl__renames_finalize(f);
+  }
+  fsl_stmt_finalize(&q);
+  if(inTrans){
+    if(0==rc){
+      rc = fsl_vfile_unload_except(f, vid);
+      // ^^^ not strictly needed unless we're NOT rolling back
+    }
+    int const rc2 = fsl_cx_transaction_end(f, 0!=rc);
+    if(rc2 && 0==rc) rc = rc2;
+  }
+  return rc;
+}
+
+#undef FSL__TABLE_PIVOT
+#undef FSL__TABLE_FVM
+
+#undef MARKER
+/* end of file merge.c */
 /* start of file merge3.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
@@ -33638,7 +35022,7 @@ int fsl__repo_fingerprint_search( fsl_cx * const f, fsl_id_t rcvid,
   return rc;
 }
 
-int fsl_repo_manifest_write(fsl_cx *f,
+int fsl_repo_manifest_write(fsl_cx * const f,
                             fsl_id_t manifestRid,
                             fsl_buffer * const pManifest,
                             fsl_buffer * const pHash,
@@ -33982,14 +35366,7 @@ static int fsl__rebuild_step(FslRebuildState * const frs, fsl_id_t rid,
         fsl_buffer delta = fsl_buffer_empty;
         void const * blob = 0;
         fsl_size_t deltaBlobSize = 0;
-        rc = INTCHECK fsl_stmt_get_blob(&frs->qChild, 0, &blob, &deltaBlobSize)
-          /* Library-level TODO: a heuristic/convention in fsl_buffer
-             APIs which says that if buf.mem is not NULL and buf.capacity
-             is 0 then the memory is owned elsewhere and must be copied
-             if/when it would be modified by the buffer API. That would allow
-             us to emulate some of the buffer-copy optimization which fossil does,
-             e.g. in this very spot.
-           */;
+        rc = INTCHECK fsl_stmt_get_blob(&frs->qChild, 0, &blob, &deltaBlobSize);
         if(rc) goto outro;
         fsl_buffer_external(&delta, blob, (fsl_int_t)deltaBlobSize);
         rc = INTCHECK fsl_buffer_uncompress(&delta, &delta);
@@ -34204,6 +35581,29 @@ static int fsl__rebuild(fsl_cx * const f, fsl_rebuild_opt const * const opt){
           rc = fsl__rebuild_step(&frs, rid, size, &content);
           assert(!content.mem);
         }
+        /*
+          2021-12-17: hmmm... while debugging the problem reported here:
+
+          https://fossil-scm.org/forum/forumpost/f4cc31863179f843
+
+          It was discovered that fossil will simply skip any content
+          it cannot read in this step, even if it's skipped over
+          because of a broken blob-to-delta mapping (whereas fossil's
+          test-integrity command will catch that case). If such a case
+          happens to us, fsl_content_get() fails with FSL_RC_PHANTOM.
+          That seems to me to be the right thing to do, as such a case
+          is indicative of db corruption. However, if we skip over
+          these then we cannot rebuild a repo which has such (invalid)
+          state.
+
+          Feature or bug?
+
+          For now let's keep it strict and fail if we can't fetch the
+          content. We can reevaluate that decision later if needed. We
+          can add a fsl_rebuild_opt::ignorePhantomFailure (better name
+          pending!) flag which tells us how the user would prefer to
+          deal with this.
+        */
         fsl_buffer_clear(&content);
       }
     }else{
@@ -39084,11 +40484,14 @@ int fsl__cx_init_db(fsl_cx * const f, fsl_db * const db){
   sqlite3_wal_autocheckpoint(dbh, 1);  /* Set to checkpoint frequently */
   rc = fsl_cx_exec_multi(f,
                          "PRAGMA foreign_keys=OFF;"
+                         // ^^^ vmerge table relies on this for its magical
+                         // vmerge.id values.
+                         "PRAGMA main.temp_store=FILE;"
                          "PRAGMA main.journal_mode=TRUNCATE;"
                          // ^^^ note that WAL is not possible on a TEMP db
                          // and OFF leads to undefined behaviour if
                          // ROLLBACK is used!
-                         "PRAGMA main.temp_store=FILE;");
+                         );
   if(rc) goto end;
   sqlite3_create_function(dbh, "now", 0, SQLITE_ANY, 0,
                           fsl_db_now_udf, 0, 0);
@@ -39671,20 +41074,19 @@ int fsl_vfile_changes_scan(fsl_cx * const f, fsl_id_t vid, unsigned cksigFlags){
   fsl_stmt * stUpdate = NULL;
   fsl_stmt q = fsl_stmt_empty;
   int rc = 0;
-  fsl_db * const db = fsl_needs_ckout(f);
   fsl_fstat fst = fsl_fstat_empty;
   fsl_size_t rootLen;
   fsl_buffer * fileCksum = fsl__cx_scratchpad(f);
   bool const useMtime = (cksigFlags & FSL_VFILE_CKSIG_HASH)==0
     && fsl_config_get_bool(f, FSL_CONFDB_REPO, true, "mtime-changes");
-  if(!db) return FSL_RC_NOT_A_CKOUT;
+  if(!fsl_needs_ckout(f)) return FSL_RC_NOT_A_CKOUT;
   assert(f->ckout.dir);
   if(vid<=0) vid = f->ckout.rid;
   assert(vid>=0);
   rootLen = fsl_strlen(f->ckout.dir);
   assert(rootLen);
 
-  rc = fsl_db_transaction_begin(db);
+  rc = fsl_cx_transaction_begin(f);
   if(rc) return rc;
   if(f->ckout.rid != vid){
     rc = fsl_vfile_load(f, vid,
@@ -39705,7 +41107,7 @@ int fsl_vfile_changes_scan(fsl_cx * const f, fsl_id_t vid, unsigned cksigFlags){
                "ORDER BY vf.id", vid);
 #endif
 
-  rc = fsl_db_prepare(db, &q, "SELECT "
+  rc = fsl_cx_prepare(f, &q, "SELECT "
                       /*0*/"id,"
                       /*1*/"%Q || pathname,"
                       /*2*/"vfile.mrid,"
@@ -39866,21 +41268,15 @@ int fsl_vfile_changes_scan(fsl_cx * const f, fsl_id_t vid, unsigned cksigFlags){
 #endif
     if( currentMtime!=oldMtime || changed!=oldChanged ){
       if(!stUpdate){
-        rc = fsl_db_prepare_cached(db, &stUpdate,
+        rc = fsl_cx_prepare_cached(f, &stUpdate,
                                    "UPDATE vfile SET "
                                    "mtime=?1, chnged=?2 "
                                    "WHERE id=?3 "
                                    "/*%s()*/",__func__);
         if(rc) goto end;
-      }else{
-        fsl_stmt_reset(stUpdate);
       }
-      fsl_stmt_bind_int64(stUpdate, 1, currentMtime);
-      fsl_stmt_bind_int32(stUpdate, 2, changed);
-      fsl_stmt_bind_id(stUpdate, 3, id);
-      rc = fsl_stmt_step(stUpdate);
-      if(FSL_RC_STEP_DONE!=rc) goto end;
-      rc = 0;
+      rc = fsl_stmt_bind_step(stUpdate, "IiR", currentMtime, changed, id);
+      if(rc) goto end;
       /* MARKER(("UPDATED vfile.(mtime,chnged) for: %s\n", zName)); */
     }
   }/*while(step)*/
@@ -39898,19 +41294,17 @@ int fsl_vfile_changes_scan(fsl_cx * const f, fsl_id_t vid, unsigned cksigFlags){
 #endif
   end:
   fsl__cx_scratchpad_yield(f, fileCksum);
+  if(!rc){
+    rc = fsl__ckout_clear_merge_state(f, false);
+  }
   if(!rc && (cksigFlags & FSL_VFILE_CKSIG_WRITE_CKOUT_VERSION)
      && (f->ckout.rid != vid)){
     rc = fsl__ckout_version_write(f, vid, 0);
-  }else if(rc){
-    rc = fsl_cx_uplift_db_error2(f, db, rc);
   }
   if(rc) {
-    fsl_db_transaction_rollback(db);
+    fsl_cx_transaction_end(f, true);
   }else{
-    rc = fsl_db_transaction_commit(db);
-    if(rc){
-      rc = fsl_cx_uplift_db_error2(f, db, rc);
-    }
+    rc = fsl_cx_transaction_end(f, false);
   }
   fsl_stmt_cached_yield(stUpdate);
   fsl_stmt_finalize(&q);

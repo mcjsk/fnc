@@ -3883,7 +3883,7 @@ struct fsl_diff_opt {
   */
   unsigned short contextLines;
   /**
-     Maximum column width for side-by-side, a.k.a. split, diffs.
+     Maximum column width hint for side-by-side, a.k.a. split, diffs.
 
      FSL_DIFF_BUILDER_SPLIT_TEXT truncates its content columns (as
      opposed to line numbers and its modification marker) to, at most,
@@ -4190,12 +4190,14 @@ struct fsl_diff_builder {
   */
   fsl_diff_opt * opt;
   /**
-     If not NULL, this is called once per diff to give the builder a
-     chance to perform any bootstrapping initialization or header
-     output. At the point this is called, this->cfg is assumed to have
-     been filled out properly. Diff builder implementations which
-     require dynamic resource allocation may perform it here or in
-     their factory routine(s).
+     If not NULL, this is called once per pass per diff to give the
+     builder a chance to perform any bootstrapping initialization or
+     header output. At the point this is called, this->cfg is assumed
+     to have been filled out properly. Diff builder implementations
+     which require dynamic resource allocation may perform it here or
+     in their factory routine(s).
+
+     b->lnLHS and b->lnRHS will be set to 0 before each call.
 
      This method should also reset any dynamic state of a builder so
      that it may be reused for subsequent diffs. This enables the API
@@ -4209,7 +4211,7 @@ struct fsl_diff_builder {
      The diff driver sets this->lnLHS and this->lnRHS to 0 before
      calling this.
   */
-  int (*start)(fsl_diff_builder* const);
+  int (*start)(fsl_diff_builder * const b);
 
   /**
      If this is not NULL, it is called one time at the start of each
@@ -4322,17 +4324,12 @@ struct fsl_diff_builder {
      Must return 0 on success, non-0 on error (e.g. output flushing
      fails).
   */
-  int (*finish)(fsl_diff_builder* const);
+  int (*finish)(fsl_diff_builder* const b);
   /**
      Must free any state owned by this builder, including the builder
      object. It must not generate any output.
-
-     Must return 0 on success, non-0 on error (e.g. output flushing
-     fails), but must clean up its own state and the builder object in
-     either case.
   */
   void (*finalize)(fsl_diff_builder* const);
-
   /**
      If true, this builder gets passed through the diff generation
      process twice. See this->passNumber for details.
@@ -4344,7 +4341,7 @@ struct fsl_diff_builder {
      called, starting with pass number 1. This value is only relevant
      for two-pass builders, which can use this to control their mode
      of operation, e.g. data collection in pass 1 and actual work in
-     pass 2. Note that all of the diff-building API methods are call
+     pass 2. Note that all of the diff-building API methods are called
      for both passes, including start() and finish().  Only finalize()
      is not affected by this.
   */
@@ -4495,6 +4492,40 @@ typedef enum fsl_diff_builder_e fsl_diff_builder_e;
 */
 FSL_EXPORT int fsl_diff_builder_factory( fsl_diff_builder_e type,
                                          fsl_diff_builder **pOut );
+
+/**
+   Base allocator for fsl_diff_builder instances. If extra is >0 then
+   that much extra space is allocated as part of the same memory block
+   and the pimpl member of the returned object is pointed to that
+   space. Example:
+
+   ```
+   struct MyState { int x; int y; };
+   fsl_diff_builder * b = fsl_diff_builder_alloc(sizeof(MyState));
+   struct MyState * my = (struct MyState*)b->pimpl;
+   my->x = 1;
+   my->y = 2;
+   ... populate b's members ...
+   ... use b, then clean it up ...
+   b->finalize(b);
+   ```
+
+   From within b's methods, the custom state can be accessed via its
+   `pimpl` member.
+
+   @see fsl_diff_builder_finalizer()
+*/
+FSL_EXPORT fsl_diff_builder * fsl_diff_builder_alloc(fsl_size_t extra);
+
+/**
+   This is a generic finalizer function for use as a
+   fsl_diff_builder::finalize() method. It simply zeroes out b and
+   passes it fsl_free(). This is suitable for builders created using
+   fsl_diff_builder_alloc() _only_ if their custom state manages no
+   extra memory. If they manage any custom memory then the require a
+   custom, type-specific finalizer method.
+*/
+FSL_EXPORT void fsl_diff_builder_finalizer(fsl_diff_builder * const b);
 
 /**
    This counterpart of fsl_diff_text() defines its output format in
@@ -5526,7 +5557,10 @@ FSL_EXPORT bool fsl_buffer_contains_merge_marker(fsl_buffer const *p);
    number of merge conflicts is written to *conflictCount.
 
    Returns 0 on success, FSL_RC_OOM on OOM, FSL_RC_TYPE if any input
-   appears to be binary. 
+   appears to be binary.
+
+   FIXME/TODO: return FSL_RC_DIFF_BINARY instead of FSL_RC_TYPE when
+   encountering binary inputs.
 
    @see fsl_buffer_contains_merge_marker()
 */
@@ -5957,7 +5991,7 @@ FSL_LOOKSLIKE_EOL     = (FSL_LOOKSLIKE_LONE_CR | FSL_LOOKSLIKE_LONE_LF | FSL_LOO
 
 /**
    Returns true if b appears to contain "binary" (non-UTF8/16) content,
-   else returns true.
+   else returns false.
 */
 FSL_EXPORT bool fsl_looks_like_binary(fsl_buffer const * const b);
 
@@ -6595,7 +6629,7 @@ FSL_RC_DIFF_BINARY,
 /**
    Triggered by some diff APIs to indicate that only whitespace
    changes we found and the diff was requested to ignore whitespace.
- */
+*/
 FSL_RC_DIFF_WS_ONLY,
 
 /**
@@ -11655,7 +11689,7 @@ FSL_EXPORT int fsl_card_F_compare_name( fsl_card_F const * const lhs,
    @see fsl_content_get()
 */
 FSL_EXPORT int fsl_card_F_content( fsl_cx * f, fsl_card_F const * fc,
-                                   fsl_buffer * dest );
+                                   fsl_buffer * const dest );
 
 /**
    Sets the 'G' card on a forum-post deck to a copy of the given
@@ -14042,7 +14076,7 @@ FSL_EXPORT bool fsl_repo_forbids_delta_manifests(fsl_cx * f);
    Returns 0 on success, any of numerious non-0 fsl_rc_e codes on
    error.
 */
-FSL_EXPORT int fsl_repo_manifest_write(fsl_cx *f,
+FSL_EXPORT int fsl_repo_manifest_write(fsl_cx * const f,
                                        fsl_id_t manifestRid,
                                        fsl_buffer * const manifest,
                                        fsl_buffer * const manifestUuid,
@@ -15309,12 +15343,12 @@ FSL_EXPORT int fsl_checkin_dequeue(fsl_cx * f,
                                         fsl_checkin_queue_opt const * opt);
 
 /**
-   Returns true (non-0) if the file named by zName is in f's current
-   file checkin queue.  If NO files are in the current selection
-   queue then this routine assumes that ALL files are implicitely
-   selected. As long as at least one file is enqueued (via
-   fsl_checkin_enqueue()) then this function only returns true
-   for files which have been explicitly enqueued.
+   Returns true if the file named by zName is in f's current file
+   checkin queue. If NO files are in the current selection queue then
+   this routine assumes that ALL files are implicitely selected. As
+   long as at least one file is enqueued (via fsl_checkin_enqueue())
+   then this function only returns true for files which have been
+   explicitly enqueued.
 
    If relativeToCwd then zName is resolved based on the current
    directory, otherwise it assumed to be related to the checkout's
@@ -15332,12 +15366,15 @@ FSL_EXPORT int fsl_checkin_dequeue(fsl_cx * f,
    fsl_checkin_enqueue() and fsl_checkin_dequeue() do. It
    only works with file names.
 
+   Results are undefined if f is NULL.
+
    @see fsl_checkin_enqueue()
    @see fsl_checkin_dequeue()
    @see fsl_checkin_discard()
    @see fsl_checkin_commit()
 */
-FSL_EXPORT bool fsl_checkin_is_enqueued(fsl_cx * f, char const * zName,
+FSL_EXPORT bool fsl_checkin_is_enqueued(fsl_cx * const f,
+                                        char const * zName,
                                         bool relativeToCwd);
 
 /**
@@ -15926,7 +15963,7 @@ FSL_CKUP_FCHANGE_UPDATED,
 FSL_CKUP_FCHANGE_UPDATED_BINARY,
 /** Updated with a merge by the update process. */
 FSL_CKUP_FCHANGE_MERGED,
-/** Special case of FSL_CKUP_FCHANGE_UPDATED. Merge was performed
+/** Special case of FSL_CKUP_FCHANGE_MERGED. Merge was performed
     and conflicts were detected. The newly-updated file will contain
     conflict markers.
 
@@ -15950,7 +15987,7 @@ FSL_CKUP_FCHANGE_CONFLICT_ADDED_UNMANAGED,
     edits will be left in the checkout tree. */
 FSL_CKUP_FCHANGE_CONFLICT_RM,
 /** Cannot merge if one or both of the update/updating verions of a
-    file is a symlink The updated-to version overwrites the previous
+    file is a symlink. The updated-to version overwrites the previous
     version in this case.
 
     We probably need a better name for this.
@@ -16808,59 +16845,244 @@ FSL_EXPORT int fsl_card_F_ckout_mtime(fsl_cx * const f, fsl_id_t vid,
                                       fsl_time_t * localMtime);
 
 /**
+   File change types for use with fsl_merge_state::fileChangeType.
+
+   Terminology used in some of the descriptions:
+
+   - (P) is the "pivot" - the common ancestor for the merge.
+   - (M) is the version being merged in to...
+   - (V) is current checkout version into which (M) is being merged.
+
+   Maintenance reminder: this enum's values must start at 0 and
+   increment sequentially, and FSL_MERGE_FCHANGE_count must be the
+   final entry. This is to enable the creation of arrays, e.g. for
+   keeping track (client-side) of how many times a given change type
+   has been seen during a given merge run.
+*/
+enum fsl_merge_fchange_e {
+/** 
+    Not currently used. Merge does not (and cannot without some
+    surgery) report state of files unaffected by a merge. This entry
+    exists for the case that that changes. This is the only entry in
+    the enum which is guaranteed to have a specific value: 0, so that
+    it can be used as a boolean false. */
+FSL_MERGE_FCHANGE_NONE = 0,
+/**
+   File was added to (V) from (M).
+*/
+FSL_MERGE_FCHANGE_ADDED,
+/**
+   File content was copied as-is from (M) to (V).
+*/
+FSL_MERGE_FCHANGE_COPIED,
+/**
+   File was removed from (V) via (M). a.k.a. it became "unmanaged."
+*/
+FSL_MERGE_FCHANGE_RM,
+/**
+   Content from (M) was merged into (V).
+*/
+FSL_MERGE_FCHANGE_MERGED,
+/**
+   Special case of FSL_MERGE_FCHANGE_MERGED. Merge was performed from
+   (M) to (V) and conflicts were detected. The newly-updated file will
+   contain conflict markers.
+   
+    @see fsl_buffer_contains_merge_marker()
+*/
+FSL_MERGE_FCHANGE_CONFLICT_MERGED,
+#if 0
+/** Added in the current checkout but also contained in the
+    updated-to version. The local copy takes precedence.
+*/
+FSL_MERGE_FCHANGE_CONFLICT_ADDED,
+#endif
+/**
+   Added to (V) by (M) but a local unmanaged copy exists.
+   The local copy is overwritten, per historical fossil(1) convention
+   (noting that fossil has undo support to allow one to avoid loss of
+   such a file's contents).
+*/
+FSL_MERGE_FCHANGE_CONFLICT_ADDED_UNMANAGED,
+#if 0
+/*
+  Fossil deletes merged-over removed files, regardless of whether
+  they're locally edited, so we'll do the same for now (noting that
+  fossil has undo support which can hypothetically save that case
+  from data loss). fsl_ckout_update() does not do so, but has extra
+  infastructure to deal with this. */
+/** Edited locally but removed from merged-in version. Local
+    edits will be left in the checkout tree. */
+FSL_MERGE_FCHANGE_CONFLICT_RM,
+#endif
+/**
+   Cannot merge if one or both of the update/updating versions of a
+   file is a symlink.
+
+   This case needs re-thinking. fossil(1) simply skips such merges
+   with a warning but no error. This library has no warning mechanism
+   other than to pass this code on to the fsl_merge_f() callback,
+   so that's what we do.
+
+   For UPDATE ops, the updated-to version overwrites the previous
+   version in this case. Why merge doesn't do that isn't clear, but
+   it's probably because we can have any number of merge parents and
+   choosing which one to use in the merge/replace case would be
+   impossible.
+*/
+FSL_MERGE_FCHANGE_CONFLICT_SYMLINK,
+/**
+   Indicates that a merge of binary content was requested. We
+   cannot merge binaries, so this indicates that the file in question
+   was skipped over for merge purposes.
+
+   fossil(1) simply skips over, with a warning, binaries during a
+   merge, so we do the same (for lack of a better option).
+*/
+FSL_MERGE_FCHANGE_CONFLICT_BINARY,
+/**
+   Indicates that the given file cannot be merged because no common
+   ancestor can be found for it. This condition is not strictly fatal
+   but does indicate a problem with the input data. Merging will
+   continue unless the fsl_merge_f() to which this is reported returns
+   non-0 to cancel it.  This particular status is reported very early
+   in the fsl_ckout_merge() process, before any files have been
+   written by the merge, thus the callback can effectively abort the
+   merge without side-effects by returning non-0 if this status is
+   reported to it. If the fsl_ckout_merge() call has no callback set,
+   this case will go silently undiagnosed!
+
+   Potential TODO: add a flag to fsl_merge_opt to tell it to treat any
+   of these cases as merge-fatal.
+*/
+FSL_MERGE_FCHANGE_CONFLICT_ANCESTOR,
+/**
+   File was renamed in the updated-to version. If a file is both
+   modified and renamed, it will be reported twice: once for each type
+   of change. The new name is reported via fsl_merge_state::filename
+   and the previous name via fsl_merge_state::priorName.
+*/
+FSL_MERGE_FCHANGE_RENAMED,
+/**
+   This is the number of entries in this enum, for purposes of creating,
+   e.g. arrays of counters. This entry is never reported via a
+   fsl_merge_state::fileChangeType.
+*/
+FSL_MERGE_FCHANGE_count
+};
+typedef enum fsl_merge_fchange_e fsl_merge_fchange_e;
+
+/** Reqired forward decl. */
+typedef struct fsl_merge_opt fsl_merge_opt;
+
+/**
    UNDER CONSTRUCTION! INCOMPLETE!
- */
+
+   A type for passing state to fsl_merge_f callbacks during
+   fsl_ckout_merge() processing.
+
+   For each step of a merge operation which affects a file,
+   state reflecting that change is set in one of these objects
+   and it is passed to the fsl_merge_f implementation supplied by
+   the caller.
+
+   Unlike fsl_ckout_update(), fsl_ckout_merge() reports only files
+   which are affected by a merge, not unmodified files.  Whether
+   that's a bug or a feature is not yet clear, but the merge algorithm
+   does not, as is, support reporting unaffected files.
+
+   Due to the complexity and intricacy of the merge operation, it is
+   possible that any given file will get passed to the fsl_merge_f()
+   callback more than once with a different
+   fsl_merge_state::fileChangeType value. Most notably, a file which
+   has been modified and renamed may be passed on one with
+   FSL_MERGE_FCHANGE_COPIED and once with FSL_MERGE_FCHANGE_RENAMED.
+   Whether that's a bug or a feature is as-yet undecided, but
+   (A) fossil(1) does it that way and (B) _not_ doing that would
+   require some rearchitecting.
+*/
 struct fsl_merge_state {
   /**
-     State to be passed to this->callback via the
-     fsl_merge_state::callbackState member.
+     The fsl_cx object for which the current merge is running.
+   */
+  fsl_cx * f;
+  /**
+     The options object which drives the current fsl_ckout_merge()
+     run.
   */
-  void * callbackState;
+  fsl_merge_opt const * opt;
 
-  fsl_ckup_fchange_e fileChangeType;
- 
+  /**
+     The checkout-relative name of the file affected by the merge.
+     These bytes are invalidated after the fsl_merge_f() callback
+     returns, so must be copied if the client requires them for later.
+  */
+  char const * filename;
+
+  /**
+     If this->fileChangeType is FSL_MERGE_FCHANGE_RENAMED then
+     this is the previous name of the file, else it is NULL.
+  */
+  char const * priorName;
+  
+  /**
+     Indicates the state of the file currently being merged.  Merge
+     does not support the full range fo fsl_ckup_fchange_e
+     values. TODO: list which it does or create a new enum which
+     enumerates only merge-specific change types.
+  */
+  fsl_merge_fchange_e fileChangeType;
+
+  /**
+     Indicates whether the current file was removed. A state of
+     FSL_CKUP_RM_KEPT and fileChangeType of FSL_MERGE_FCHANGE_RM
+     indicates that the file has become unmanaged but the local
+     copy was retained because it was flagged as locally modified.
+  */
   fsl_ckup_rm_state_e fileRmInfo;
 };
 typedef struct fsl_merge_state fsl_merge_state;
-/**
-   Callback type for use with fsl_merge_opt and fsl_merge().
 
-   TODO: figure out whether we can use fsl_ckout_state for this or
-   whether we need a new type. Merge and update are quite similar, so
-   the current thinking is that we can recycling this.
+/**
+   Callback type for use with fsl_merge_opt and fsl_ckout_merge().
 */
 typedef int (*fsl_merge_f)(fsl_merge_state const * const);
 
 /**
    Merge type enum for use with fsl_merge_opt::mergeType.
+
+   The values of these entries are fossil-magic values for the
+   `vmerge.id` db field and must stay in sync with fossil's
+   definition.
 */
 enum fsl_merge_type_e {
 /**
    Indicates a normal merge.
 */
-FSL_MERGE_TYPE_NORMAL,
+FSL_MERGE_TYPE_NORMAL = 0,
 /**
    Indicates an "integrate" merge, which tells the next checkin
    operation to apply a "closed" tag to the checkin from which this
    merge is performed (effectively closing its branch).
 
-   Certain merge-time state will force this merge type to behave like
-   FSL_MERGE_TYPE_NORMAL:
+   Certain merge-time state will force this merge type to silently
+   behave like FSL_MERGE_TYPE_NORMAL:
 
    - If the being-merged-in content is marked as private.
    - If the being-merged-in content is not a leaf.
 */
-FSL_MERGE_TYPE_INTEGRATE,
+FSL_MERGE_TYPE_INTEGRATE = -4,
 /**
    Indicates a cherrypick merge, pulling in only the changes made to a
    specific checkin without otherwise inheriting its lineage.
 */
-FSL_MERGE_TYPE_CHERRYPICK,
+FSL_MERGE_TYPE_CHERRYPICK = -1,
 /**
    Indicates a backout merge, a reverse cherrypick, backing out any
-   changes which were added by this->checkinRid.
+   changes which were added by the corresponding
+   fsl_merge_opt::mergeRid.
 */
-FSL_MERGE_TYPE_BACKOUT
+FSL_MERGE_TYPE_BACKOUT = -2
 };
 typedef enum fsl_merge_type_e fsl_merge_type_e;
 
@@ -16872,7 +17094,7 @@ typedef enum fsl_merge_type_e fsl_merge_type_e;
 struct fsl_merge_opt {
   /**
      The version of the repostitory to merge into the current
-     checkout. This must be the blob.rid of a checkin artifact.
+     checkout. This must be the `blob.rid` of a checkin artifact.
   */
   fsl_id_t mergeRid;
   /**
@@ -16880,47 +17102,61 @@ struct fsl_merge_opt {
      0. The default is calculated automatically based on
      this->mergeRid and this->mergeType.
 
-     This corresponds to fossil(1)'s --baseline merge flag.
+     This corresponds to fossil(1)'s `--baseline` merge flag.
+
+     fsl_ckout_merge() will fail if this is >0 and it does not refer
+     to a checkin version or if this->mergeType is
+     FSL_MERGE_TYPE_CHERRYPICK.
   */
   fsl_id_t baselineRid;
   /**
-     Specifies the merge type to perform.
+     Specifies the merge type to perform. Certain merge-internal logic
+     may override this. Specifically, integrate-merges may be treated
+     as regular merges, as documented for FSL_MERGE_TYPE_INTEGRATE.
   */
   fsl_merge_type_e mergeType;
   /**
      Gets called once per merge-updated file, passed a fsl_ckup_state
      instance with information about the merged file and related
-     metadata. May be NULL.
+     metadata. May be NULL, in which case the merge process will do as
+     much work as it can, even if that means doing certain
+     questionable things (such as skipping updates of binary files or
+     symlinks because it refuses to merge them). As a rule of thumb,
+     if fossil(1) performs a given "questional" merge features without
+     generating an error, fsl_ckout_merge() does as well. This
+     callback gives clients a chance to decide that certain states
+     _Simply Will Not Stand_ and cancel the merge by returning non-0
+     (preferably after calling fsl_cx_err_set() on the passed-in
+     fsl_merge_state::f object).
+
+     The callback is called after any on-disk changes are made to
+     the file, e.g. merging, file permissions, renaming, etc. However,
+     when this->dryRun is true, filesystem-level changes are skipped.
   */
   fsl_merge_f callback;
   /**
-     State to be passed to this->callback via the
-     fsl_merge_state::callbackState member.
+     Client-defined state for use with this->callback.
   */
   void * callbackState;
   /**
-     A hint to fsl_merge() about whether it needs to scan the checkout
-     for changes. Set this to false ONLY if the calling code calls
-     fsl_ckout_changes_scan() (or equivalent,
+     A hint to fsl_ckout_merge() about whether it needs to scan the
+     checkout for changes. Set this to false ONLY if the calling code
+     calls fsl_ckout_changes_scan() (or equivalent,
      e.g. fsl_vfile_changes_scan()) immediately before calling
-     fsl_merge(), as that function require a non-stale changes scan in
-     order to function properly.
+     fsl_ckout_merge(), as that function requires a non-stale changes
+     scan in order to function properly.
   */
   bool scanForChanges;
   /**
-     If true, on merge conflict retain the temporary files used for
-     mergin: `*-baseline`, `*-original`, and `*-merge`.  By default
-     these are removed because they're very rarely useful.
-  */
-  bool keepMergeFiles;
-  /**
      If true, the extraction process will "go through the motions" but
-     will not write any files to disk. It will perform I/O such as
-     stat()'ing to see, e.g., if it would have needed to overwrite a
-     file.
+     will not write any files to disk. It may still perform I/O such
+     as stat()'ing to see, e.g., if it would have needed to overwrite
+     a file. When in dry-run, this->callback is still called as if
+     dry-run mode were not in effect. Thus the on-disk state may not
+     actually reflect what the callback sees when dry-run mode is
+     active.
   */
   bool dryRun;
-
   /**
      This flag is not part of the public API and will be removed
      once the merge operation's development has settled down.
@@ -16931,38 +17167,38 @@ struct fsl_merge_opt {
 
      - How to handle fossil's --binary GLOBPATTERN flag. Plain string
      or a glob list object or a stateful predicate function or... ?
+
+     We currently rely entirely on the global `binary-glob` setting.
   */
 };
-/** Convenience typedef. */
-typedef struct fsl_merge_opt fsl_merge_opt;
 /** Initialized-with-defaults fsl_merge_opt structure, intended for
     const-copy initialization. */
 #define fsl_merge_opt_empty_m \
   {-1/*mergeRid*/,0/*baselineRid*/, \
    FSL_MERGE_TYPE_NORMAL/*mergeType*/, \
    NULL/*callback*/, NULL/*callbackState*/, \
-   true/*scanForChanges*/, false/*keepMergeFiles*/, \
+   true/*scanForChanges*/, \
    false/*dryRun*/,0/*debug*/}
 /** Initialized-with-defaults fsl_merge_opt structure, intended for
     non-const copy initialization. */
 extern const fsl_merge_opt fsl_merge_opt_empty;
 
 /**
-   UNDER CONSTRUCTION and NOT YET IMPLEMENTED for the foreseeable
-   future.
+   UNDER CONSTRUCTION and not yet well-tested.
 
    Performs a "merge" operation on the current checkout, merging in
    version opt->mergeRid. If that version has already been merged,
    this call has no SCM-related side effects.
 
    Returns 0 on success, any number of non-0 codes on error,
-   including, but not limited to:
+   including, _but not limited to_:
 
    - FSL_RC_NOT_A_CKOUT if f has no opened checkout.
 
    - FSL_RC_OOM on allocation error.
 
-   - FSL_RC_TYPE if opt->mergeRid does to refer to a checkin.
+   - FSL_RC_TYPE if opt->mergeRid or opt->baselineRid do to refer to
+     a checkin.
 
    - FSL_RC_PHANTOM if a file participating in the merge is
      a phantom.
@@ -16979,11 +17215,19 @@ extern const fsl_merge_opt fsl_merge_opt_empty;
    - Any number of DB- or I/O-related codes, as well as codes from
      underlying APIs such as fsl_vfile_changes_scan().
 
-   For most errors, f's error state will be updated with a description
-   of the problem.
+   For all but the most trivial argument validation errors or
+   allocation errors, f's error state will be updated with a
+   description of the problem.
 
-   Reminder: there are certain illegal combinations of merge state
-   which may require adding new result codes for. e.g. a no-op merge.
+   TODOs and potential TODOs:
+
+   - There are certain illegal combinations of merge state which may
+     require adding new result codes for. e.g. a no-op merge.
+
+   - Empty directories may be left behind when a merge removes all
+     files in a directory. fsl_ckout_update() handles that case but
+     fsl_ckout_merge() currently does not.
+
 */
 FSL_EXPORT int fsl_ckout_merge(fsl_cx * const f, fsl_merge_opt const * const opt);
 
@@ -19440,10 +19684,15 @@ bool fsl__is_reserved_fn_windows(const char *zPath, fsl_int_t nameLen);
 
 /** @internal
 
-   Clears any pending merge state from the checkout db's vmerge table.
-   Returns 0 on success.
+   Clears any pending merge state from the f's checkout db's vmerge
+   table. Returns 0 on success, non-0 on db error.
+
+   If fullWipe is true, it clears all vfile contents uncondtionally,
+   else it clears only entries for which the corresponding vfile
+   entries are marked as unchanged and then cleans up remaining merge
+   state if no file-level merge changes are pending.
 */
-int fsl__ckout_clear_merge_state( fsl_cx *f );
+int fsl__ckout_clear_merge_state( fsl_cx * const f, bool fullWipe );
 
 
 /** @internal
@@ -20699,7 +20948,7 @@ int fsl_repo_install_schema_forum(fsl_cx *f);
 
     Project and Code Conventions...
 
-    Foreward: all of this more or less evolved organically or was
+    Foreword: all of this more or less evolved organically or was
     inherited from fossil(1) (where it evolved organically, or was
     inherited from sqilte (where it evol...)), and is written up here
     more or less as a formality. Historically i've not been a fan of
@@ -20741,20 +20990,29 @@ int fsl_repo_install_schema_forum(fsl_cx *f);
     encouraged use an "f-word" (as it were), simply out of deference
     to long-standing software naming conventions.
 
+    - Internal APIs, especially non-static ones, start with `fsl__` or
+    `FSL__`, with two underscores. Such APIs must never be used in
+    client-side code.
+
     - Public-API structs and functions use lower_underscore_style().
     Static/internal APIs may use different styles. It's not uncommon
     to see UpperCamelCase for file-scope structs.
 
+    - Function parameters and function-scope vars have no set
+    conventions - implementors are free to name those however they
+    like.
+
     - Overall style, especially scope blocks and indentation, should
     follow Fossil's.  We are _not at all_ picky about whether or not
     there is a space after/before parens in if( foo ), and similar
-    small details, just the overall code pattern.
+    small details, just the overall code pattern and two-space
+    indentation. Hard tabs are verboten.
 
     - Structs and enums all get the optional typedef so that they do
     not need to be qualified with 'struct' resp. 'enum' when
     used. Because of how doxygen tracks those, the typedef should be
     separate from the struct declaration, rather than combinding
-    those.
+    those into a single declaration.
 
     - Function typedefs are named fsl_XXX_f. Implementations of such
     typedefs/interfaces are typically named fsl_XXX_f_SUFFIX(), where
@@ -20770,8 +21028,8 @@ int fsl_repo_install_schema_forum(fsl_cx *f);
     e.g. fsl_foo_get() and fsl_foo_set() rather than fsl_get_foo() and
     fsl_get_foo(). The primary reasons are (A) sortability for
     document processors and (B) they more naturally match with OO API
-    conventions, e.g.  noun.verb(). A few cases knowingly violate this
-    convention for the sake of readability or sorting of several
+    conventions, e.g. `noun.verb()`. A few cases knowingly violate
+    this convention for the sake of readability or sorting of several
     related functions (e.g. fsl_db_get_TYPE() instead of
     fsl_db_TYPE_get()).
 
@@ -20779,13 +21037,13 @@ int fsl_repo_install_schema_forum(fsl_cx *f);
     a const instance named fsl_STRUCT_NAME_empty, and possibly by a
     macro named fsl_STRUCT_NAME_empty_m, both of which are
     "default-initialized" instances of that struct. This is superiour
-    to using memset() for struct initialization because we can define
-    (and document) arbitrary default values and all clients who
+    to using `memset()` for struct initialization because we can
+    define (and document) arbitrary default values and all clients who
     copy-construct them are unaffected by many types of changes to the
     struct's signature (though they may need a recompile). The
     intention of the fsl_STRUCT_NAME_empty_m macro is to provide a
     struct-embeddable form for use in other structs or
-    copy-initialization of const structs, and the _m macro is always
+    copy-initialization of const structs, and the `_m` macro is always
     used to initialize its const struct counterpart. e.g. the library
     guarantees that fsl_cx_empty_m (a macro representing an empty
     fsl_cx instance) holds the same default values as fsl_cx_empty (a
@@ -20798,14 +21056,14 @@ int fsl_repo_install_schema_forum(fsl_cx *f);
     potential values, e.g. <0, 0, >0). fsl_int_t also guarantees that
     it will be 64-bit if available, so can be used for places where
     large values are needed but a negative value is legal (or handy),
-    e.g. fsl_strndup()'s second argument. The use of the fsl_xxx_t
-    typedefs, rather than (unsigned) int, is primarily for
-    readability/documentation, e.g. so that readers can know
-    immediately that the function uses a given argument or return
-    value following certain API-wide semantics. It also allows us to
-    better define platform-portable printf/scanf-style format
-    modifiers for them (analog to C99's PRIi32 and friends), which
-    often come in handy.
+    e.g. the final arguments for fsl_strndup() and
+    fsl_buffer_append(). The use of the fsl_xxx_t typedefs, rather
+    than (unsigned) int, is primarily for readability/documentation,
+    e.g. so that readers can know immediately that the function uses a
+    given argument or return value following certain API-wide
+    semantics. It also allows us to better define platform-portable
+    printf/scanf-style format modifiers for them (analog to C99's
+    PRIi32 and friends), which often come in handy.
 
     - Signed vs. unsigned types for size/length arguments: use the
     fsl_int_t (signed) argument type when the client may legally pass
