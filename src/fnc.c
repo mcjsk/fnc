@@ -112,8 +112,8 @@
 # endif /* HAVE_STRTONUM */
 #endif
 
-#if !defined(__dead)
-#define __dead
+#ifndef __dead
+#define __dead	__attribute__((noreturn))
 #endif
 
 #ifndef TAILQ_FOREACH_SAFE
@@ -812,6 +812,12 @@ struct fnc_branch_view_state {
 	bool				 show_id;
 };
 
+struct position {
+	int	col;
+	int	line;
+	int	offset;
+};
+
 TAILQ_HEAD(view_tailhead, fnc_view);
 struct fnc_view {
 	TAILQ_ENTRY(fnc_view)	 entries;
@@ -819,6 +825,7 @@ struct fnc_view {
 	PANEL			*panel;
 	struct fnc_view		*parent;
 	struct fnc_view		*child;
+	struct position		 pos;
 	union {
 		struct fnc_diff_view_state	diff;
 		struct fnc_tl_view_state	timeline;
@@ -891,11 +898,11 @@ static int		 timeline_scroll_down(struct fnc_view *, int);
 static void		 timeline_scroll_up(struct fnc_tl_view_state *, int);
 static void		 select_commit(struct fnc_tl_view_state *);
 static int		 request_new_view(struct fnc_view **, struct fnc_view *,
-			    enum fnc_view_id, int);
+			    enum fnc_view_id);
 static int		 init_new_view(struct fnc_view **, struct fnc_view *,
-			    enum fnc_view_id, int, int, int);
-static int		 view_set_split(struct fnc_view *, int *, int *, int *);
-static int		 offset_selected_line(struct fnc_view *, int *);
+			    enum fnc_view_id, int, int);
+static int		 view_set_split(struct fnc_view *, int *, int *);
+static int		 offset_selected_line(struct fnc_view *);
 static int		 view_split_start_col(int);
 static int		 view_split_start_ln(int);
 static int		 make_splitscreen(struct fnc_view *);
@@ -960,7 +967,7 @@ static int		 fnc_pathlist_insert(struct fnc_pathlist_entry **,
 static int		 fnc_path_cmp(const char *, const char *, size_t,
 			    size_t);
 static void		 fnc_pathlist_free(struct fnc_pathlist_head *);
-static int		 browse_commit_tree(struct fnc_view **, int,
+static int		 browse_commit_tree(struct fnc_view **, int, int,
 			    struct commit_entry *, const char *);
 static int		 open_tree_view(struct fnc_view *, const char *,
 			    fsl_id_t);
@@ -1045,13 +1052,13 @@ static int		 match_branchlist_entry(struct fnc_branchlist_entry *,
 static int		 close_branch_view(struct fnc_view *);
 static void		 fnc_free_branches(struct fnc_branchlist_head *);
 static void		 fnc_branch_close(struct fnc_branch *);
-static int		 view_is_parent(struct fnc_view *);
+static bool		 view_is_parent(struct fnc_view *);
 static void		 view_set_child(struct fnc_view *, struct fnc_view *);
 static int		 view_close_child(struct fnc_view *);
 static int		 close_tree_view(struct fnc_view *);
 static int		 close_timeline_view(struct fnc_view *);
 static int		 close_diff_view(struct fnc_view *);
-static int		 view_resize(struct fnc_view *);
+static int		 view_resize(struct fnc_view *, enum fnc_view_mode);
 static bool		 screen_is_split(struct fnc_view *);
 static bool		 screen_is_shared(struct fnc_view *);
 static void		 fnc_resizeterm(void);
@@ -1879,7 +1886,7 @@ view_loop(struct fnc_view *view)
 				view->parent->focus_child = false;
 				/* Restore fullscreen line height. */
 				view->parent->nlines = view->parent->lines;
-				rc = view_resize(view->parent);
+				rc = view_resize(view->parent, VIEW_SPLIT_NONE);
 				if (rc)
 					goto end;
 			} else
@@ -2762,14 +2769,14 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 		rec_sigwinch = 0;
 		rec_sigcont = 0;
 		TAILQ_FOREACH(v, views, entries) {
-			rc = view_resize(v);
+			rc = view_resize(v, v->mode);
 			if (rc)
 				return rc;
 			rc = v->input(new, v, KEY_RESIZE);
 			if (rc)
 				return rc;
 			if (v->child) {
-				rc = view_resize(v->child);
+				rc = view_resize(v->child, v->child->mode);
 				if (rc)
 					return rc;
 				rc = v->child->input(new, v->child, KEY_RESIZE);
@@ -2789,6 +2796,12 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 		help(view);
 		break;
 	case 'q':
+		if (view->parent && view->parent->vid == FNC_VIEW_TIMELINE &&
+		    view->mode == VIEW_SPLIT_HRZN) {
+			/* May need more commits to fill fullscreen. */
+			rc = request_tl_commits(view->parent);
+			view->parent->mode = VIEW_SPLIT_NONE;
+		}
 		rc = view->input(new, view, ch);
 		view->egress = true;
 		break;
@@ -2861,24 +2874,29 @@ toggle_fullscreen(struct fnc_view **new, struct fnc_view *view)
 		if (view->child == NULL)
 			return rc;
 		if (screen_is_split(view->child)) {
-			view->active = false;
-			view->child->active = true;
-			rc = make_fullscreen(view->child);
+			rc = make_fullscreen(view);
+			if (!rc)
+				rc = make_fullscreen(view->child);
 		} else
 			rc = make_splitscreen(view->child);
-		if (rc)
-			return rc;
-		rc = view->child->input(new, view->child, KEY_RESIZE);
+		if (!rc)
+			rc = view->child->input(new, view->child, KEY_RESIZE);
 	} else {
-		if (screen_is_split(view)) {
-			view->parent->active = false;
-			view->active = true;
+		if (screen_is_split(view))
 			rc = make_fullscreen(view);
-		} else
+		else
 			rc = make_splitscreen(view);
-		if (rc)
-			return rc;
-		rc = view->input(new, view, KEY_RESIZE);
+		if (!rc)
+			rc = view->input(new, view, KEY_RESIZE);
+	}
+
+	if (!rc && view->vid == FNC_VIEW_TIMELINE)
+		rc = request_tl_commits(view);
+	if (!rc) {
+		if (view->parent)
+			rc = offset_selected_line(view->parent);
+		if (!rc)
+			rc = offset_selected_line(view);
 	}
 
 	return rc;
@@ -3240,8 +3258,7 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case KEY_ENTER:
 	case ' ':
 	case '\r':
-		rc = request_new_view(new_view, view, FNC_VIEW_DIFF,
-		    s->selected_idx);
+		rc = request_new_view(new_view, view, FNC_VIEW_DIFF);
 		break;
 	case 'b':
 		if (view_is_parent(view))
@@ -3322,22 +3339,7 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			rc = 0;
 			break;
 		}
-		if (view_is_parent(view))
-			start_col = view_split_start_col(view->start_col);
-		rc = browse_commit_tree(&tree_view, start_col,
-		    s->selected_commit, s->path);
-		if (rc)
-			break;
-		view->active = false;
-		tree_view->active = true;
-		if (view_is_parent(view)) {
-			rc = view_close_child(view);
-			if (rc)
-				return rc;
-			view_set_child(view, tree_view);
-			view->focus_child = true;
-		} else
-			*new_view = tree_view;
+		rc = request_new_view(&tree_view, view, FNC_VIEW_TREE);
 		break;
 	case 'q':
 		s->quit = 1;
@@ -3428,18 +3430,18 @@ move_tl_cursor_up(struct fnc_view *view, bool page, bool end)
 
 static int
 request_new_view(struct fnc_view **new_view, struct fnc_view *view,
-    enum fnc_view_id request, int idx)
+    enum fnc_view_id request)
 {
 	struct fnc_view	*requested = NULL;
 	int		 x = 0, y = 0, rc = FSL_RC_OK;
 
 	if (view_is_parent(view)) {
-		rc = view_set_split(view, &idx, &x, &y);
+		rc = view_set_split(view, &x, &y);
 		if (rc)
 			return rc;
 	}
 
-	rc = init_new_view(&requested, view, request, x, y, idx);
+	rc = init_new_view(&requested, view, request, x, y);
 	if (rc || !requested)
 		return rc;
 
@@ -3462,7 +3464,7 @@ request_new_view(struct fnc_view **new_view, struct fnc_view *view,
 
 static int
 init_new_view(struct fnc_view **new_view, struct fnc_view *view,
-    enum fnc_view_id request, int x, int y, int idx)
+    enum fnc_view_id request, int x, int y)
 {
 	int rc = FSL_RC_OK;
 
@@ -3473,14 +3475,18 @@ init_new_view(struct fnc_view **new_view, struct fnc_view *view,
 			break;
 		rc = init_diff_commit(new_view, x, y,
 		    s->selected_commit->commit, view);
-		s->selected_idx = idx;
 		break;
 	}
 	case FNC_VIEW_BLAME: {
 		struct fnc_tree_view_state *s = &view->state.tree;
 		rc = blame_tree_entry(new_view, x, y, s->selected_entry,
 		    &s->parents, s->commit_id);
-		s->selected_idx = idx;
+		break;
+	}
+	case FNC_VIEW_TREE: {
+		struct fnc_tl_view_state *s = &view->state.timeline;
+		rc = browse_commit_tree(new_view, x, y, s->selected_commit,
+		    s->path);
 		/* FALL THROUGH */
 	}
 	default:
@@ -3500,8 +3506,7 @@ init_new_view(struct fnc_view **new_view, struct fnc_view *view,
  * deduct the offset from *selected.
  */
 static int
-view_set_split(struct fnc_view *view, int *selected, int *start_col,
-    int *start_ln)
+view_set_split(struct fnc_view *view, int *start_col, int *start_ln)
 {
 	char	*mode;
 	int	 rc = FSL_RC_OK;
@@ -3515,11 +3520,11 @@ view_set_split(struct fnc_view *view, int *selected, int *start_col,
 		*start_ln = view_split_start_ln(view->lines);
 		view->mode = VIEW_SPLIT_HRZN;
 		view->nlines = *start_ln;
-		rc = view_resize(view);
+		rc = view_resize(view, VIEW_SPLIT_NONE);
 		if (rc)
 			goto end;
 		view->nlines = *start_ln - 1;
-		rc = offset_selected_line(view, selected);
+		rc = offset_selected_line(view);
 	}
 end:
 	fsl_free(mode);
@@ -3527,33 +3532,48 @@ end:
 }
 
 static int
-offset_selected_line(struct fnc_view *view, int *selected)
+offset_selected_line(struct fnc_view *view)
 {
-	int	(*offset)(struct fnc_view *, int);
-	int	header, move, rc = FSL_RC_OK;
+	int	(*scrolld)(struct fnc_view *, int);
+	int	  header, offset, rc = FSL_RC_OK;
+	int	 *selected;
 
 	switch (view->vid) {
-	case FNC_VIEW_TIMELINE:
-		offset = &timeline_scroll_down;
+	case FNC_VIEW_TIMELINE: {
+		struct fnc_tl_view_state *s = &view->state.timeline;
+		scrolld = &timeline_scroll_down;
 		header = 2;
+		selected = &s->selected_idx;
 		break;
-	case FNC_VIEW_TREE:
-		offset = &tree_scroll_down;
+	}
+	case FNC_VIEW_TREE: {
+		struct fnc_tree_view_state *s = &view->state.tree;
+		scrolld = &tree_scroll_down;
 		header = 4;
+		selected = &s->selected_idx;
 		break;
-	case FNC_VIEW_BRANCH:
-		offset = &branch_scroll_down;
+	}
+	case FNC_VIEW_BRANCH: {
+		struct fnc_branch_view_state *s = &view->state.branch;
+		scrolld = &branch_scroll_down;
 		header = 1;
+		selected = &s->selected;
+		break;
+	}
 	default:
-		offset = NULL;
+		selected = NULL;
+		scrolld = NULL;
 		header = 0;
 		break;
 	}
 
-	if (*selected > view->nlines - header) {
-		move = ABS(view->nlines - *selected - header);
-		rc = offset ? offset(view, move) : rc;
-		*selected -= move;
+
+	if (selected && *selected > view->nlines - header) {
+		offset = ABS(view->nlines - *selected - header);
+		rc = scrolld ? scrolld(view, offset) : rc;
+		view->pos.line = *selected;
+		*selected -= offset;
+		view->pos.offset = offset;
 	}
 
 	return rc;
@@ -3647,7 +3667,7 @@ make_splitscreen(struct fnc_view *view)
 	view->lines = LINES;
 	view->cols = COLS;
 
-	rc = view_resize(view);
+	rc = view_resize(view, view->mode);
 	if (rc)
 		return rc;
 
@@ -3672,7 +3692,7 @@ make_fullscreen(struct fnc_view *view)
 	view->lines = LINES;
 	view->cols = COLS;
 
-	rc = view_resize(view);
+	rc = view_resize(view, VIEW_SPLIT_NONE);
 	if (rc)
 		return rc;
 
@@ -5353,7 +5373,7 @@ screen_is_shared(struct fnc_view *view)
 	return view->active;
 }
 
-static int
+static bool
 view_is_parent(struct fnc_view *view)
 {
 	return view->parent == NULL;
@@ -5620,13 +5640,6 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		show_diff_status(view);
 		rc = create_diff(s);
 		break;
-	case 'q':
-		if (s->timeline_view && view->mode == VIEW_SPLIT_HRZN) {
-			/* May need more commits to fill fullscreen. */
-			rc = request_tl_commits(s->timeline_view);
-			s->timeline_view->mode = VIEW_SPLIT_NONE;
-		}
-		/* FALL THROUGH */
 	default:
 		break;
 	}
@@ -5775,7 +5788,7 @@ fnc_resizeterm(void)
 }
 
 static int
-view_resize(struct fnc_view *view)
+view_resize(struct fnc_view *view, enum fnc_view_mode mode)
 {
 	int	 nlines, ncols, rc = FSL_RC_OK;
 
@@ -5800,7 +5813,7 @@ view_resize(struct fnc_view *view)
 	view->lines = LINES;
 	view->cols = COLS;
 
-	if (view->child) {
+	if (view->child && mode != VIEW_SPLIT_NONE) {
 		view->child->start_col = view_split_start_col(view->start_col);
 		if (view->mode == VIEW_SPLIT_HRZN || !view->child->start_col) {
 			rc = make_fullscreen(view->child);
@@ -6172,13 +6185,13 @@ end:
 }
 
 static int
-browse_commit_tree(struct fnc_view **new_view, int start_col,
+browse_commit_tree(struct fnc_view **new_view, int start_col, int start_ln,
     struct commit_entry *entry, const char *path)
 {
 	struct fnc_view	*tree_view;
 	int		 rc = 0;
 
-	tree_view = view_open(0, 0, 0, start_col, FNC_VIEW_TREE);
+	tree_view = view_open(0, 0, start_ln, start_col, FNC_VIEW_TREE);
 	if (tree_view == NULL)
 		return RC(FSL_RC_ERROR, "%s", "view_open");
 
@@ -7159,7 +7172,7 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			s->selected_entry = parent->selected_entry;
 			s->selected_idx = parent->selected_idx;
 			if (s->selected_idx > view->nlines - 3)
-				offset_selected_line(view, &s->selected_idx);
+				offset_selected_line(view);
 			fsl_free(parent);
 		} else if (s->selected_entry != NULL &&
 		    S_ISDIR(s->selected_entry->mode)) {
@@ -7205,8 +7218,7 @@ blame_selected_file(struct fnc_view **new_view, struct fnc_view *view)
 	if (fsl_looks_like_binary(&buf))
 		fnc_print_msg(view, "-- cannot blame binary file --", false);
 	else
-		rc = request_new_view(new_view, view, FNC_VIEW_BLAME,
-		    s->selected_idx);
+		rc = request_new_view(new_view, view, FNC_VIEW_BLAME);
 end:
 	fsl_buffer_clear(&buf);
 	return rc;
