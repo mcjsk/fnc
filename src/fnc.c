@@ -986,6 +986,8 @@ static int		 tree_search_next(struct fnc_view *);
 static int		 tree_entry_path(char **, struct fnc_parent_trees *,
 			    struct fnc_tree_entry *);
 static int		 draw_tree(struct fnc_view *, const char *);
+static int		 blame_selected_file(struct fnc_view **,
+			    struct fnc_view *);
 static int		 timeline_tree_entry(struct fnc_view **, int,
 			    struct fnc_tree_view_state *);
 static void		 tree_scroll_up(struct fnc_tree_view_state *, int);
@@ -1063,6 +1065,7 @@ static void		 sigcont_handler(int);
 static int		 strtonumcheck(long *, const char *, const int,
 			    const int);
 static int		 fnc_date_to_mtime(double *, const char *, int);
+static void		 fnc_print_msg(struct fnc_view *, const char *, bool);
 static char		*fnc_strsep (char **, const char *);
 static bool		 fnc_str_has_upper(const char *);
 static int		 fnc_make_sql_glob(char **, char **, const char *, bool);
@@ -3291,17 +3294,9 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		if (rc) {
 			if (rc != FSL_RC_BREAK)
 				return rc;
-			wattr_on(view->window, A_BOLD, NULL);
-			mvwaddstr(view->window,
-			    view->start_ln + view->nlines - 1, 0,
-			    "-- no matching commits --");
-			wclrtoeol(view->window);
-			wattr_off(view->window, A_BOLD, NULL);
+			fnc_print_msg(view, "-- no matching commits --", true);
 			fcli_err_reset();
 			rc = 0;
-			update_panels();
-			doupdate();
-			sleep(1);
 			break;
 		}
 		view->active = false;
@@ -3321,17 +3316,10 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			break;
 		if (!fsl_rid_is_a_checkin(fcli_cx(),
 		    s->selected_commit->commit->rid)) {
-			wattr_on(view->window, A_BOLD, NULL);
-			mvwaddstr(view->window,
-			    view->start_ln + view->nlines - 1, 0,
-			    "-- tree requires check-in artifact --");
-			wclrtoeol(view->window);
-			wattr_off(view->window, A_BOLD, NULL);
+			fnc_print_msg(view,
+			    "-- tree requires check-in artifact --", true);
 			fcli_err_reset();
 			rc = 0;
-			update_panels();
-			doupdate();
-			sleep(1);
 			break;
 		}
 		if (view_is_parent(view))
@@ -7141,7 +7129,8 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 				s->selected_idx = s->ndisplayed - 1;
 			break;
 		}
-		tree_scroll_down(view, view->nlines - 3);
+		tree_scroll_down(view, MIN(view->nlines - 3,
+		    s->tree->nentries - s->selected_entry->idx - 1));
 		break;
 	case KEY_BACKSPACE:
 	case KEY_ENTER:
@@ -7185,10 +7174,8 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 				break;
 			}
 		} else if (s->selected_entry != NULL &&
-		    S_ISREG(s->selected_entry->mode)) {
-			rc = request_new_view(new_view, view, FNC_VIEW_BLAME,
-			    s->selected_idx);
-		}
+		    S_ISREG(s->selected_entry->mode))
+			rc = blame_selected_file(new_view, view);
 		break;
 	case KEY_RESIZE:
 		if (view->nlines >= 4 && s->selected_idx >= view->nlines - 3)
@@ -7198,6 +7185,30 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		break;
 	}
 
+	return rc;
+}
+
+static int
+blame_selected_file(struct fnc_view **new_view, struct fnc_view *view)
+{
+	fsl_cx				*const f = fcli_cx();
+	struct fnc_tree_view_state	*s = &view->state.tree;
+	fsl_buffer			 buf = fsl_buffer_empty;
+	fsl_id_t			 fid;
+	int				 rc = FSL_RC_OK;
+
+	fid = fsl_uuid_to_rid(f, s->selected_entry->uuid);
+	rc = fsl_content_get(f, fid, &buf);
+	if (rc)
+		goto end;
+
+	if (fsl_looks_like_binary(&buf))
+		fnc_print_msg(view, "-- cannot blame binary file --", false);
+	else
+		rc = request_new_view(new_view, view, FNC_VIEW_BLAME,
+		    s->selected_idx);
+end:
+	fsl_buffer_clear(&buf);
 	return rc;
 }
 
@@ -8132,6 +8143,10 @@ run_blame(struct fnc_view *view)
 	rc = fsl_card_F_content(f, cf, &buf);
 	if (rc)
 		goto end;
+	if (fsl_looks_like_binary(&buf)) {
+		rc = RC(FSL_RC_DIFF_BINARY, "%s", "cannot blame binary file");
+		goto end;
+	}
 
 	/*
 	 * We load f with the actual file content to map line offsets so we
@@ -8698,14 +8713,7 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 				if (m == NULL)
 					rc = RC(FSL_RC_ERROR, "%s",
 					    "fsl_mprintf");
-				wattr_on(view->window, A_BOLD, NULL);
-				mvwaddstr(view->window,
-				    view->start_ln + view->nlines - 1, 0, m);
-				wclrtoeol(view->window);
-				wattr_off(view->window, A_BOLD, NULL);
-				update_panels();
-				doupdate();
-				sleep(1);
+				fnc_print_msg(view, m, true);
 				fsl_deck_finalize(&d);
 				fsl_free(pid);
 				fsl_free(m);
@@ -9996,6 +10004,19 @@ strtonumcheck(long *ret, const char *nstr, const int min, const int max)
 
 	*ret = n;
 	return 0;
+}
+
+static void
+fnc_print_msg(struct fnc_view *view, const char *msg, bool clrtoeol)
+{
+	wattr_on(view->window, A_BOLD, NULL);
+	mvwaddstr(view->window, view->nlines - 1, 0, msg);
+	if (clrtoeol)
+		wclrtoeol(view->window);
+	wattr_off(view->window, A_BOLD, NULL);
+	update_panels();
+	doupdate();
+	sleep(1);
 }
 
 /*
