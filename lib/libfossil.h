@@ -5,7 +5,7 @@
 #  include "config.h"
 #endif
 #include "libfossil-config.h"
-/* start of file ../include/fossil-scm/fossil-config.h */
+/* start of file ./include/fossil-scm/fossil-config.h */
 #if !defined (ORG_FOSSIL_SCM_FSL_CONFIG_H_INCLUDED)
 #define ORG_FOSSIL_SCM_FSL_CONFIG_H_INCLUDED
 /*
@@ -250,39 +250,8 @@ typedef int64_t fsl_time_t;
 
 #endif
 /* ORG_FOSSIL_SCM_FSL_CONFIG_H_INCLUDED */
-/* end of file ../include/fossil-scm/fossil-config.h */
-/* start of file ../include/fossil-scm/fossil.h */
-/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
-/* vim: set ts=2 et sw=2 tw=80: */
-#if !defined(ORG_FOSSIL_SCM_LIBFOSSIL_H_INCLUDED)
-#define ORG_FOSSIL_SCM_LIBFOSSIL_H_INCLUDED
-/*
-  Copyright 2013-2021 The Libfossil Authors, see LICENSES/BSD-2-Clause.txt
-
-  SPDX-License-Identifier: BSD-2-Clause-FreeBSD
-  SPDX-FileCopyrightText: 2021 The Libfossil Authors
-  SPDX-ArtifactOfProjectName: Libfossil
-  SPDX-FileType: Code
-
-  Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
-*/
-/** @file fossil.h
-
-  This file is the primary header for the public APIs. It includes
-  various other header files. They are split into multiple headers
-  primarily becuase my lower-end systems choke on syntax-highlighting
-  them and browsing their (large) Doxygen output.
-*/
-
-/*
-   fossil-config.h MUST be included first so we can set some
-   portability flags and config-dependent typedefs!
-*/
-
-#endif
-/* ORG_FOSSIL_SCM_LIBFOSSIL_H_INCLUDED */
-/* end of file ../include/fossil-scm/fossil.h */
-/* start of file ../include/fossil-scm/fossil-util.h */
+/* end of file ./include/fossil-scm/fossil-config.h */
+/* start of file ./include/fossil-scm/fossil-util.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_UTIL_H_INCLUDED)
@@ -6094,8 +6063,8 @@ FSL_EXPORT bool fsl_might_be_utf16(fsl_buffer const * const b, bool * isReversed
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_UTIL_H_INCLUDED */
-/* end of file ../include/fossil-scm/fossil-util.h */
-/* start of file ../include/fossil-scm/fossil-core.h */
+/* end of file ./include/fossil-scm/fossil-util.h */
+/* start of file ./include/fossil-scm/fossil-core.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_CORE_H_INCLUDED)
@@ -8315,8 +8284,8 @@ FSL_EXPORT time_t fsl_cx_time_adj(fsl_cx const * f, time_t clock);
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_CORE_H_INCLUDED */
-/* end of file ../include/fossil-scm/fossil-core.h */
-/* start of file ../include/fossil-scm/fossil-db.h */
+/* end of file ./include/fossil-scm/fossil-core.h */
+/* start of file ./include/fossil-scm/fossil-db.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_DB_H_INCLUDED)
@@ -10177,8 +10146,8 @@ FSL_EXPORT int fsl_stmt_bind_step( fsl_stmt * st, char const * fmt, ... );
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_DB_H_INCLUDED */
-/* end of file ../include/fossil-scm/fossil-db.h */
-/* start of file ../include/fossil-scm/fossil-hash.h */
+/* end of file ./include/fossil-scm/fossil-db.h */
+/* start of file ./include/fossil-scm/fossil-hash.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_HASH_H_INCLUDED)
@@ -10719,8 +10688,8 @@ FSL_EXPORT const char * fsl_hash_type_name(fsl_hash_types_e h, const char *zUnkn
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_HASH_H_INCLUDED */
-/* end of file ../include/fossil-scm/fossil-hash.h */
-/* start of file ../include/fossil-scm/fossil-repo.h */
+/* end of file ./include/fossil-scm/fossil-hash.h */
+/* start of file ./include/fossil-scm/fossil-repo.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_REPO_H_INCLUDED)
@@ -14538,8 +14507,8 @@ FSL_EXPORT int fsl_branch_of_rid(fsl_cx * const f, fsl_int_t rid,
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_REPO_H_INCLUDED */
-/* end of file ../include/fossil-scm/fossil-repo.h */
-/* start of file ../include/fossil-scm/fossil-checkout.h */
+/* end of file ./include/fossil-scm/fossil-repo.h */
+/* start of file ./include/fossil-scm/fossil-checkout.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_CHECKOUT_H_INCLUDED)
@@ -17236,8 +17205,8 @@ FSL_EXPORT int fsl_ckout_merge(fsl_cx * const f, fsl_merge_opt const * const opt
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_CHECKOUT_H_INCLUDED */
-/* end of file ../include/fossil-scm/fossil-checkout.h */
-/* start of file ../include/fossil-scm/fossil-confdb.h */
+/* end of file ./include/fossil-scm/fossil-checkout.h */
+/* start of file ./include/fossil-scm/fossil-confdb.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_CONFDB_H_INCLUDED)
@@ -17716,8 +17685,8 @@ FSL_EXPORT char * fsl_configs_get_text(fsl_cx * const f, char const * zCfg, char
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_CONFDB_H_INCLUDED */
-/* end of file ../include/fossil-scm/fossil-confdb.h */
-/* start of file ../include/fossil-scm/fossil-vpath.h */
+/* end of file ./include/fossil-scm/fossil-confdb.h */
+/* start of file ./include/fossil-scm/fossil-vpath.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_VPATH_H_INCLUDED)
@@ -17955,8 +17924,8 @@ FSL_EXPORT void fsl_vpath_reverse(fsl_vpath * path);
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_VPATH_H_INCLUDED */
-/* end of file ../include/fossil-scm/fossil-vpath.h */
-/* start of file ../include/fossil-scm/fossil-internal.h */
+/* end of file ./include/fossil-scm/fossil-vpath.h */
+/* start of file ./include/fossil-scm/fossil-internal.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_INTERNAL_H_INCLUDED)
@@ -20286,8 +20255,8 @@ int fsl__symlink_copy(char const *zFrom, char const *zTo, bool realLink);
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_INTERNAL_H_INCLUDED */
-/* end of file ../include/fossil-scm/fossil-internal.h */
-/* start of file ../include/fossil-scm/fossil-auth.h */
+/* end of file ./include/fossil-scm/fossil-internal.h */
+/* start of file ./include/fossil-scm/fossil-auth.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_AUTH_H_INCLUDED)
@@ -20400,8 +20369,8 @@ FSL_EXPORT int fsl_repo_login_clear( fsl_cx * f, fsl_id_t userId );
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_AUTH_H_INCLUDED */
-/* end of file ../include/fossil-scm/fossil-auth.h */
-/* start of file ../include/fossil-scm/fossil-forum.h */
+/* end of file ./include/fossil-scm/fossil-auth.h */
+/* start of file ./include/fossil-scm/fossil-forum.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_FORUM_H_INCLUDED)
@@ -20441,8 +20410,8 @@ int fsl_repo_install_schema_forum(fsl_cx *f);
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_FORUM_H_INCLUDED */
-/* end of file ../include/fossil-scm/fossil-forum.h */
-/* start of file ../include/fossil-scm/fossil-pages.h */
+/* end of file ./include/fossil-scm/fossil-forum.h */
+/* start of file ./include/fossil-scm/fossil-pages.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_PAGES_H_INCLUDED)
@@ -21190,8 +21159,8 @@ int fsl_repo_install_schema_forum(fsl_cx *f);
 
 #endif
 /* ORG_FOSSIL_SCM_PAGES_H_INCLUDED */
-/* end of file ../include/fossil-scm/fossil-pages.h */
-/* start of file ../include/fossil-scm/fossil-cli.h */
+/* end of file ./include/fossil-scm/fossil-pages.h */
+/* start of file ./include/fossil-scm/fossil-cli.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(_ORG_FOSSIL_SCM_FCLI_H_INCLUDED_)
@@ -22335,4 +22304,4 @@ FSL_EXPORT void fcli_dump_cache_metrics(void);
 
 #endif
 /* _ORG_FOSSIL_SCM_FCLI_H_INCLUDED_ */
-/* end of file ../include/fossil-scm/fossil-cli.h */
+/* end of file ./include/fossil-scm/fossil-cli.h */

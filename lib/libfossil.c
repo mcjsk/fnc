@@ -1,5 +1,5 @@
 #include "libfossil.h"
-/* start of file fsl.c */
+/* start of file ./src/fsl.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -1026,8 +1026,8 @@ bool fsl_is_reserved_fn(const char *zFilename, fsl_int_t nameLen){
 #if defined(_WIN32) || defined(WIN32)
 #undef isatty
 #endif
-/* end of file fsl.c */
-/* start of file annotate.c */
+/* end of file ./src/fsl.c */
+/* start of file ./src/annotate.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -1495,8 +1495,8 @@ int fsl_annotate( fsl_cx * const f, fsl_annotate_opt const * const opt ){
 
 #undef MARKER
 #undef blob_to_utf8_no_bom
-/* end of file annotate.c */
-/* start of file appendf.c */
+/* end of file ./src/annotate.c */
+/* start of file ./src/appendf.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /************************************************************************
@@ -3223,8 +3223,8 @@ int fsl_snprintf( char * dest, fsl_size_t n, char const * fmt, ... ){
 }
 
 #undef MARKER
-/* end of file appendf.c */
-/* start of file auth.c */
+/* end of file ./src/appendf.c */
+/* start of file ./src/auth.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -3343,8 +3343,8 @@ FSL_EXPORT int fsl_repo_login_clear( fsl_cx * f, fsl_id_t userId ){
 }
 
 #undef MARKER
-/* end of file auth.c */
-/* start of file bag.c */
+/* end of file ./src/auth.c */
+/* start of file ./src/bag.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -3543,8 +3543,8 @@ void fsl_id_bag_swap(fsl_id_bag * const lhs, fsl_id_bag * const rhs){
 }
 
 #undef fsl_id_bag_hash
-/* end of file bag.c */
-/* start of file buffer.c */
+/* end of file ./src/bag.c */
+/* start of file ./src/buffer.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -4429,8 +4429,8 @@ int fsl_buffer_append_tcl_literal(fsl_buffer * const b,
 #undef MARKER
 #undef buffer_is_external
 #undef buffer_materialize
-/* end of file buffer.c */
-/* start of file cache.c */
+/* end of file ./src/buffer.c */
+/* start of file ./src/cache.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -4591,8 +4591,8 @@ int fsl__bccache_check_available(fsl_cx * const f, fsl_id_t rid){
 }
 
 #undef MARKER
-/* end of file cache.c */
-/* start of file checkin.c */
+/* end of file ./src/cache.c */
+/* start of file ./src/checkin.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -5871,8 +5871,8 @@ int fsl_checkin_commit(fsl_cx * f, fsl_checkin_opt const * opt,
 
 
 #undef MARKER
-/* end of file checkin.c */
-/* start of file checkout.c */
+/* end of file ./src/checkin.c */
+/* start of file ./src/checkout.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -8684,8 +8684,8 @@ int fsl_card_F_ckout_mtime(fsl_cx * const f,
 
 
 #undef MARKER
-/* end of file checkout.c */
-/* start of file cli.c */
+/* end of file ./src/checkout.c */
+/* start of file ./src/cli.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -8698,7 +8698,6 @@ int fsl_card_F_ckout_mtime(fsl_cx * const f,
 
   Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
 */
-
 #include <string.h> /* for strchr() */
 
 /* Only for debugging */
@@ -10048,8 +10047,8 @@ void fcli_dump_cache_metrics(void){
 #undef fcli__error
 #undef MARKER
 #undef FCLI_USE_SIGACTION
-/* end of file cli.c */
-/* start of file content.c */
+/* end of file ./src/cli.c */
+/* start of file ./src/content.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -11516,8 +11515,8 @@ int fsl__shunned_remove(fsl_cx * const f){
 }
 
 #undef MARKER
-/* end of file content.c */
-/* start of file config.c */
+/* end of file ./src/content.c */
+/* start of file ./src/config.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -12665,8 +12664,8 @@ int fsl_configs_get_buffer(fsl_cx * const f, char const * zCfg, char const * key
 #undef SELECT_FROM_CONFIG
 #undef MARKER
 #undef ARRAYLEN
-/* end of file config.c */
-/* start of file cx.c */
+/* end of file ./src/config.c */
+/* start of file ./src/cx.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -14807,8 +14806,8 @@ time_t fsl_cx_time_adj(fsl_cx const * f, time_t clock){
 
 #undef MARKER
 #undef FSL_CX_NSCRATCH
-/* end of file cx.c */
-/* start of file db.c */
+/* end of file ./src/cx.c */
+/* start of file ./src/db.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -16843,8 +16842,8 @@ int fsl_stmt_each_f_dump( fsl_stmt * const stmt, void * state ){
 
 
 #undef MARKER
-/* end of file db.c */
-/* start of file deck.c */
+/* end of file ./src/db.c */
+/* start of file ./src/deck.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -22967,8 +22966,8 @@ int fsl__crosslink_begin(fsl_cx * const f){
 #undef AGE_FUDGE_WINDOW
 #undef AGE_ADJUST_INCREMENT
 #undef F_at
-/* end of file deck.c */
-/* start of file delta.c */
+/* end of file ./src/deck.c */
+/* start of file ./src/delta.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -23614,8 +23613,8 @@ int fsl_delta_apply(
 #undef NHASH
 #undef DEBUG1
 #undef DEBUG2
-/* end of file delta.c */
-/* start of file diff.c */
+/* end of file ./src/delta.c */
+/* start of file ./src/diff.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -23964,6 +23963,8 @@ static void fsl__diff_lcs(
   sqlite3_int64 bestScore;      /* Best score so far */
   sqlite3_int64 score;          /* Score for current candidate LCS */
   int span;                     /* combined width of the input sequences */
+  int cutoff = 4;            /* Max hash chain entries to follow */
+  int nextCutoff = -1;       /* Value of cutoff for next iteration */
 
   span = (iE1 - iS1) + (iE2 - iS2);
   bestScore = -10000;
@@ -23973,69 +23974,61 @@ static void fsl__diff_lcs(
   iSYb = iSYp = iS2;
   iEYb = iEYp = iS2;
   mid = (iE1 + iS1)/2;
-  for(i=iS1; i<iE1; i++){
-    int limit = 0;
-    j = p->aTo[p->aFrom[i].h % p->nTo].iHash;
-    while( j>0
-      && (j-1<iS2 || j>=iE2 || p->cmpLine(&p->aFrom[i], &p->aTo[j-1]))
-    ){
-      if( limit++ > 10 ){
-        j = 0;
-        break;
+  do{
+    nextCutoff = 0;
+    for(i=iS1; i<iE1; i++){
+      int limit = 0;
+      j = p->aTo[p->aFrom[i].h % p->nTo].iHash;
+      while( j>0
+        && (j-1<iS2 || j>=iE2 || p->cmpLine(&p->aFrom[i], &p->aTo[j-1]))
+      ){
+        if( limit++ > cutoff ){
+          j = 0;
+          nextCutoff = cutoff*4;
+          break;
+        }
+        j = p->aTo[j-1].iNext;
       }
-      j = p->aTo[j-1].iNext;
+      if( j==0 ) continue;
+      assert( i>=iSXb && i>=iSXp );
+      if( i<iEXb && j>=iSYb && j<iEYb ) continue;
+      if( i<iEXp && j>=iSYp && j<iEYp ) continue;
+      iSX = i;
+      iSY = j-1;
+      pA = &p->aFrom[iSX-1];
+      pB = &p->aTo[iSY-1];
+      n = minInt(iSX-iS1, iSY-iS2);
+      for(k=0; k<n && p->cmpLine(pA,pB)==0; k++, pA--, pB--){}
+      iSX -= k;
+      iSY -= k;
+      iEX = i+1;
+      iEY = j;
+      pA = &p->aFrom[iEX];
+      pB = &p->aTo[iEY];
+      n = minInt(iE1-iEX, iE2-iEY);
+      for(k=0; k<n && p->cmpLine(pA,pB)==0; k++, pA++, pB++){}
+      iEX += k;
+      iEY += k;
+      skew = (iSX-iS1) - (iSY-iS2);
+      if( skew<0 ) skew = -skew;
+      dist = (iSX+iEX)/2 - mid;
+      if( dist<0 ) dist = -dist;
+      score = (iEX - iSX)*(sqlite3_int64)span - (skew + dist);
+      if( score>bestScore ){
+        bestScore = score;
+        iSXb = iSX;
+        iSYb = iSY;
+        iEXb = iEX;
+        iEYb = iEY;
+      }else if( iEX>iEXp ){
+        iSXp = iSX;
+        iSYp = iSY;
+        iEXp = iEX;
+        iEYp = iEY;
+      }
     }
-    if( j==0 ) continue;
-    assert( i>=iSXb && i>=iSXp );
-    if( i<iEXb && j>=iSYb && j<iEYb ) continue;
-    if( i<iEXp && j>=iSYp && j<iEYp ) continue;
-    iSX = i;
-    iSY = j-1;
-    pA = &p->aFrom[iSX-1];
-    pB = &p->aTo[iSY-1];
-    n = minInt(iSX-iS1, iSY-iS2);
-    for(k=0; k<n && p->cmpLine(pA,pB)==0; k++, pA--, pB--){}
-    iSX -= k;
-    iSY -= k;
-    iEX = i+1;
-    iEY = j;
-    pA = &p->aFrom[iEX];
-    pB = &p->aTo[iEY];
-    n = minInt(iE1-iEX, iE2-iEY);
-    for(k=0; k<n && p->cmpLine(pA,pB)==0; k++, pA++, pB++){}
-    iEX += k;
-    iEY += k;
-    skew = (iSX-iS1) - (iSY-iS2);
-    if( skew<0 ) skew = -skew;
-    dist = (iSX+iEX)/2 - mid;
-    if( dist<0 ) dist = -dist;
-    score = (iEX - iSX)*(sqlite3_int64)span - (skew + dist);
-    if( score>bestScore ){
-      bestScore = score;
-      iSXb = iSX;
-      iSYb = iSY;
-      iEXb = iEX;
-      iEYb = iEY;
-    }else if( iEX>iEXp ){
-      iSXp = iSX;
-      iSYp = iSY;
-      iEXp = iEX;
-      iEYp = iEY;
-    }
-  }
-  if(
-#if 0
-     1
-     /* CANNOT EXPLAIN why we get different diff results than fossil
-        unless we use fsl_diff_optimal_lcs() despite using, insofar as
-        i can tell, the same inputs. There is some aspect i'm
-        overlooking. */
-#else
-     iSXb==iEXb && (sqlite3_int64)(iE1-iS1)*(iE2-iS2)<400
-#endif
-     ){
-    /* If no common sequence is found using the hashing heuristic and
-    ** the input is not too big, use the expensive exact solution */
+  }while( iSXb==iEXb && nextCutoff && (cutoff=nextCutoff)<=64 );
+  if( iSXb==iEXb && (sqlite3_int64)(iE1-iS1)*(iE2-iS2)<2500 ){
     fsl__diff_optimal_lcs(p, iS1, iE1, iS2, iE2, piSX, piEX, piSY, piEY);
   }else{
     *piSX = iSXb;
@@ -25646,8 +25639,8 @@ int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
 #undef ANSI_DIFF_ADD
 #undef ANSI_DIFF_MOD
 #undef ANSI_DIFF_RM
-/* end of file diff.c */
-/* start of file diff2.c */
+/* end of file ./src/diff.c */
+/* start of file ./src/diff2.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -27896,8 +27889,8 @@ int fsl_diff_builder_factory( fsl_diff_builder_e type,
 #undef DTCL_BUFFER
 #undef blob_to_utf8_no_bom
 #undef DICOSTATE
-/* end of file diff2.c */
-/* start of file encode.c */
+/* end of file ./src/diff2.c */
+/* start of file ./src/encode.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -28176,8 +28169,8 @@ char *fsl_htmlize_str(const char *zIn, fsl_int_t n){
   }
 }
 
-/* end of file encode.c */
-/* start of file event.c */
+/* end of file ./src/encode.c */
+/* start of file ./src/event.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -28223,8 +28216,8 @@ int fsl_event_ids_get( fsl_cx * f, fsl_list * tgt ){
 
 
 #undef MARKER
-/* end of file event.c */
-/* start of file fs.c */
+/* end of file ./src/event.c */
+/* start of file ./src/fs.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -29718,8 +29711,8 @@ int fsl_file_relative_name( char const * zRoot, char const * zPath,
 #  undef readdir
 #  undef closedir
 #endif
-/* end of file fs.c */
-/* start of file forum.c */
+/* end of file ./src/fs.c */
+/* start of file ./src/forum.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -29764,8 +29757,8 @@ int fsl_repo_install_schema_forum(fsl_cx *f){
 
 
 #undef MARKER
-/* end of file forum.c */
-/* start of file glob.c */
+/* end of file ./src/forum.c */
+/* start of file ./src/glob.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -29928,8 +29921,8 @@ void fsl_glob_list_clear( fsl_list * const globList ){
   if(globList) fsl_list_visit_free(globList, 1);
 }
 
-/* end of file glob.c */
-/* start of file io.c */
+/* end of file ./src/glob.c */
+/* start of file ./src/io.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -30069,8 +30062,8 @@ int fsl_stream_compare( fsl_input_f in1, void * in1State,
 }
 
 #undef MARKER
-/* end of file io.c */
-/* start of file leaf.c */
+/* end of file ./src/io.c */
+/* start of file ./src/leaf.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -30433,8 +30426,8 @@ void fsl_leaves_computed_cleanup(fsl_cx * const f){
 }
 
 #undef MARKER
-/* end of file leaf.c */
-/* start of file list.c */
+/* end of file ./src/leaf.c */
+/* start of file ./src/list.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -30610,8 +30603,8 @@ fsl_int_t fsl_list_index_of_cstr( fsl_list const * li,
                                   char const * key ){
   return fsl_list_index_of(li, key, fsl_strcmp_cmp);
 }
-/* end of file list.c */
-/* start of file lookslike.c */
+/* end of file ./src/list.c */
+/* start of file ./src/lookslike.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -30763,8 +30756,8 @@ bool fsl_invalid_utf8(fsl_buffer const * const b){
   }
   return c<0x80 /* Final lead byte must be ASCII. */;
 }
-/* end of file lookslike.c */
-/* start of file md5.c */
+/* end of file ./src/lookslike.c */
+/* start of file ./src/md5.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /*
    The code is modified for use in fossil (then libfossil).  The
@@ -31206,8 +31199,8 @@ int fsl_md5_update_filename(fsl_md5_cx *cx, char const * fname){
 #undef F4
 #undef MD5STEP
 #undef byteReverse
-/* end of file md5.c */
-/* start of file merge.c */
+/* end of file ./src/md5.c */
+/* start of file ./src/merge.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -32479,8 +32472,8 @@ int fsl_ckout_merge(fsl_cx * const f, fsl_merge_opt const * const opt){
 #undef FSL__TABLE_FVM
 
 #undef MARKER
-/* end of file merge.c */
-/* start of file merge3.c */
+/* end of file ./src/merge.c */
+/* start of file ./src/merge3.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -32984,8 +32977,8 @@ bool fsl_buffer_contains_merge_marker(fsl_buffer const *p){
 #undef FDEBUG
 #undef ISFDEBUG
 #undef MARKER
-/* end of file merge3.c */
-/* start of file popen.c */
+/* end of file ./src/merge3.c */
+/* start of file ./src/popen.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -33224,8 +33217,8 @@ void fsl_pclose2(int fdIn, FILE *pOut, int childPid){
 
 #undef PTR_TO_INT
 #undef INT_TO_PTR
-/* end of file popen.c */
-/* start of file pq.c */
+/* end of file ./src/popen.c */
+/* start of file ./src/pq.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -33301,8 +33294,8 @@ fsl_id_t fsl__pq_extract(fsl__pq *p, void **pp){
   --p->used;
   return e;
 }
-/* end of file pq.c */
-/* start of file repo.c */
+/* end of file ./src/pq.c */
+/* start of file ./src/repo.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -35661,8 +35654,8 @@ int fsl_repo_rebuild(fsl_cx * const f, fsl_rebuild_opt const * const opt){
 }
 
 #undef MARKER
-/* end of file repo.c */
-/* start of file schema.c */
+/* end of file ./src/repo.c */
+/* start of file ./src/schema.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -35718,8 +35711,8 @@ char const * fsl_schema_forum(){
   extern char const * fsl_schema_forum_cstr;
   return fsl_schema_forum_cstr;
 }
-/* end of file schema.c */
-/* start of file search.c */
+/* end of file ./src/schema.c */
+/* start of file ./src/search.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -35819,8 +35812,8 @@ int fsl__search_doc_touch(fsl_cx * const f, fsl_satype_e saType,
 }
 
 #undef MARKER
-/* end of file search.c */
-/* start of file sha1.c */
+/* end of file ./src/search.c */
+/* start of file ./src/sha1.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #include <assert.h>
@@ -37723,8 +37716,8 @@ char *fsl_sha1sum_cstr(const char *zIn, fsl_int_t len){
     return zHex;
   }
 }
-/* end of file sha1.c */
-/* start of file sha3.c */
+/* end of file ./src/sha1.c */
+/* start of file ./src/sha3.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -38361,8 +38354,8 @@ int fsl_sha3sum_filename(const char *zFilename, fsl_buffer *pCksum){
 
 #undef SHA3_BYTEORDER
 #undef MARKER
-/* end of file sha3.c */
-/* start of file strftime.c */
+/* end of file ./src/sha3.c */
+/* start of file ./src/strftime.c */
 /*******************************************************************************
  *  The Elm Mail System  -  $Revision: 1.3 $   $State: Exp $
  *
@@ -38973,8 +38966,8 @@ fsl_size_t fsl_strftime_unix(char * dest, fsl_size_t destLen, char const * forma
   struct tm * tim = convertToLocal ? localtime(&orig) : gmtime(&orig);
   return fsl_strftime( dest, destLen, format, tim );
 }
-/* end of file strftime.c */
-/* start of file tag.c */
+/* end of file ./src/strftime.c */
+/* start of file ./src/tag.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -39612,8 +39605,8 @@ int fsl_branch_create(fsl_cx * f, fsl_branch_opt const * opt, fsl_id_t * newRid 
                        
 
 #undef MARKER
-/* end of file tag.c */
-/* start of file ticket.c */
+/* end of file ./src/tag.c */
+/* start of file ./src/ticket.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -40015,8 +40008,8 @@ int fsl__ticket_rebuild(fsl_cx * const f, char const * zTktKCard){
   fsl_stmt_finalize(&q);
   return rc;
 }
-/* end of file ticket.c */
-/* start of file udf.c */
+/* end of file ./src/ticket.c */
+/* start of file ./src/udf.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -40558,8 +40551,8 @@ int fsl__cx_init_db(fsl_cx * const f, fsl_db * const db){
 
 
 #undef MARKER
-/* end of file udf.c */
-/* start of file utf8.c */
+/* end of file ./src/udf.c */
+/* start of file ./src/utf8.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -40876,8 +40869,8 @@ fsl_size_t fsl_strlen_utf8( char const * str, fsl_int_t len ){
     return rc;
   }
 }
-/* end of file utf8.c */
-/* start of file vfile.c */
+/* end of file ./src/utf8.c */
+/* start of file ./src/vfile.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -41452,8 +41445,8 @@ int fsl__vfile_to_ckout(fsl_cx * const f, fsl_id_t vfileId,
 }
 
 #undef MARKER
-/* end of file vfile.c */
-/* start of file vpath.c */
+/* end of file ./src/vfile.c */
+/* start of file ./src/vpath.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -41897,8 +41890,8 @@ int fsl__find_filename_changes(
 }
 
 #undef MARKER
-/* end of file vpath.c */
-/* start of file wiki.c */
+/* end of file ./src/vpath.c */
+/* start of file ./src/wiki.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -42096,8 +42089,8 @@ int fsl_wiki_save(fsl_cx * f, char const * pageName,
 }
 
 #undef MARKER
-/* end of file wiki.c */
-/* start of file zip.c */
+/* end of file ./src/wiki.c */
+/* start of file ./src/zip.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 /*
@@ -42655,9 +42648,9 @@ int fsl_repo_zip_sym_to_filename( fsl_cx * const f, char const * sym,
 
 
 #undef MARKER
-/* end of file zip.c */
-/* start of file schema_config_cstr.c */
-/* Binary form of file ../sql/config.sql */
+/* end of file ./src/zip.c */
+/* start of file ./src/schema_config_cstr.c */
+/* Binary form of file ./sql/config.sql */
 /** @page page_schema_config_cstr Schema: config.sql
 @code
 -- This file contains the schema for the database that is kept in the
@@ -42695,10 +42688,10 @@ static char const fsl_schema_config_cstr_a[] = {
 54, 55, 53, 59, 10, 
 0};
 char const * fsl_schema_config_cstr = fsl_schema_config_cstr_a;
-/* end of ../sql/config.sql */
-/* end of file schema_config_cstr.c */
-/* start of file schema_repo1_cstr.c */
-/* Binary form of file ../sql/repo-static.sql */
+/* end of ./sql/config.sql */
+/* end of file ./src/schema_config_cstr.c */
+/* start of file ./src/schema_repo1_cstr.c */
+/* Binary form of file ./sql/repo-static.sql */
 /** @page page_schema_repo1_cstr Schema: repo-static.sql
 @code
 -- This file contains parts of the schema that are fixed and
@@ -43126,10 +43119,10 @@ static char const fsl_schema_repo1_cstr_a[] = {
 116, 105, 111, 110, 95, 105, 100, 61, 50, 53, 50, 48, 48, 54, 54, 55, 51, 59, 10, 
 0};
 char const * fsl_schema_repo1_cstr = fsl_schema_repo1_cstr_a;
-/* end of ../sql/repo-static.sql */
-/* end of file schema_repo1_cstr.c */
-/* start of file schema_repo2_cstr.c */
-/* Binary form of file ../sql/repo-transient.sql */
+/* end of ./sql/repo-static.sql */
+/* end of file ./src/schema_repo1_cstr.c */
+/* start of file ./src/schema_repo2_cstr.c */
+/* Binary form of file ./sql/repo-transient.sql */
 /** @page page_schema_repo2_cstr Schema: repo-transient.sql
 @code
 -- This file contains parts of the schema that can change from one
@@ -43837,10 +43830,10 @@ static char const fsl_schema_repo2_cstr_a[] = {
 10, 
 0};
 char const * fsl_schema_repo2_cstr = fsl_schema_repo2_cstr_a;
-/* end of ../sql/repo-transient.sql */
-/* end of file schema_repo2_cstr.c */
-/* start of file schema_ckout_cstr.c */
-/* Binary form of file ../sql/checkout.sql */
+/* end of ./sql/repo-transient.sql */
+/* end of file ./src/schema_repo2_cstr.c */
+/* start of file ./src/schema_ckout_cstr.c */
+/* Binary form of file ./sql/checkout.sql */
 /** @page page_schema_ckout_cstr Schema: checkout.sql
 @code
 -- The VVAR table holds miscellanous information about the local database
@@ -44108,10 +44101,10 @@ static char const fsl_schema_ckout_cstr_a[] = {
 53, 50, 48, 48, 54, 54, 55, 52, 59, 10, 
 0};
 char const * fsl_schema_ckout_cstr = fsl_schema_ckout_cstr_a;
-/* end of ../sql/checkout.sql */
-/* end of file schema_ckout_cstr.c */
-/* start of file schema_ticket_cstr.c */
-/* Binary form of file ../sql/ticket.sql */
+/* end of ./sql/checkout.sql */
+/* end of file ./src/schema_ckout_cstr.c */
+/* start of file ./src/schema_ticket_cstr.c */
+/* Binary form of file ./sql/ticket.sql */
 /** @page page_schema_ticket_cstr Schema: ticket.sql
 @code
 -- Template for the TICKET table
@@ -44192,10 +44185,10 @@ static char const fsl_schema_ticket_cstr_a[] = {
 10, 
 0};
 char const * fsl_schema_ticket_cstr = fsl_schema_ticket_cstr_a;
-/* end of ../sql/ticket.sql */
-/* end of file schema_ticket_cstr.c */
-/* start of file schema_ticket_reports_cstr.c */
-/* Binary form of file ../sql/ticket-reports.sql */
+/* end of ./sql/ticket.sql */
+/* end of file ./src/schema_ticket_cstr.c */
+/* start of file ./src/schema_ticket_reports_cstr.c */
+/* Binary form of file ./sql/ticket-reports.sql */
 /** @page page_schema_ticket_reports_cstr Schema: ticket-reports.sql
 @code
 INSERT INTO reportfmt(title,mtime,cols,sqlcode) 
@@ -44258,10 +44251,10 @@ static char const fsl_schema_ticket_reports_cstr_a[] = {
 99, 107, 101, 116, 39, 41, 59, 10, 
 0};
 char const * fsl_schema_ticket_reports_cstr = fsl_schema_ticket_reports_cstr_a;
-/* end of ../sql/ticket-reports.sql */
-/* end of file schema_ticket_reports_cstr.c */
-/* start of file schema_forum_cstr.c */
-/* Binary form of file ../sql/forum.sql */
+/* end of ./sql/ticket-reports.sql */
+/* end of file ./src/schema_ticket_reports_cstr.c */
+/* start of file ./src/schema_forum_cstr.c */
+/* Binary form of file ./sql/forum.sql */
 /** @page page_schema_forum_cstr Schema: forum.sql
 @code
 CREATE TABLE repo.forumpost(
@@ -44299,5 +44292,5 @@ static char const fsl_schema_forum_cstr_a[] = {
 109, 101, 41, 59, 10, 
 0};
 char const * fsl_schema_forum_cstr = fsl_schema_forum_cstr_a;
-/* end of ../sql/forum.sql */
-/* end of file schema_forum_cstr.c */
+/* end of ./sql/forum.sql */
+/* end of file ./src/schema_forum_cstr.c */
