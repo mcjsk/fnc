@@ -761,29 +761,33 @@ Move selection cursor to the last line in the file.
 Display the
 .Cm diff
 of the commit corresponding to the currently selected line.
+.It Cm B, Backspace
+Reload the previous blamed version of the file.
 .It Cm b
 Blame the version of the file corresponding to the commit in the currently
 selected line.
-.It Cm p
-Blame the version of the file corresponding to the parent of the commit in
-the currently selected line.
-.It Cm B, Backspace
-Reload the previous blamed version of the file.
-.It Cm T
-Open and populate branch view with all repository branches.
 .It Cm c
 Toggle coloured output. On supported terminals,
 .Nm
 will default to displaying the blamed file in colour.
+.It Cm L
+Open prompt to enter line number and navigate to line.
+.It Cm l
+Toggle display of file line numbers.
+.It Cm p
+Blame the version of the file corresponding to the parent of the commit in
+the currently selected line.
+.It Cm T
+Open and populate branch view with all repository branches.
 .It Cm /
 Prompt to enter a search term to begin searching the file for tokens matching
 the entered pattern.  The search term is an extended regular expression, as
 documented in
 .Xr re_format 7 .
-.It Cm n
-Find the next token that matches the current search pattern.
 .It Cm N
 Find the previous token that matches the current search pattern.
+.It Cm n
+Find the next token that matches the current search pattern.
 .El
 .Tg tag
 .It Cm branch Oo Fl C | -no-colour Oc Oo Fl -after Ar date | \

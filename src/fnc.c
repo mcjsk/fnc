@@ -708,6 +708,7 @@ struct fnc_tree_view_state {			  /* Parent trees of the- */
 
 struct fnc_blame_line {
 	fsl_uuid_str	id;
+	unsigned int	lineno;
 	bool		annotated;
 };
 
@@ -763,10 +764,12 @@ struct fnc_blame_view_state {
 	int				 selected_line;
 	int				 matched_line;
 	int				 spin_idx;
+	int				 gtl;
 	bool				 done;
 	bool				 blame_complete;
 	bool				 eof;
 	bool				 colour;
+	bool				 showln;
 };
 
 struct fnc_branch {
@@ -1069,10 +1072,14 @@ static int		 fsl_file_artifact_free(void *, void *);
 static void		 sigwinch_handler(int);
 static void		 sigpipe_handler(int);
 static void		 sigcont_handler(int);
+static bool		 gotoline(struct fnc_view *, int *, int *);
 static int		 strtonumcheck(long *, const char *, const int,
 			    const int);
 static int		 fnc_date_to_mtime(double *, const char *, int);
-static void		 fnc_print_msg(struct fnc_view *, const char *, bool);
+static int		 fnc_prompt_usr(char *, int, struct fnc_view *,
+			    const char *, bool);
+static void		 fnc_print_msg(struct fnc_view *, const char *, bool,
+			    bool, bool);
 static char		*fnc_strsep (char **, const char *);
 static bool		 fnc_str_has_upper(const char *);
 static int		 fnc_make_sql_glob(char **, char **, const char *, bool);
@@ -2471,8 +2478,7 @@ draw_commits(struct fnc_view *view)
 	entry = s->first_commit_onscreen;
 	s->last_commit_onscreen = s->first_commit_onscreen;
 	while (entry) {
-		if (ncommits >= (view->mode == VIEW_SPLIT_HRZN ?
-		    view->nlines - 1 : view->lines - 1))
+		if (ncommits >= MIN(view->nlines - 1, view->lines - 1))
 			break;
 		if (ncommits == s->selected_idx)
 			wattr_on(view->window, A_REVERSE, NULL);
@@ -2956,6 +2962,8 @@ help(struct fnc_view *view)
 	    {""}, /* Blame */
 	    {"  Space            ", "  ❬Space❭         "},
 	    {"  Enter            ", "  ❬Enter❭         "},
+	    {"  l                ", "  ❬l❭             "},
+	    {"  L                ", "  ❬L❭             "},
 	    {"  b                ", "  ❬b❭             "},
 	    {"  p                ", "  ❬p❭             "},
 	    {"  B                ", "  ❬B❭             "},
@@ -3021,6 +3029,8 @@ help(struct fnc_view *view)
 	    "Blame",
 	    "Scroll down one page",
 	    "Display the diff of the commit corresponding to the selected line",
+	    "Toggle display of file line numbers",
+	    "Open prompt to enter line number and navigate to line",
 	    "Blame the version of the file found in the selected line's commit",
 	    "Blame the version of the file found in the selected line's parent "
 	    "commit",
@@ -3290,16 +3300,8 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case 'F': {
 		struct fnc_view *new;
 		char glob[BUFSIZ];
-		int retval;
-		mvwaddstr(view->window, view->start_ln + view->nlines - 1, 0,
-		    "/");
-		wclrtoeol(view->window);
-		nocbreak();
-		echo();
-		retval = wgetnstr(view->window, glob, sizeof(glob));
-		cbreak();
-		noecho();
-		if (retval == ERR)
+		rc = fnc_prompt_usr(glob, BUFSIZ, view, "filter: ", true);
+		if (rc)
 			return rc;
 		if (view_is_parent(view))
 			start_col = view_split_start_col(view->start_col);
@@ -3311,7 +3313,8 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		if (rc) {
 			if (rc != FSL_RC_BREAK)
 				return rc;
-			fnc_print_msg(view, "-- no matching commits --", true);
+			fnc_print_msg(view, "-- no matching commits --", true,
+			    true, true);
 			fcli_err_reset();
 			rc = 0;
 			break;
@@ -3334,7 +3337,8 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		if (!fsl_rid_is_a_checkin(fcli_cx(),
 		    s->selected_commit->commit->rid)) {
 			fnc_print_msg(view,
-			    "-- tree requires check-in artifact --", true);
+			    "-- tree requires check-in artifact --", true,
+			    true, true);
 			fcli_err_reset();
 			rc = 0;
 			break;
@@ -3751,8 +3755,7 @@ static int
 view_search_start(struct fnc_view *view)
 {
 	char	pattern[BUFSIZ];
-	int	retval;
-	int	rc = 0;
+	int	rc = FSL_RC_OK;
 
 	if (view->started_search) {
 		regfree(&view->regex);
@@ -3775,15 +3778,8 @@ view_search_start(struct fnc_view *view)
 		return rc;
 	}
 
-	mvwaddstr(view->window, view->start_ln + view->nlines - 1, 0, "/");
-	wclrtoeol(view->window);
-
-	nocbreak();
-	echo();
-	retval = wgetnstr(view->window, pattern, sizeof(pattern));
-	cbreak();
-	noecho();
-	if (retval == ERR)
+	rc = fnc_prompt_usr(pattern, BUFSIZ, view, "/", true);
+	if (rc)
 		return rc;
 
 	if (regcomp(&view->regex, pattern, REG_EXTENDED | REG_NEWLINE) == 0) {
@@ -4102,9 +4098,9 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	s->f = NULL;
 	s->context = context;
 	s->sbs = 0;
-	verbosity ? s->diff_flags |= FSL_DIFF_VERBOSE : 0;
-	ignore_ws ? s->diff_flags |= FSL_DIFF_IGNORE_ALLWS : 0;
-	invert ? s->diff_flags |= FSL_DIFF_INVERT : 0;
+	verbosity ? FLAG_SET(s->diff_flags, FSL_DIFF_VERBOSE) : 0;
+	ignore_ws ? FLAG_SET(s->diff_flags, FSL_DIFF_IGNORE_ALLWS) : 0;
+	invert ? FLAG_SET(s->diff_flags, FSL_DIFF_INVERT) : 0;
 	s->timeline_view = timeline_view;
 	s->colour = !fnc_init.nocolour && has_colors();
 	s->showmeta = showmeta;
@@ -4868,7 +4864,7 @@ write_diff_meta(fsl_buffer *buf, const char *zminus, fsl_uuid_str xminus,
 		break;
 	}
 
-	if (diff_flags & FSL_DIFF_INVERT) {
+	if FLAG_CHK(diff_flags, FSL_DIFF_INVERT) {
 		const char *tmp = minus;
 		minus = plus;
 		plus = tmp;
@@ -4877,13 +4873,14 @@ write_diff_meta(fsl_buffer *buf, const char *zminus, fsl_uuid_str xminus,
 		zplus = tmp;
 	}
 
-	if ((diff_flags & (FSL_DIFF_SIDEBYSIDE | FSL_DIFF_BRIEF)) == 0) {
-		rc = fsl_buffer_appendf(buf, "\nIndex: %s\n%.71c\n", index, '=');
+	if (!FLAG_CHK(diff_flags, (FSL_DIFF_SIDEBYSIDE | FSL_DIFF_BRIEF))) {
+		rc = fsl_buffer_appendf(buf, "\nIndex: %s\n%.71c\n",
+		    index, '=');
 		if (!rc)
 			rc = fsl_buffer_appendf(buf, "hash - %s\nhash + %s\n",
 			    minus, plus);
 	}
-	if (!rc && (diff_flags & FSL_DIFF_BRIEF) == 0)
+	if (!rc && !FLAG_CHK(diff_flags, FSL_DIFF_BRIEF))
 		rc = fsl_buffer_appendf(buf, "--- %s\n+++ %s\n", zminus, zplus);
 
 	return rc;
@@ -4910,7 +4907,6 @@ diff_file(fsl_buffer *buf, fsl_buffer *bminus, const char *zminus,
 	fsl_buffer	 xplus = fsl_buffer_empty;
 	const char	*zplus = NULL;
 	int		 rc = 0;
-	bool		 verbose;
 
 	/*
 	 * If it exists, read content of abspath to diff EXCEPT for the content
@@ -4975,12 +4971,12 @@ diff_file(fsl_buffer *buf, fsl_buffer *bminus, const char *zminus,
 	if (rc)
 		goto end;
 
-	verbose = (diff_flags & FSL_DIFF_VERBOSE) != 0 ? true : false;
-	if (diff_flags & FSL_DIFF_BRIEF) {
+	if FLAG_CHK(diff_flags, FSL_DIFF_BRIEF) {
 		rc = fsl_buffer_compare(bminus, &bplus);
 		if (!rc)
 			rc = fsl_buffer_appendf(buf, "CHANGED -> %s\n", zminus);
-	} else if (verbose || (bminus->used && bplus.used)) {
+	} else if (FLAG_CHK(diff_flags, FSL_DIFF_VERBOSE) ||
+	    (bminus->used && bplus.used)) {
 		rc = fsl_diff_text_to_buffer(bminus, &bplus, buf, context,
 		    sbs, diff_flags);
 	}
@@ -5124,7 +5120,6 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
 	fsl_uuid_str	 xplus0 = NULL, xminus0 = NULL;
 	fsl_uuid_str	 xplus = NULL, xminus = NULL;
 	int		 rc = 0;
-	bool		 verbose;
 
 	assert(vid1 != vid2);
 	assert(vid2 > 0 &&
@@ -5195,8 +5190,7 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
 
 	rc = write_diff_meta(buf, zminus, xminus, zplus, xplus, diff_flags,
 	    change);
-	verbose = (diff_flags & FSL_DIFF_VERBOSE) != 0 ? true : false;
-	if (verbose || (a && b))
+	if (FLAG_CHK(diff_flags, FSL_DIFF_VERBOSE) || (a && b))
 		rc = fsl_diff_text_to_buffer(&fbuf1, &fbuf2, buf, context, sbs,
 		    diff_flags);
 	if (rc)
@@ -5577,11 +5571,11 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		if (ch == 'c')
 			s->colour = !s->colour;
 		if (ch == 'i')
-			s->diff_flags ^= FSL_DIFF_INVERT;
+			FLAG_TOG(s->diff_flags, FSL_DIFF_INVERT);
 		if (ch == 'v')
-			s->diff_flags ^= FSL_DIFF_VERBOSE;
+			FLAG_TOG(s->diff_flags, FSL_DIFF_VERBOSE);
 		if (ch == 'w')
-			s->diff_flags ^= FSL_DIFF_IGNORE_ALLWS;
+			FLAG_TOG(s->diff_flags, FSL_DIFF_IGNORE_ALLWS);
 		wclear(view->window);
 		s->first_line_onscreen = 1;
 		s->last_line_onscreen = view->nlines;
@@ -7216,7 +7210,8 @@ blame_selected_file(struct fnc_view **new_view, struct fnc_view *view)
 		goto end;
 
 	if (fsl_looks_like_binary(&buf))
-		fnc_print_msg(view, "-- cannot blame binary file --", false);
+		fnc_print_msg(view, "-- cannot blame binary file --", false,
+		    true, true);
 	else
 		rc = request_new_view(new_view, view, FNC_VIEW_BLAME);
 end:
@@ -8447,6 +8442,7 @@ blame_cb(void *state, fsl_annotate_opt const * const opt,
 		line->annotated = true;
 	}
 
+	line->lineno = step->lineNumber;
 	++cx->nlines;
 end:
 	rc = pthread_mutex_unlock(&fnc_mutex);
@@ -8471,6 +8467,7 @@ draw_blame(struct fnc_view *view)
 	size_t				 linesz = 0;
 	int				 width, lineno = 0, nprinted = 0;
 	int				 rc = 0;
+	int				 npad = 0;
 	const int			 idfield = 11;  /* Prefix + space. */
 
 	rewind(blame->f);
@@ -8507,7 +8504,7 @@ draw_blame(struct fnc_view *view)
 	if (width < view->ncols - 1)
 		waddch(view->window, '\n');
 
-	line = fsl_mprintf("[%d/%d] %s%s%s %c",
+	line = fsl_mprintf("[%d/%d] %s%s%s %c", s->gtl ? s->gtl :
 	    MIN(blame->nlines, s->first_line_onscreen - 1 + s->selected_line),
 	    blame->nlines, s->blame_complete ? "" : "annotating... ",
 	    fnc_init.sym ? "/" : "", s->path,
@@ -8539,8 +8536,11 @@ draw_blame(struct fnc_view *view)
 		}
 		if (++lineno < s->first_line_onscreen)
 			continue;
+		if (s->gtl)
+			if (!gotoline(view, &lineno, &nprinted))
+				continue;
 
-		if (view->active && nprinted == s->selected_line - 1)
+		if (nprinted == s->selected_line - 1)
 			wattr_on(view->window, A_REVERSE, NULL);
 
 		if (blame->nlines > 0) {
@@ -8581,7 +8581,17 @@ draw_blame(struct fnc_view *view)
 			prev_id = NULL;
 		}
 
-		if (view->active && nprinted == s->selected_line - 1)
+		if (s->showln) {
+			npad = snprintf(NULL, 0, "%d", blame->nlines);
+			wattr_on(view->window, A_BOLD, NULL);
+			wprintw(view->window, " %*d ", npad,
+			    blame_line->lineno);
+			wattr_off(view->window, A_BOLD, NULL);
+			npad += 3;  /* NUL + {ap,pre}pended ' ' */
+			width += npad;
+		}
+
+		if (nprinted == s->selected_line - 1)
 			wattr_off(view->window, A_REVERSE, NULL);
 		waddstr(view->window, " ");
 
@@ -8607,7 +8617,8 @@ draw_blame(struct fnc_view *view)
 			width += idfield;
 		} else {
 			rc = formatln(&wcstr, &width, line,
-			    view->ncols - idfield, idfield);
+			    view->ncols - idfield - (s->showln ? npad : 0),
+			    idfield + (s->showln ? npad : 0));
 			waddwstr(view->window, wcstr);
 			fsl_free(wcstr);
 			wcstr = NULL;
@@ -8625,6 +8636,31 @@ draw_blame(struct fnc_view *view)
 	drawborder(view);
 
 	return rc;
+}
+
+static bool
+gotoline(struct fnc_view *view, int *lineno, int *nprinted)
+{
+	struct fnc_blame_view_state	*s = &view->state.blame;
+	struct fnc_blame		*blame = &s->blame;
+
+	if (s->first_line_onscreen != 1 &&
+	    (*lineno >= s->gtl - (view->nlines - 3) / 2)) {
+		rewind(blame->f);
+		s->first_line_onscreen = 1;
+		*nprinted = 0;
+		*lineno = 0;
+		s->eof = false;
+		return false;
+	}
+	if (*lineno < s->gtl - (view->nlines - 3) / 2)
+		return false;
+
+	s->selected_line = s->gtl <= (view->nlines - 3) / 2 ?
+	    s->gtl : (view->nlines - 3) / 2 + 1;
+	s->gtl = 0;
+
+	return true;
 }
 
 static int
@@ -8688,6 +8724,28 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		else if (s->last_line_onscreen < s->blame.nlines)
 			++s->first_line_onscreen;
 		break;
+	case 'L': {
+		char lineno[BUFSIZ];
+		long ln = 0;
+		rc = fnc_prompt_usr(lineno, BUFSIZ, view, "line: ", true);
+		if (rc || !lineno[0])
+			break;
+		rc = strtonumcheck(&ln, lineno, 1, s->blame.nlines);
+		if (rc == FSL_RC_MISUSE)
+			fnc_print_msg(view, "-- numeric input only --",
+			    false, true, true);
+		else if (rc == FSL_RC_RANGE || ln < 1 || ln > s->blame.nlines)
+			fnc_print_msg(view, "-- line outside file range --",
+			    false, true, true);
+		else
+			s->gtl = ln;
+		rc = FSL_RC_OK;
+		fcli_err_reset();
+		break;
+	}
+	case 'l':
+		s->showln = !s->showln;
+		break;
 	case 'b':
 	case 'p': {
 		fsl_uuid_cstr id = NULL;
@@ -8725,7 +8783,7 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 				if (m == NULL)
 					rc = RC(FSL_RC_ERROR, "%s",
 					    "fsl_mprintf");
-				fnc_print_msg(view, m, true);
+				fnc_print_msg(view, m, true, true, true);
 				fsl_deck_finalize(&d);
 				fsl_free(pid);
 				fsl_free(m);
@@ -10015,20 +10073,42 @@ strtonumcheck(long *ret, const char *nstr, const int min, const int max)
 		    "invalid char in <n>: -n|--limit=%s [%s]", nstr, ptr);
 
 	*ret = n;
-	return 0;
+	return FSL_RC_OK;
+}
+
+static int
+fnc_prompt_usr(char *ret, int sz, struct fnc_view *view, const char *msg,
+    bool clrtoel)
+{
+	int rc;
+
+	if (msg)
+		fnc_print_msg(view, msg, clrtoel, false, false);
+
+	nocbreak();
+	echo();
+	rc = wgetnstr(view->window, ret, sz);
+	cbreak();
+	noecho();
+
+	return rc == ERR ? FSL_RC_ERROR : FSL_RC_OK;
 }
 
 static void
-fnc_print_msg(struct fnc_view *view, const char *msg, bool clrtoeol)
+fnc_print_msg(struct fnc_view *view, const char *msg, bool clear, bool update,
+    bool zzz)
 {
 	wattr_on(view->window, A_BOLD, NULL);
 	mvwaddstr(view->window, view->nlines - 1, 0, msg);
-	if (clrtoeol)
+	if (clear)
 		wclrtoeol(view->window);
 	wattr_off(view->window, A_BOLD, NULL);
-	update_panels();
-	doupdate();
-	sleep(1);
+	if (update) {
+		update_panels();
+		doupdate();
+	}
+	if (zzz)
+		sleep(1);
 }
 
 /*
