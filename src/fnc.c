@@ -938,6 +938,10 @@ static int		 write_diff_meta(fsl_buffer *, const char *,
 static int		 diff_file(fsl_buffer *, fsl_buffer *, const char *,
 			    fsl_uuid_str, const char *, enum fsl_ckout_change_e,
 			    int, int, bool);
+static int		 fnc_diff_builder(fsl_diff_builder **, fsl_uuid_cstr,
+			    fsl_uuid_cstr, const char *, const char *, int,
+			    int, fsl_buffer *);
+static void		 fnc_free_diff_builder(fsl_diff_builder *);
 static int		 diff_non_checkin(fsl_buffer *,
 			    struct fnc_commit_artifact *, int, int, int);
 static int		 diff_file_artifact(fsl_buffer *, fsl_id_t,
@@ -4099,8 +4103,8 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	s->context = context;
 	s->sbs = 0;
 	verbosity ? FLAG_SET(s->diff_flags, FSL_DIFF_VERBOSE) : 0;
-	ignore_ws ? FLAG_SET(s->diff_flags, FSL_DIFF_IGNORE_ALLWS) : 0;
-	invert ? FLAG_SET(s->diff_flags, FSL_DIFF_INVERT) : 0;
+	ignore_ws ? FLAG_SET(s->diff_flags, FSL_DIFF2_IGNORE_ALLWS) : 0;
+	invert ? FLAG_SET(s->diff_flags, FSL_DIFF2_INVERT) : 0;
 	s->timeline_view = timeline_view;
 	s->colour = !fnc_init.nocolour && has_colors();
 	s->showmeta = showmeta;
@@ -4864,7 +4868,7 @@ write_diff_meta(fsl_buffer *buf, const char *zminus, fsl_uuid_str xminus,
 		break;
 	}
 
-	if FLAG_CHK(diff_flags, FSL_DIFF_INVERT) {
+	if FLAG_CHK(diff_flags, FSL_DIFF2_INVERT) {
 		const char *tmp = minus;
 		minus = plus;
 		plus = tmp;
@@ -4902,11 +4906,12 @@ diff_file(fsl_buffer *buf, fsl_buffer *bminus, const char *zminus,
     fsl_uuid_str xminus, const char *abspath, enum fsl_ckout_change_e change,
     int diff_flags, int context, bool sbs)
 {
-	fsl_cx		*const f = fcli_cx();
-	fsl_buffer	 bplus = fsl_buffer_empty;
-	fsl_buffer	 xplus = fsl_buffer_empty;
-	const char	*zplus = NULL;
-	int		 rc = 0;
+	fsl_cx			*const f = fcli_cx();
+	fsl_diff_builder	*diffbld = NULL;
+	fsl_buffer		 bplus = fsl_buffer_empty;
+	fsl_buffer		 xplus = fsl_buffer_empty;
+	const char		*zplus = NULL;
+	int			 rc = 0;
 
 	/*
 	 * If it exists, read content of abspath to diff EXCEPT for the content
@@ -4971,21 +4976,73 @@ diff_file(fsl_buffer *buf, fsl_buffer *bminus, const char *zminus,
 	if (rc)
 		goto end;
 
+	rc = fnc_diff_builder(&diffbld, xminus, fsl_buffer_str(&xplus), zminus,
+	    zplus, context, diff_flags, buf);
+	if (rc)
+		goto end;
+
 	if FLAG_CHK(diff_flags, FSL_DIFF_BRIEF) {
 		rc = fsl_buffer_compare(bminus, &bplus);
 		if (!rc)
 			rc = fsl_buffer_appendf(buf, "CHANGED -> %s\n", zminus);
 	} else if (FLAG_CHK(diff_flags, FSL_DIFF_VERBOSE) ||
-	    (bminus->used && bplus.used)) {
-		rc = fsl_diff_text_to_buffer(bminus, &bplus, buf, context,
-		    sbs, diff_flags);
-	}
+	    (bminus->used && bplus.used))
+		rc = fsl_diff_v2(bminus, &bplus, diffbld);
 
 end:
 	fsl_buffer_clear(&bplus);
 	fsl_buffer_clear(&xplus);
+	fnc_free_diff_builder(diffbld);
+	return rc;
+}
+
+static int
+fnc_diff_builder(fsl_diff_builder **ptr, fsl_uuid_cstr xminus,
+    fsl_uuid_cstr xplus, const char *zminus, const char *zplus, int context,
+    int diff_flags, fsl_buffer *buf)
+{
+	fsl_diff_builder		*diffbld = NULL;
+	fsl_diff_opt			*diffopt = NULL;
+	struct fsl_diff_opt_ansi	 ansiopt = {"", "", "", ""};
+	int				 rc = FSL_RC_OK;
+
+	*ptr = NULL;
+
+	diffopt = fsl_malloc(sizeof(fsl_diff_opt));
+	if (diffopt == NULL)
+		return RC(FSL_RC_ERROR, "%s", "fsl_malloc");
+
+
+	FLAG_SET(diff_flags, FSL_DIFF2_CONTEXT_ZERO);
+	diffopt->ansiColor = ansiopt;
+	diffopt->hashLHS = xminus;
+	diffopt->hashRHS = xplus;
+	diffopt->nameLHS = zminus;
+	diffopt->nameRHS = zplus;
+	diffopt->diffFlags = diff_flags;
+	diffopt->contextLines = context;
+	diffopt->out = fsl_output_f_buffer;
+	diffopt->outState = buf;
+
+	rc = fsl_diff_builder_factory(FSL_DIFF_BUILDER_UNIFIED_TEXT, &diffbld);
+	if (!rc) {
+		diffbld->opt = diffopt;
+		diffbld->start = NULL;
+		*ptr = diffbld;
+	} else
+		fsl_free(diffopt);
 
 	return rc;
+}
+
+static void
+fnc_free_diff_builder(fsl_diff_builder *diffbld)
+{
+	if (diffbld) {
+		if (diffbld->opt)
+			fsl_free(diffbld->opt);
+		diffbld->finalize(diffbld);
+	}
 }
 
 /*
@@ -4997,12 +5054,13 @@ static int
 diff_non_checkin(fsl_buffer *buf, struct fnc_commit_artifact *commit,
     int diff_flags, int context, int sbs)
 {
-	fsl_cx		*const f = fcli_cx();
-	fsl_buffer	 wiki = fsl_buffer_empty;
-	fsl_buffer	 pwiki = fsl_buffer_empty;
-	fsl_id_t	 prid = 0;
-	fsl_size_t	 idx;
-	int		 rc = 0;
+	fsl_cx			*const f = fcli_cx();
+	fsl_diff_builder	*diffbld = NULL;
+	fsl_buffer		 wiki = fsl_buffer_empty;
+	fsl_buffer		 pwiki = fsl_buffer_empty;
+	fsl_id_t		 prid = 0;
+	fsl_size_t		 idx;
+	int			 rc = 0;
 
 	fsl_deck *d = NULL;
 	d = fsl_deck_malloc();
@@ -5073,14 +5131,21 @@ diff_non_checkin(fsl_buffer *buf, struct fnc_commit_artifact *commit,
 	}
 
 	/* Diff the artifacts if a parent is found. */
-	if ((rc = fsl_sym_to_rid(f, commit->puuid, FSL_SATYPE_ANY, &prid)))
+	rc = fsl_sym_to_rid(f, commit->puuid, FSL_SATYPE_ANY, &prid);
+	if (rc)
 		goto end;
-	if ((rc = fsl_deck_load_rid(f, d, prid, FSL_SATYPE_ANY)))
+	rc = fsl_deck_load_rid(f, d, prid, FSL_SATYPE_ANY);
+	if (rc)
 		goto end;
 	fsl_buffer_append(&pwiki, d->W.mem, d->W.used);
 
-	rc = fsl_diff_text_to_buffer(&pwiki, &wiki, buf, context, sbs,
-	    diff_flags);
+	rc = fnc_diff_builder(&diffbld, NULL, NULL, NULL, NULL, context,
+	    diff_flags, buf);
+	if (rc)
+		goto end;
+	rc = fsl_diff_v2(&pwiki, &wiki, diffbld);
+	if (rc)
+		goto end;
 
 	/* If a technote, provide the full content after its diff. */
 	if (d->type == FSL_SATYPE_TECHNOTE)
@@ -5090,6 +5155,7 @@ end:
 	fsl_buffer_clear(&wiki);
 	fsl_buffer_clear(&pwiki);
 	fsl_deck_finalize(d);
+	fnc_free_diff_builder(diffbld);
 	return rc;
 }
 
@@ -5111,15 +5177,16 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
     fsl_id_t vid2, const fsl_card_F *b, enum fsl_ckout_change_e change,
     int diff_flags, int context, int sbs, enum fnc_diff_type diff_type)
 {
-	fsl_cx		*const f = fcli_cx();
-	fsl_stmt	 stmt = fsl_stmt_empty;
-	fsl_buffer	 fbuf1 = fsl_buffer_empty;
-	fsl_buffer	 fbuf2 = fsl_buffer_empty;
-	char		*zminus0 = NULL, *zplus0 = NULL;
-	const char	*zplus = NULL, *zminus = NULL;
-	fsl_uuid_str	 xplus0 = NULL, xminus0 = NULL;
-	fsl_uuid_str	 xplus = NULL, xminus = NULL;
-	int		 rc = 0;
+	fsl_cx			*const f = fcli_cx();
+	fsl_diff_builder	*diffbld = NULL;
+	fsl_stmt		 stmt = fsl_stmt_empty;
+	fsl_buffer		 fbuf1 = fsl_buffer_empty;
+	fsl_buffer		 fbuf2 = fsl_buffer_empty;
+	char			*zminus0 = NULL, *zplus0 = NULL;
+	const char		*zplus = NULL, *zminus = NULL;
+	fsl_uuid_str		 xplus0 = NULL, xminus0 = NULL;
+	fsl_uuid_str		 xplus = NULL, xminus = NULL;
+	int			 rc = 0;
 
 	assert(vid1 != vid2);
 	assert(vid2 > 0 &&
@@ -5190,9 +5257,15 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
 
 	rc = write_diff_meta(buf, zminus, xminus, zplus, xplus, diff_flags,
 	    change);
+	if (rc)
+		goto end;
+
+	rc = fnc_diff_builder(&diffbld, xminus, xplus, zminus, zplus, context,
+	    diff_flags, buf);
+	if (rc)
+		goto end;
 	if (FLAG_CHK(diff_flags, FSL_DIFF_VERBOSE) || (a && b))
-		rc = fsl_diff_text_to_buffer(&fbuf1, &fbuf2, buf, context, sbs,
-		    diff_flags);
+		rc = fsl_diff_v2(&fbuf1, &fbuf2, diffbld);
 	if (rc)
 		RC(rc, "%s: fsl_diff_text_to_buffer\n"
 		    " -> %s [%s]\n -> %s [%s]", fsl_rc_cstr(rc),
@@ -5205,6 +5278,7 @@ end:
 	fsl_free(xplus0);
 	fsl_buffer_clear(&fbuf1);
 	fsl_buffer_clear(&fbuf2);
+	fnc_free_diff_builder(diffbld);
 	return rc;
 }
 
@@ -5571,11 +5645,11 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		if (ch == 'c')
 			s->colour = !s->colour;
 		if (ch == 'i')
-			FLAG_TOG(s->diff_flags, FSL_DIFF_INVERT);
+			FLAG_TOG(s->diff_flags, FSL_DIFF2_INVERT);
 		if (ch == 'v')
 			FLAG_TOG(s->diff_flags, FSL_DIFF_VERBOSE);
 		if (ch == 'w')
-			FLAG_TOG(s->diff_flags, FSL_DIFF_IGNORE_ALLWS);
+			FLAG_TOG(s->diff_flags, FSL_DIFF2_IGNORE_ALLWS);
 		wclear(view->window);
 		s->first_line_onscreen = 1;
 		s->last_line_onscreen = view->nlines;
