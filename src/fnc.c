@@ -958,7 +958,7 @@ static void		 drawborder(struct fnc_view *);
 static int		 diff_input_handler(struct fnc_view **,
 			    struct fnc_view *, int);
 static int		 request_tl_commits(struct fnc_view *);
-static void		 reorient_view(struct fnc_view *, int);
+static int		 reset_diff_view(struct fnc_view *, int, bool);
 static int		 set_selected_commit(struct fnc_diff_view_state *,
 			    struct commit_entry *);
 static int		 diff_search_init(struct fnc_view *);
@@ -5642,8 +5642,7 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case 'c':
 	case 'i':
 	case 'v':
-	case 'w': {
-		int n = s->nlines;
+	case 'w':
 		if (ch == 'c')
 			s->colour = !s->colour;
 		if (ch == 'i')
@@ -5652,27 +5651,20 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			FLAG_TOG(s->diff_flags, FSL_DIFF_VERBOSE);
 		if (ch == 'w')
 			FLAG_TOG(s->diff_flags, FSL_DIFF2_IGNORE_ALLWS);
-		show_diff_status(view);
-		rc = create_diff(s);
-		reorient_view(view, s->nlines - n);
+		rc = reset_diff_view(view, s->nlines, false);
 		break;
-	}
 	case '-':
 	case '_':
 		if (s->context > 0) {
-			int n = s->nlines;
 			--s->context;
-			show_diff_status(view);
-			rc = create_diff(s);
-			reorient_view(view, s->nlines - n);
+			rc = reset_diff_view(view, s->nlines, false);
 		}
 		break;
 	case '+':
 	case '=':
 		if (s->context < MAX_DIFF_CTX) {
 			++s->context;
-			show_diff_status(view);
-			rc = create_diff(s);
+			rc = reset_diff_view(view, s->nlines, false);
 		}
 		break;
 	case CTRL('j'):
@@ -5700,11 +5692,7 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		if ((rc = set_selected_commit(s, tlstate->selected_commit)))
 			break;
 
-		s->first_line_onscreen = 1;
-		s->last_line_onscreen = view->nlines;
-
-		show_diff_status(view);
-		rc = create_diff(s);
+		reset_diff_view(view, 0, true);
 		break;
 	default:
 		break;
@@ -5713,19 +5701,34 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	return rc;
 }
 
-static void
-reorient_view(struct fnc_view *view, int n)
+static int
+reset_diff_view(struct fnc_view *view, int n, bool resetln)
 {
 	struct fnc_diff_view_state	*s = &view->state.diff;
+	int				 rc = FSL_RC_OK;
 
-	if (n < 0 && s->first_line_onscreen > ABS(n) && ABS(n) > view->nlines) {
-		s->first_line_onscreen -= ABS(n);
-		s->last_line_onscreen -= ABS(n);
-	}
-	if (n > 0 && n > view->nlines) {
+	show_diff_status(view);
+	rc = create_diff(s);
+	if (rc)
+		return rc;
+
+	n = n ? n - s->nlines : n;
+
+	if (n < 0) {
+		n = ABS(n);
 		s->first_line_onscreen += n;
 		s->last_line_onscreen += n;
+	} else if (n > 0 && s->first_line_onscreen > n) {
+		s->first_line_onscreen -= n;
+		s->last_line_onscreen -= n;
+	} else if (resetln) {
+		s->first_line_onscreen = 1;
+		s->last_line_onscreen = view->nlines;
 	}
+
+	s->matched_line = 0;
+
+	return rc;
 }
 
 static int
@@ -8324,7 +8327,7 @@ run_blame(struct fnc_view *view)
 		s->last_line_onscreen = view->nlines;
 		s->selected_line = 1;
 	}
-
+	s->matched_line = 0;
 end:
 	fsl_free(master);
 	fsl_free(root);
