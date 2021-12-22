@@ -958,6 +958,7 @@ static void		 drawborder(struct fnc_view *);
 static int		 diff_input_handler(struct fnc_view **,
 			    struct fnc_view *, int);
 static int		 request_tl_commits(struct fnc_view *);
+static void		 reorient_view(struct fnc_view *, int);
 static int		 set_selected_commit(struct fnc_diff_view_state *,
 			    struct commit_entry *);
 static int		 diff_search_init(struct fnc_view *);
@@ -5641,7 +5642,8 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case 'c':
 	case 'i':
 	case 'v':
-	case 'w':
+	case 'w': {
+		int n = s->nlines;
 		if (ch == 'c')
 			s->colour = !s->colour;
 		if (ch == 'i')
@@ -5650,23 +5652,19 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			FLAG_TOG(s->diff_flags, FSL_DIFF_VERBOSE);
 		if (ch == 'w')
 			FLAG_TOG(s->diff_flags, FSL_DIFF2_IGNORE_ALLWS);
-		wclear(view->window);
-		s->first_line_onscreen = 1;
-		s->last_line_onscreen = view->nlines;
 		show_diff_status(view);
 		rc = create_diff(s);
+		reorient_view(view, s->nlines - n);
 		break;
+	}
 	case '-':
 	case '_':
 		if (s->context > 0) {
+			int n = s->nlines;
 			--s->context;
 			show_diff_status(view);
 			rc = create_diff(s);
-			if (s->first_line_onscreen + view->nlines - 1 >
-			    (int)s->nlines) {
-				s->first_line_onscreen = 1;
-				s->last_line_onscreen = view->nlines;
-			}
+			reorient_view(view, s->nlines - n);
 		}
 		break;
 	case '+':
@@ -5713,6 +5711,21 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	}
 
 	return rc;
+}
+
+static void
+reorient_view(struct fnc_view *view, int n)
+{
+	struct fnc_diff_view_state	*s = &view->state.diff;
+
+	if (n < 0 && s->first_line_onscreen > ABS(n) && ABS(n) > view->nlines) {
+		s->first_line_onscreen -= ABS(n);
+		s->last_line_onscreen -= ABS(n);
+	}
+	if (n > 0 && n > view->nlines) {
+		s->first_line_onscreen += n;
+		s->last_line_onscreen += n;
+	}
 }
 
 static int
