@@ -2936,7 +2936,7 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
           ? StrNLen32(bufpt,
                       (precision>0 && flag_alternateform)
                       ? precision*4/*max bytes per char*/
-                      : (precision ? precision : -1))
+                      : (precision>=0 ? precision : -1))
           : (int)0;
         if(flag_alternateform && length && (precision>0 || width>0)){
           appendf__utf8_altform(bufpt, &length, &precision, &width);
@@ -2954,7 +2954,7 @@ int fsl_appendfv(fsl_output_f pfAppend, /* Accumulate results here */
           ? StrNLen32(bufpt,
                       (precision>0 && flag_alternateform)
                       ? precision*4/*max bytes per char*/
-                      : (precision ? precision : -1))
+                      : (precision>=0 ? precision : -1))
           : (int)0;
         if(flag_alternateform && length && (precision>0 || width>0)){
           appendf__utf8_altform(bufpt, &length, &precision, &width);
