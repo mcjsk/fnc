@@ -5,7 +5,8 @@
 #  include "config.h"
 #endif
 #include "libfossil-config.h"
-/* start of file ./include/fossil-scm/fossil-config.h */
+#include "sqlite3.h"
+/* start of file ./include/fossil-scm/config.h */
 #if !defined (ORG_FOSSIL_SCM_FSL_CONFIG_H_INCLUDED)
 #define ORG_FOSSIL_SCM_FSL_CONFIG_H_INCLUDED
 /*
@@ -20,7 +21,6 @@
 
 */
 #if defined(_MSC_VER) && !defined(FSL_AMALGAMATION_BUILD)
-#  include "config-win32.h" /* manually generated */
 #else
 #endif
 
@@ -250,8 +250,8 @@ typedef int64_t fsl_time_t;
 
 #endif
 /* ORG_FOSSIL_SCM_FSL_CONFIG_H_INCLUDED */
-/* end of file ./include/fossil-scm/fossil-config.h */
-/* start of file ./include/fossil-scm/fossil-util.h */
+/* end of file ./include/fossil-scm/config.h */
+/* start of file ./include/fossil-scm/util.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_UTIL_H_INCLUDED)
@@ -1889,6 +1889,9 @@ FSL_EXPORT int fsl_strncmp(const char *zA, const char *zB, fsl_size_t nByte);
    BSD strlcpy() variant which is less error prone than strncpy. Copy up to
    dstsz - 1 characters from src to dst and NUL-terminate the resulting string
    if dstsz is not 0.
+
+   Returns the length of the string it writes to dst. If it returns a value
+   equal to or greater than its 3rd argument then the output was truncated.
 */
 FSL_EXPORT fsl_size_t fsl_strlcpy(char *dst, const char *src, fsl_size_t dstsz);
 
@@ -1897,6 +1900,10 @@ FSL_EXPORT fsl_size_t fsl_strlcpy(char *dst, const char *src, fsl_size_t dstsz);
    the end of dst. Append at most dstsz - strlen(dst - 1) characters, and
    NUL-terminate unless dstsize is 0 or the passed in dst string was longer
    than dstsz to begin with.
+
+   Returns the initial string-length of dest plus the length src. If
+   it returns a value equal to or greater than its 3rd argument then
+   the output was truncated.
 */
 FSL_EXPORT fsl_size_t fsl_strlcat(char *dst, const char *src, fsl_size_t dstsz);
 
@@ -3643,9 +3650,14 @@ FSL_EXPORT fsl_size_t fsl_htmlize_xlate(int c, char const ** xlate);
    Flags for use with text-diff generation APIs,
    e.g. fsl_diff_text().
 
-   Maintenance reminder: these values are holy and must not be
-   changed without also changing the corresponding code in
-   diff.c.
+   Maintenance reminders:
+
+   - These values are holy and must not be changed without also
+     changing the corresponding code in diff.c.
+
+   - Where these entries semantically overlap with their fsl_diff2_flag_e
+     counterparts, they MUST have the same values because some internal APIs
+     are used by both of the diff APIs.
 
    @deprecated Prefer fsl_diff2_flag_e and fsl_diff_v2() instead.
 */
@@ -3668,6 +3680,8 @@ FSL_DIFF_LINENO =       0x40,
 FSL_DIFF_NOOPT =        0x0100,
 /** Invert the diff (debug). */
 FSL_DIFF_INVERT =       0x0200,
+/* ACHTUNG: do not use 0x0400 because of semantic
+   collision with FSL_DIFF2_CONTEXT_ZERO */
 /** Only display if not "too big." */
 FSL_DIFF_NOTTOOBIG =    0x0800,
 /** Strip trailing CR */
@@ -3758,11 +3772,17 @@ FSL_EXPORT int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *p
 /** @enum fsl_diff2_flag_e
 
    Flags for use with the 2021-era text-diff generation APIs
-   (fsl_diff_builder and friends). This set of flags may still change
+   (fsl_dibu and friends). This set of flags may still change
    considerably.
 
-   Maintenance reminder: some of these values are holy and must not be
-   changed without also changing the corresponding code in diff2.c.
+   Maintenance reminders:
+
+   - Some of these values are holy and must not be changed without
+     also changing the corresponding code in diff2.c.
+
+   - Where these entries semantically overlap with their fsl_diff_flag_e
+     counterparts, they MUST have the same values because some internal APIs
+     are used by both of the diff APIs.
 */
 enum fsl_diff2_flag_e {
 /** Ignore end-of-line whitespace. Applies to
@@ -3790,11 +3810,15 @@ FSL_DIFF2_NOTTOOBIG =    0x0800,
    Strip trailing CR before diffing. Applies to all diff builders.
 */
 FSL_DIFF2_STRIP_EOLCR =    0x1000,
+/*
+  ACHTUNG: do not use 0x2000 because it would semantically collide
+  with FSL_DIFF_ANSI_COLOR.
+*/
 /**
    More precise but slower side-by-side diff algorithm, for diffs
    which use that.
 */
-FSL_DIFF2_SLOW_SBS =       0x2000,
+FSL_DIFF2_SLOW_SBS =       0x4000,
 /**
    Tells diff builders which support it to include line numbers in
    their output.
@@ -3832,12 +3856,12 @@ FSL_DIFF2_CLIENT4 = 0x08000000
 
 /**
    An instance of this class is used to convey certain state to
-   fsl_diff_builder objects. Some of this state is configuration
+   fsl_dibu objects. Some of this state is configuration
    provided by the client and some is volatile, used for communicating
    common state to diff builder instances during the diff rendering
    process.
 
-   Certain fsl_diff_builder implementations may require that some
+   Certain fsl_dibu implementations may require that some
    ostensibly optional fields be filled out. Documenting that is TODO,
    as the builders get developed.
 */
@@ -3854,7 +3878,7 @@ struct fsl_diff_opt {
   /**
      Maximum column width hint for side-by-side, a.k.a. split, diffs.
 
-     FSL_DIFF_BUILDER_SPLIT_TEXT truncates its content columns (as
+     FSL_DIBU_SPLIT_TEXT truncates its content columns (as
      opposed to line numbers and its modification marker) to, at most,
      this width. By default it uses as much width as is necessary to
      render whole lines. It treats this limit as UTF8 characters, not
@@ -3964,7 +3988,7 @@ extern const fsl_diff_opt fsl_diff_opt_empty;
 /**
    Information about each line of a file being diffed.
 
-   This type is only in the public API for use by the fsl_diff_builder
+   This type is only in the public API for use by the fsl_dibu
    interface, specifically for use with fsl_dline_change_spans(). It
    is not otherwise intended for public use. None of its members are
    considered even remotely public except for this->z and this->n.
@@ -4012,7 +4036,7 @@ extern const fsl_dline fsl_dline_empty;
    This "mostly-internal" type describes zero or more (up to
    fsl_dline_change_max_spans) areas of difference between two lines
    of text. This type is only in the public API for use with concrete
-   fsl_diff_builder implementations.
+   fsl_dibu implementations.
 */
 struct fsl_dline_change {
   /** Number of change spans (number of used elements in this->a). */
@@ -4060,7 +4084,7 @@ extern const fsl_dline_change fsl_dline_change_empty;
    this routine.
 
    This function is only in the public API for use with
-   fsl_diff_builder objects. It is not a requirement for such objects
+   fsl_dibu objects. It is not a requirement for such objects
    but can be used to provide more detailed diff changes than marking
    whole lines as simply changed or not.
 */
@@ -4116,11 +4140,12 @@ FSL_EXPORT int fsl_break_into_dlines(const char *z, fsl_int_t n,
                                      fsl_dline **pOut, uint64_t diff2Flags);
 
 /** Convenience typedef. */
-typedef struct fsl_diff_builder fsl_diff_builder;
+typedef struct fsl_dibu fsl_dibu;
 
 /**
    This class is the basis of libfossil's port of the diff engine
-   added to fossil(1) in 2021-09.
+   added to fossil(1) in 2021-09, colloquially known as the "diff
+   builder."
 
    A diff builder is an object responsible for formatting low-level
    diff info another form, typically for human readability but also
@@ -4144,7 +4169,7 @@ typedef struct fsl_diff_builder fsl_diff_builder;
    needs for outputing the text columns. It would also allow for it to
    dynamically resize the line number columns more easily.
 */
-struct fsl_diff_builder {
+struct fsl_dibu {
   /**
      Config info, owned by higher-level routines. Every diff builder
      requires one of these. Builders are prohibited from modifying
@@ -4158,6 +4183,12 @@ struct fsl_diff_builder {
      diff).)
   */
   fsl_diff_opt * opt;
+  /**
+     Can optionally be set by factory functions to some internal
+     opaque value, so that non-member routines specific to that type can determine
+     whether any given builder is of the proper type.
+   */
+  void const * typeID;
   /**
      If not NULL, this is called once per pass per diff to give the
      builder a chance to perform any bootstrapping initialization or
@@ -4180,7 +4211,7 @@ struct fsl_diff_builder {
      The diff driver sets this->lnLHS and this->lnRHS to 0 before
      calling this.
   */
-  int (*start)(fsl_diff_builder * const b);
+  int (*start)(fsl_dibu * const b);
 
   /**
      If this is not NULL, it is called one time at the start of each
@@ -4205,7 +4236,7 @@ struct fsl_diff_builder {
 
      Must return 0 on success, non-0 on error.
   */
-  int (*chunkHeader)(fsl_diff_builder* const,
+  int (*chunkHeader)(fsl_dibu* const,
                      uint32_t A, uint32_t B,
                      uint32_t C, uint32_t D);
 
@@ -4218,7 +4249,7 @@ struct fsl_diff_builder {
 
      - Increment both this->lnLHS and this->lnRHS by n.
   */
-  int (*skip)(fsl_diff_builder* const, uint32_t n);
+  int (*skip)(fsl_dibu* const, uint32_t n);
   /**
      Tells the builder that the given line represents one line of
      common output. Must return 0 on success, non-0 on error.
@@ -4227,7 +4258,7 @@ struct fsl_diff_builder {
 
      - Increment both this->lnLHS and this->lnRHS by 1.
   */
-  int (*common)(fsl_diff_builder* const, fsl_dline const * line);
+  int (*common)(fsl_dibu* const, fsl_dline const * line);
   /**
      Tells the builder that the given line represents an "insert" into
      the RHS. Must return 0 on success, non-0 on error.
@@ -4236,7 +4267,7 @@ struct fsl_diff_builder {
 
      - Increment this->lnRHS by 1.
   */
-  int (*insertion)(fsl_diff_builder* const, fsl_dline const * line);
+  int (*insertion)(fsl_dibu* const, fsl_dline const * line);
   /**
      Tells the builder that the given line represents a "deletion" - a
      line removed from the LHS. Must return 0 on success, non-0 on
@@ -4246,7 +4277,7 @@ struct fsl_diff_builder {
 
      - Increment this->lnLHS by 1.
   */
-  int (*deletion)(fsl_diff_builder* const, fsl_dline const * line);
+  int (*deletion)(fsl_dibu* const, fsl_dline const * line);
   /**
      Tells the builder that the given line represents a replacement
      from the LHS to the RHS. Must return 0 on success, non-0 on
@@ -4260,7 +4291,7 @@ struct fsl_diff_builder {
 
      - Increment both this->lnLHS and this->lnRHS by 1.
   */
-  int (*replacement)(fsl_diff_builder* const, fsl_dline const * lineLhs,
+  int (*replacement)(fsl_dibu* const, fsl_dline const * lineLhs,
                      fsl_dline const * lineRhs);
   /**
      Tells the builder that the given line represents an "edit" from
@@ -4276,7 +4307,7 @@ struct fsl_diff_builder {
 
      - Increment both this->lnLHS and this->lnRHS by 1.
   */
-  int (*edit)(fsl_diff_builder* const, fsl_dline const * lineLhs,
+  int (*edit)(fsl_dibu* const, fsl_dline const * lineLhs,
               fsl_dline const * lineRhs);
   /**
      Must "finish" the diff process. Depending on the diff impl, this
@@ -4292,13 +4323,28 @@ struct fsl_diff_builder {
 
      Must return 0 on success, non-0 on error (e.g. output flushing
      fails).
+
+     Minor achtung: for a multi-file diff run, this gets called after
+     each file. The library does not have enough information to know
+     when a builder is "done for good" and if a custom builder
+     requires, e.g., extra post-diff-loop processing, the client will
+     have to take care of that themselves.
   */
-  int (*finish)(fsl_diff_builder* const b);
+  int (*finish)(fsl_dibu* const b);
+  /**
+     This optional method is similar to this->finish() but it is not
+     called by the library. It is intended to be called, if it's not
+     NULL, by the client after they are done, e.g., looping over a
+     series of diffs with the same build. Some builders can use this
+     to flush any final state, e.g. dumping out change count totals or
+     some such.
+  */
+  int (*finally)(fsl_dibu* const b);
   /**
      Must free any state owned by this builder, including the builder
      object. It must not generate any output.
   */
-  void (*finalize)(fsl_diff_builder* const);
+  void (*finalize)(fsl_dibu* const);
   /**
      If true, this builder gets passed through the diff generation
      process twice. See this->passNumber for details.
@@ -4346,32 +4392,36 @@ struct fsl_diff_builder {
   uint32_t lnRHS;
 };
 
-/** Initialized-with-defaults fsl_diff_builder structure, intended for
+/** Initialized-with-defaults fsl_dibu structure, intended for
     const-copy initialization. */
-#define fsl_diff_builder_empty_m { \
-  NULL/*cfg*/,                                                        \
+#define fsl_dibu_empty_m { \
+  NULL/*opt*/,NULL/*typeID*/,                                         \
   NULL/*start()*/,NULL/*chunkHeader()*/,NULL/*skip()*/, NULL/*common()*/, \
   NULL/*insertion()*/,NULL/*deletion()*/, NULL/*replacement()*/, \
-  NULL/*edit()*/, NULL/*finish()*/, NULL/*finalize()*/,        \
+  NULL/*edit()*/, NULL/*finish()*/, NULL/*finally()*/,NULL/*finalize()*/, \
   false/*twoPass*/,0U/*passNumber*/, \
   NULL/*pimpl*/, 0U/*implFlags*/,0U/*fileCount*/,         \
   0/*lnLHS*/,0/*lnRHS*/ \
 }
 
-/** Initialized-with-defaults fsl_diff_builder structure, intended for
+/** Initialized-with-defaults fsl_dibu structure, intended for
     non-const copy initialization. */
-extern const fsl_diff_builder fsl_diff_builder_empty;
+extern const fsl_dibu fsl_dibu_empty;
 
 /**
-   Type IDs for use with fsl_diff_builder_factory().
+   Type IDs for use with fsl_dibu_factory().
 */
-enum fsl_diff_builder_e {
+enum fsl_dibu_e {
+/**
+   Sentinel entry.
+*/
+FSL_DIBU_INVALID = 0,
 /**
    A "dummy" diff builder intended only for testing the
-   fsl_diff_builder interface and related APIs. It does not produce
+   fsl_dibu interface and related APIs. It does not produce
    output which is generically useful.
 */
-FSL_DIFF_BUILDER_DEBUG = 1,
+FSL_DIBU_DEBUG = 1,
 /**
    Generates diffs in a compact low(ist)-level form originally
    designed for use by diff renderers implemented in JavaScript.
@@ -4411,7 +4461,7 @@ FSL_DIFF_BUILDER_DEBUG = 1,
    in SUBARRAY is the common-suffix.  Any string can be empty if it
    does not apply.
 */
-FSL_DIFF_BUILDER_JSON1,
+FSL_DIBU_JSON1,
 
 /**
    A diff builder which produces output compatible with the patch(1)
@@ -4425,7 +4475,7 @@ FSL_DIFF_BUILDER_JSON1,
    - FSL_DIFF2_LINE_NUMBERS (makes it incompatible with patch(1))
    - FSL_DIFF2_NOINDEX
 */
-FSL_DIFF_BUILDER_UNIFIED_TEXT,
+FSL_DIBU_UNIFIED_TEXT,
 
 /**
    A diff builder which outputs a description of the diff in a
@@ -4436,19 +4486,19 @@ FSL_DIFF_BUILDER_UNIFIED_TEXT,
    output. We first need to compile fossil's diff.tcl into the
    library.
 */
-FSL_DIFF_BUILDER_TCL,
+FSL_DIBU_TCL,
 /**
    A pain-text side-by-side (a.k.a. split) diff view. This diff always
    behaves as if the FSL_DIFF2_LINE_NUMBERS flag were set because its
    output is fairly useless without line numbers. It optionally
    supports ANSI coloring.
 */
-FSL_DIFF_BUILDER_SPLIT_TEXT
+FSL_DIBU_SPLIT_TEXT
 };
-typedef enum fsl_diff_builder_e fsl_diff_builder_e;
+typedef enum fsl_dibu_e fsl_dibu_e;
 
 /**
-   A factory for creating fsl_diff_builder instances of types which
+   A factory for creating fsl_dibu instances of types which
    are built in to the library. This does not preclude the creation of
    client-side diff builders (e.g. ones which write to ncurses widgets
    or similar special-case output).
@@ -4459,19 +4509,20 @@ typedef enum fsl_diff_builder_e fsl_diff_builder_e;
    codes include FSL_RC_OOM (alloc failed) and FSL_RC_TYPE (unknown
    type ID), FSL_RC_TYPE (type is not (or not yet) implemented).
 */
-FSL_EXPORT int fsl_diff_builder_factory( fsl_diff_builder_e type,
-                                         fsl_diff_builder **pOut );
+FSL_EXPORT int fsl_dibu_factory( fsl_dibu_e type,
+                                         fsl_dibu **pOut );
 
 /**
-   Base allocator for fsl_diff_builder instances. If extra is >0 then
+   Base allocator for fsl_dibu instances. If extra is >0 then
    that much extra space is allocated as part of the same memory block
    and the pimpl member of the returned object is pointed to that
-   space. Example:
+   space. Example (OOM handling elided for legibility):
 
    ```
    struct MyState { int x; int y; };
-   fsl_diff_builder * b = fsl_diff_builder_alloc(sizeof(MyState));
-   struct MyState * my = (struct MyState*)b->pimpl;
+   typedef struct MyState MyState;
+   fsl_dibu * b = fsl_dibu_alloc(sizeof(MyState));
+   MyState * my = (MyState*)b->pimpl;
    my->x = 1;
    my->y = 2;
    ... populate b's members ...
@@ -4482,23 +4533,23 @@ FSL_EXPORT int fsl_diff_builder_factory( fsl_diff_builder_e type,
    From within b's methods, the custom state can be accessed via its
    `pimpl` member.
 
-   @see fsl_diff_builder_finalizer()
+   @see fsl_dibu_finalizer()
 */
-FSL_EXPORT fsl_diff_builder * fsl_diff_builder_alloc(fsl_size_t extra);
+FSL_EXPORT fsl_dibu * fsl_dibu_alloc(fsl_size_t extra);
 
 /**
    This is a generic finalizer function for use as a
-   fsl_diff_builder::finalize() method. It simply zeroes out b and
+   fsl_dibu::finalize() method. It simply zeroes out b and
    passes it fsl_free(). This is suitable for builders created using
-   fsl_diff_builder_alloc() _only_ if their custom state manages no
+   fsl_dibu_alloc() _only_ if their custom state manages no
    extra memory. If they manage any custom memory then the require a
    custom, type-specific finalizer method.
 */
-FSL_EXPORT void fsl_diff_builder_finalizer(fsl_diff_builder * const b);
+FSL_EXPORT void fsl_dibu_finalizer(fsl_dibu * const b);
 
 /**
    This counterpart of fsl_diff_text() defines its output format in
-   terms of a fsl_diff_builder instance which the caller must provide.
+   terms of a fsl_dibu instance which the caller must provide.
    The caller is responsible for pointing pBuilder->cfg to a
    configuration object suitable for the desired diff. In particular,
    pBuilder->cfg->out and (if necessary) pBuilder->cfg->outState must
@@ -4525,13 +4576,13 @@ FSL_EXPORT void fsl_diff_builder_finalizer(fsl_diff_builder * const b);
    be recognized as binary (and are, in any case, generally less than
    useful for most graphical diff purposes).
 
-   @see fsl_diff_builder_factory()
+   @see fsl_dibu_factory()
    @see fsl_diff_text()
    @see fsl_diff_raw_v2()
 */
 FSL_EXPORT int fsl_diff_v2(fsl_buffer const * pv1,
                            fsl_buffer const * pv2,
-                           fsl_diff_builder * const pBuilder);
+                           fsl_dibu * const pBuilder);
 
 /**
    Performs a diff, as for fsl_diff_v2(), but returns the results in
@@ -5851,9 +5902,15 @@ typedef struct fsl_dircrawl_state fsl_dircrawl_state;
    absolute name of the target directory, the name of the directory
    entry (no path part), the type of the entry, and the client state
    pointer which is passed to that routine. It must return 0 on
-   success or another FSL_RC_xxx value on error. Returning
-   FSL_RC_BREAK will cause directory-crawling to stop without an
-   error.
+   success or another FSL_RC_xxx value on error.
+
+   Special return values:
+
+   - FSL_RC_BREAK will cause directory-crawling to stop without an
+     error (returning 0).
+
+   - Returning FSL_RC_NOOP will cause recursion into a directory to
+     be skipped, but traversal to otherwise continue.
 
    All pointers in the state argument are owned by fsl_dircrawl() and
    will be invalidated as soon as the callback returns, thus they must
@@ -5893,12 +5950,13 @@ typedef int (*fsl_dircrawl_f)(fsl_dircrawl_state const *);
 
    Returns 0 on success, FSL_RC_TYPE if the given name is not a
    directory, and FSL_RC_RANGE if it recurses "too deep," (some
-   "reasonable" internally hard-coded limit), in order to prevent a
+   "reasonable" internally hard-coded limit), in order to help avoid a
    stack overflow.
 
    If the callback returns non-0, iteration stops and returns that
-   result code unless the result is FSL_RC_BREAK, which stops
-   iteration but causes 0 to be returned from this function.
+   result code unless the result is FSL_RC_BREAK or FSL_RC_NOOP, with
+   those codes being treated specially, as documented for
+   fsl_dircrawl_f() callbacks.
 */
 FSL_EXPORT int fsl_dircrawl(char const * dirName, fsl_dircrawl_f callback,
                             void * callbackState);
@@ -6063,8 +6121,8 @@ FSL_EXPORT bool fsl_might_be_utf16(fsl_buffer const * const b, bool * isReversed
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_UTIL_H_INCLUDED */
-/* end of file ./include/fossil-scm/fossil-util.h */
-/* start of file ./include/fossil-scm/fossil-core.h */
+/* end of file ./include/fossil-scm/util.h */
+/* start of file ./include/fossil-scm/core.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_CORE_H_INCLUDED)
@@ -8284,8 +8342,8 @@ FSL_EXPORT time_t fsl_cx_time_adj(fsl_cx const * f, time_t clock);
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_CORE_H_INCLUDED */
-/* end of file ./include/fossil-scm/fossil-core.h */
-/* start of file ./include/fossil-scm/fossil-db.h */
+/* end of file ./include/fossil-scm/core.h */
+/* start of file ./include/fossil-scm/db.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_DB_H_INCLUDED)
@@ -8311,7 +8369,6 @@ FSL_EXPORT time_t fsl_cx_time_adj(fsl_cx const * f, time_t clock);
   do not then we have to typedef the sqlite3 struct here and that
   breaks when client code includes both this file and sqlite3.h.
 */
-#include "sqlite3.h"
 
 #if defined(__cplusplus)
 extern "C" {
@@ -10146,8 +10203,8 @@ FSL_EXPORT int fsl_stmt_bind_step( fsl_stmt * st, char const * fmt, ... );
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_DB_H_INCLUDED */
-/* end of file ./include/fossil-scm/fossil-db.h */
-/* start of file ./include/fossil-scm/fossil-hash.h */
+/* end of file ./include/fossil-scm/db.h */
+/* start of file ./include/fossil-scm/hash.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_HASH_H_INCLUDED)
@@ -10688,8 +10745,8 @@ FSL_EXPORT const char * fsl_hash_type_name(fsl_hash_types_e h, const char *zUnkn
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_HASH_H_INCLUDED */
-/* end of file ./include/fossil-scm/fossil-hash.h */
-/* start of file ./include/fossil-scm/fossil-repo.h */
+/* end of file ./include/fossil-scm/hash.h */
+/* start of file ./include/fossil-scm/repo.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_REPO_H_INCLUDED)
@@ -11540,8 +11597,9 @@ typedef int (*fsl_card_F_visitor_f)(fsl_card_F const * fc,
    baseline). For hand-created decks which have not yet been
    fsl_deck_unshuffle()'d, the order is unspecified.
 */
-FSL_EXPORT int fsl_deck_F_foreach( fsl_deck * d, fsl_card_F_visitor_f cb,
-                                   void * visitorState );
+FSL_EXPORT int fsl_deck_F_foreach( fsl_deck * const d,
+                                   fsl_card_F_visitor_f cb,
+                                   void * const visitorState );
 
 /**
    Fetches the next F-card entry from d. fsl_deck_F_rewind() must
@@ -11997,7 +12055,7 @@ FSL_EXPORT bool fsl_deck_has_required_cards( fsl_deck const * d );
    @see fsl_deck_output()
    @see fsl_deck_save()
 */
-FSL_EXPORT int fsl_deck_unshuffle( fsl_deck * d, bool calculateRCard );
+FSL_EXPORT int fsl_deck_unshuffle( fsl_deck * const d, bool calculateRCard );
 
 /**
    Renders the given control artifact's contents to the given output
@@ -14501,14 +14559,237 @@ FSL_EXPORT int fsl_repo_rebuild(fsl_cx * const f, fsl_rebuild_opt const * const 
 FSL_EXPORT int fsl_branch_of_rid(fsl_cx * const f, fsl_int_t rid,
                                  bool doFallback, char ** zOut );
 
+/** Convenience typedef and obligatory forward declaration. */
+typedef struct fsl_cidiff_state fsl_cidiff_state;
+
+/**
+   Callback type for use with fsl_cidiff(). It must return 0 on
+   success or a value from the fsl_rc_e enum on error.  On error it
+   "should" update the error state in the corresponding fsl_cx object
+   by passing state->f to fsl_cx_err_set() (or equivalent).
+*/
+typedef int (*fsl_cidiff_f)(fsl_cidiff_state const *state);
+
+/**
+   Options for use with fsl_cidiff()
+*/
+struct fsl_cidiff_opt {
+  /**
+     Checkin version (RID) for "version 1".
+  */
+  fsl_id_t v1;
+  /**
+     Checkin version (RID) for "version 2". This checkin need not have
+     any relationship with version 1, in terms of SCM-side lineage.
+  */
+  fsl_id_t v2;
+  /**
+     Callback to call on each iteration step.
+  */
+  fsl_cidiff_f callback;
+  /**
+     Opaque state for the callback. It can be accessed
+     from the callback via arg->opt->callbackState.
+  */
+  void * callbackState;
+};
+
+/** Convenience typedef. */
+typedef struct fsl_cidiff_opt fsl_cidiff_opt;
+
+/** Initialized-with-defaults fsl_cidiff_opt structure, intended for
+    const-copy initialization. */
+#define fsl_cidiff_opt_empty_m {0,0}
+
+/** Initialized-with-defaults fsl_cidiff_opt structure, intended for
+    non-const copy initialization. */
+FSL_EXPORT const fsl_cidiff_opt fsl_cidiff_opt_empty;
+
+/**
+   Descriptors for the type of information being reported for each
+   step of fsl_cidiff() iteration, as reported via the
+   fsl_cidiff_state::changes attribute.
+*/
+enum fsl_cidiff_e {
+/**
+   Indicates that the v1 and v2 files are the same. Specifically,
+   this means:
+
+   - Same current names, compared case-sensitively.
+     fsl_card_F::priorName values are ignored for this
+   - Same permissions.
+   - Same hash.
+*/
+FSL_CIDIFF_NONE = 0,
+/**
+   Indicates that the hashes of the v1 and v2 files
+   differ.
+*/
+FSL_CIDIFF_FILE_MODIFIED = 0x0001,
+/**
+   Indicates that the v2 file was renamed.
+
+   Caveats:
+
+   - If v1 and v2 are not immediate relatives in the SCM DAG
+     sense. e.g. when comparing a version X and unrelated version Y,
+     or version X and X+30, it is possible that a rename goes
+     unreported via fsl_cidiff or that it gets misdiagnosed. e.g. if
+     version X renames file A to B and version X+100 renames file C to
+     A, it will be reported as a rename. Detecting the true reality of
+     such cases is remarkably challenging, requiring going through the
+     entire history which links v1 and v2.
+
+   - Pedantically speaking, if v1 and v2 are unrelated in the SCM
+     DAG, "renames" are not possible but will be reported as such
+     if their names happen to match up.
+*/
+FSL_CIDIFF_FILE_RENAMED  = 0x0002,
+/**
+   Indicates that the permissions of the current file
+   differ between v1 and v2. This is only set if
+   both versions have a given file (by name, as opposed
+   to hash).
+*/
+FSL_CIDIFF_FILE_PERMS    = 0x0004,
+/**
+   Indicates that the file is in v2 but not v1. If v1 and v2
+   are unrelated versions or are not immediate DAG neighbors,
+   this might also indicate that a file from v1 was renamed
+   in v2.
+*/
+FSL_CIDIFF_FILE_ADDED    = 0x0010,
+/**
+   Indicates that the file is in v1 but not v2. If v1 and v2
+   are unrelated versions or are not immediate DAG neighbors,
+   this might also indicate that a file from v1 was renamed
+   in v2.
+*/
+FSL_CIDIFF_FILE_REMOVED  = 0x0020
+};
+/** Convenience typedef. */
+typedef enum fsl_cidiff_e fsl_cidiff_e;
+/**
+   Holds the state for a single iteration step of fsl_cidiff.
+*/
+struct fsl_cidiff_state {
+  /**
+     The associated fsl_cx instance.
+  */
+  fsl_cx * f;
+  /**
+     The options object passed to fsl_cidiff().
+  */
+  fsl_cidiff_opt const *opt;
+  /**
+     Denotes the type of this step in the iteration.
+
+     Before fsl_cidiff() starts its loop over F-card changes,
+     it calls the callback once with this value set to 0. The intent is to
+     give the caller an opporuntity to do any required setup, e.g.
+     outputing a report header. The
+     fc1 and fc2 members will both be NULL, but the d1 and d2
+     members will be set.
+
+     For each step of the F-card iteration, stepType will be set to
+     FSL_RC_STEP_ROW.
+
+     After successful difference iteration, fsl_cidiff() calls its
+     callback with stepType set to FSL_RC_STEP_DONE. The intent is to
+     give the caller an opporuntity to do any required cleanup, e.g.
+     outputing a report footer. The fc1 and fc2 members will both be
+     NULL, but the d1 and d2 members will be set.
+  */
+  int stepType;
+  /**
+     Describes the change(s) being reported by the current
+     iteration step, as a bitmask of fsl_cidiff_e values.
+  */
+  int changes;
+  /**
+     The file, if any, corresponding to this->v1. This will be NULL
+     this->changeType is FSL_CIDIFF_FILE_ADDED.
+  */
+  fsl_card_F const * fc1;
+  /**
+     The file, if any, corresponding to this->v2. This will be NULL
+     this->changeType is FSL_CIDIFF_FILE_REMOVED.
+  */
+  fsl_card_F const * fc2;
+  /**
+     The deck corresponding to this->opt->v1. It is strictly forbidden
+     for this->callback to manipulate this object. Specifically, any
+     traversal of its F-card list will invalidate the iteration being
+     done by fsl_cidiff(). Read-only operations on other state of the
+     deck are legal.
+  */
+  fsl_deck const * d1;
+  /**
+     The deck corresponding to this->opt->v2. See the docs for
+     this->d1 for important details.
+  */
+  fsl_deck const * d2;
+};
+
+/** Initialized-with-defaults fsl_cidiff_state structure, intended for
+    const-copy initialization. */
+#define fsl_cidiff_state_empty_m {\
+    NULL/*f*/,NULL/*opt*/,             \
+    0/*stepType*/,FSL_CIDIFF_NONE/*changes*/, \
+    NULL/*fc1*/,NULL/*fc2*/,    \
+    NULL/*d1*/,NULL/*d2*/     \
+  }
+
+/** Initialized-with-defaults fsl_cidiff_state structure, intended for
+    non-const copy initialization. */
+FSL_EXPORT const fsl_cidiff_state fsl_cidiff_state_empty;
+
+/**
+   A utility for reporting the differences between the manifests of
+   two checkins.
+
+   This loads the fsl_deck instances for each version opt->v1 and
+   opt->v2, then calls opt->callback for each step of the
+   difference-checking process. It only inspects and reports the
+   difference between _exactly_ v1 and _exactly_ v2, not the
+   difference between the chain of SCM DAG relatives (if any) between
+   the two.
+
+   It is not required that v1 and v2 be related in the SCM DAG but its
+   report of differences may be misleading if v1 and v2 are either
+   unrelated or separated by more than 1 step in the DAG. See the docs
+   for fsl_cidiff_e for cases known to be potentially confusing.
+
+   Returns 0 on success. If the callback returns non-0, that result is
+   propagated back to the caller. It may otherwise return any number of
+   othe result codes including, but not limited to:
+
+   - FSL_RC_OOM on allocation error
+
+   - FSL_RC_NOT_A_REPO if f has no opened repository.
+
+   - FSL_RC_TYPE if either of the given versions is not a checkin.
+
+   - FSL_RC_NOT_FOUND if either of given versions is not found in the
+   repository.
+
+
+   Potential TODO: add fsl_deck_diff() which takes two decks, instead
+   of RIDs, to compare. This function would just be a proxy for that
+   one, loading the given RIDs and passing on the decks. That would
+   require a significantly larger set of possible change-type values
+   and would require much type-specific handling (e.g. maybe reporting
+   J-card differences for a pair of ticket decks).
+*/
+FSL_EXPORT int fsl_cidiff(fsl_cx * const f, fsl_cidiff_opt const * const opt);
 
 #if defined(__cplusplus)
 } /*extern "C"*/
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_REPO_H_INCLUDED */
-/* end of file ./include/fossil-scm/fossil-repo.h */
-/* start of file ./include/fossil-scm/fossil-checkout.h */
+/* end of file ./include/fossil-scm/repo.h */
+/* start of file ./include/fossil-scm/checkout.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_CHECKOUT_H_INCLUDED)
@@ -14598,18 +14879,65 @@ FSL_EXPORT void fsl_ckout_version_info(fsl_cx * const f, fsl_id_t * const rid,
    this function). (Reminder to self: we could run the end result through
    fsl_is_simple_pathname() to catch that?)
 */
-FSL_EXPORT int fsl_ckout_filename_check( fsl_cx * f, bool relativeToCwd,
-                                         char const * zOrigName, fsl_buffer * pOut );
+FSL_EXPORT int fsl_ckout_filename_check( fsl_cx * const f, bool relativeToCwd,
+                                         char const * zOrigName, fsl_buffer * const pOut );
+
+/**
+   Convenience typedef and required forward decl.
+ */
+typedef struct fsl_ckout_manage_opt fsl_ckout_manage_opt;
+
+/**
+   State passed to fsl_ckout_manage_f() callback.
+*/
+struct fsl_ckout_manage_state {
+  /**
+     The fsl_cx instance for the correspnding fsl_ckout_manage()
+     call.
+  */
+  fsl_cx * f;
+  /**
+     The options object passed to the corresponding call to
+     fsl_ckout_manage(). This is provided primarily for access to
+     its callbackState member. The client must never modify any state
+     in this opt object other than the callbackState or to use other
+     APIs of this->f.
+  */
+  fsl_ckout_manage_opt const * opt;
+  /**
+     The name of the file being managed, relative to the root of the
+     checkout. fsl_cx_stat2() can be used to transform it to an
+     absolute path, if needed. Given a fsl_ckout_manage_state
+     named `ms`, that call would look like:
+
+     ```
+     fsl_buffer_reuse(&yourBuffer);
+     // ^^^ noting that fsl_cx_stat2() APPENDS to the buffer.
+     int rc = fsl_cx_stat2(ms->f, false, ms->filename,
+                           NULL, &yourBuffer, true);
+     // ^^^ noting that the stat "should not" fail in this case
+     // because fsl_ckout_manage() has validated that the file
+     // exists.
+     ```
+  */
+  char const * filename;
+};
+
+/**
+   Convenience typedef.
+*/
+typedef struct fsl_ckout_manage_state fsl_ckout_manage_state;
 
 /**
    Callback type for use with fsl_ckout_manage_opt(). It should
-   inspect the given filename using whatever criteria it likes, set
+   inspect the given (`mst->filename`) using whatever criteria it likes, set
    *include to true or false to indicate whether the filename is okay
    to include the current add-file-to-repo operation, and return 0.
 
    If it returns non-0 the add-file-to-repo process will end and that
    error code will be reported to its caller. Such result codes must
-   come from the FSL_RC_xxx family.
+   come from the FSL_RC_xxx family. They may report details of
+   the error via fsl_cx_err_set() with the `mst->f` object.
 
    It will be passed a name which is relative to the top-most checkout
    directory.
@@ -14618,9 +14946,8 @@ FSL_EXPORT int fsl_ckout_filename_check( fsl_cx * f, bool relativeToCwd,
    as-is from the fsl_ckout_manage_opt::callbackState pointer which
    is passed to fsl_ckout_manage().
 */
-typedef int (*fsl_ckout_manage_f)(const char *zFilename,
-                                    bool *include,
-                                    void *state);
+typedef int (*fsl_ckout_manage_f)(fsl_ckout_manage_state const *mst,
+                                  bool *include);
 /**
    Options for use with fsl_ckout_manage().
 */
@@ -14706,7 +15033,6 @@ struct fsl_ckout_manage_opt {
     uint32_t skipped;
   } counts;
 };
-typedef struct fsl_ckout_manage_opt fsl_ckout_manage_opt;
 /**
    Initialized-with-defaults fsl_ckout_manage_opt instance,
    intended for use in const-copy initialization.
@@ -14755,11 +15081,60 @@ FSL_EXPORT const fsl_ckout_manage_opt fsl_ckout_manage_opt_empty;
    Files queued for addition this way can be unqueued before they are
    committed using fsl_ckout_unmanage().
 
+   To avoid Significant Grief, this routine automatically skips any
+   directories under opt->filename which appear to be fossil checkout
+   roots unless that directory is f's current checkout directory, into
+   which it will recurse normally.
+
    @see fsl_ckout_unmanage()
    @see fsl_reserved_fn_check()
 */
 FSL_EXPORT int fsl_ckout_manage( fsl_cx * const f,
                                  fsl_ckout_manage_opt * const opt );
+
+/**
+   Convenience typedef and required forward decl.
+ */
+typedef struct fsl_ckout_unmanage_opt fsl_ckout_unmanage_opt;
+
+/**
+   State passed to fsl_ckout_unmanage_f() callback.
+*/
+struct fsl_ckout_unmanage_state {
+  /**
+     The fsl_cx instance for the correspnding fsl_ckout_unmanage()
+     call.
+  */
+  fsl_cx * f;
+  /**
+     The options object passed to the corresponding call to
+     fsl_ckout_unmanage(). This is provided primarily for access to
+     its callbackState member. The client must never modify any state
+     in this opt object other than the callbackState or to use other
+     APIs of this->f.
+  */
+  fsl_ckout_unmanage_opt const * opt;
+  /**
+     The name of the file being unmanaged, relative to the root of the
+     checkout. fsl_cx_stat2() can be used to transform it to an
+     absolute path, if needed. Given a fsl_ckout_unmanage_state
+     named `ums`, that call would look like:
+
+     ```
+     fsl_buffer_reuse(&yourBuffer);
+     // ^^^ noting that fsl_cx_stat2() APPENDS to the buffer.
+     int rc = fsl_cx_stat2(ums->f, false, ums->filename,
+                           NULL, &yourBuffer, true);
+     // ^^^ noting that the stat will legitimately and harmlessly
+     // fail if the file does not exist, so this error can
+     // normally be ignored.
+     ```
+  */
+  char const * filename;
+};
+
+/** Convenience typedef. */
+typedef struct fsl_ckout_unmanage_state fsl_ckout_unmanage_state;
 
 
 /**
@@ -14767,19 +15142,17 @@ FSL_EXPORT int fsl_ckout_manage( fsl_cx * const f,
    by the removal process, immediately after a file is "removed"
    from SCM management (a.k.a. when the file becomes "unmanaged").
 
-   If it returns non-0 the unmanage process will end and that
-   error code will be reported to its caller. Such result codes must
-   come from the FSL_RC_xxx family.
+   If it returns non-0 the unmanage process will end and that error
+   code will be reported to its caller. Such result codes must come
+   from the FSL_RC_xxx family. They may report details of the error
+   via fsl_cx_err_set() with the `ums->f` object.
 
-   It will be passed a name which is relative to the top-most checkout
-   directory. The client is free to unlink the file from the filesystem
-   if they like - the library does not do so automatically
-
-   The final argument is not used by the library, but is passed on
-   as-is from the callbackState pointer which
-   is passed to fsl_ckout_unmanage().
+   The object passed to it will hold the name of the file being
+   unmanaged, relative to the top-most checkout directory. The client
+   is free to unlink the file from the filesystem if they like - the
+   library does not do so automatically
 */
-typedef int (*fsl_ckout_unmanage_f)(const char *zFilename, void *state);
+typedef int (*fsl_ckout_unmanage_f)(fsl_ckout_unmanage_state const * ums);
 
 /**
    Options for use with fsl_ckout_unmanage().
@@ -14830,9 +15203,7 @@ struct fsl_ckout_unmanage_opt {
      State to be passed to this->callback.
   */
   void * callbackState;
-
 };
-typedef struct fsl_ckout_unmanage_opt fsl_ckout_unmanage_opt;
 /**
    Initialized-with-defaults fsl_ckout_unmanage_opt instance,
    intended for use in const-copy initialization.
@@ -17200,13 +17571,34 @@ extern const fsl_merge_opt fsl_merge_opt_empty;
 */
 FSL_EXPORT int fsl_ckout_merge(fsl_cx * const f, fsl_merge_opt const * const opt);
 
+/**
+   If zDirName is a directory name which contains what appears to
+   be a fossil checkout database (noting that only a cursory check is done - the
+   db is not opened and validated), the name of that database file (minus
+   the directory part) is returned, else NULL is returned. The returned bytes
+   are static.
+
+   @see fsl_ckout_dbnames()
+*/
+FSL_EXPORT char const * fsl_is_top_of_ckout(char const *zDirName);
+
+/**
+   Returns an array of strings with the base names of valid fossil checkout
+   databases. The array is terminated by a NULL element.
+
+   As of this writing, and for the foreseeable future, the list is
+   comprised of only 3 elements, {".fslckout", "_FOSSIL_", NULL}, but
+   the order of the non-NULL elements is unspecified by the interface.
+*/
+FSL_EXPORT char const ** fsl_ckout_dbnames(void);
+
 #if defined(__cplusplus)
 } /*extern "C"*/
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_CHECKOUT_H_INCLUDED */
-/* end of file ./include/fossil-scm/fossil-checkout.h */
-/* start of file ./include/fossil-scm/fossil-confdb.h */
+/* end of file ./include/fossil-scm/checkout.h */
+/* start of file ./include/fossil-scm/confdb.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_CONFDB_H_INCLUDED)
@@ -17248,6 +17640,12 @@ enum fsl_confdb_e {
 FSL_CONFDB_NONE = 0,
 /**
    Signfies the global-level (per system user) configuration area.
+
+   Note that fsl_config_... APIs which use this do not currently open
+   that database on demand due to the potential for downstream
+   locking-related issues when the config db is left open, as well as
+   locking-related issues here when a separate client or instance is
+   holding that db open. That behaviour may change in the future.
 */
 FSL_CONFDB_GLOBAL = 1,
 /**
@@ -17685,8 +18083,8 @@ FSL_EXPORT char * fsl_configs_get_text(fsl_cx * const f, char const * zCfg, char
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_CONFDB_H_INCLUDED */
-/* end of file ./include/fossil-scm/fossil-confdb.h */
-/* start of file ./include/fossil-scm/fossil-vpath.h */
+/* end of file ./include/fossil-scm/confdb.h */
+/* start of file ./include/fossil-scm/vpath.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_VPATH_H_INCLUDED)
@@ -17924,8 +18322,8 @@ FSL_EXPORT void fsl_vpath_reverse(fsl_vpath * path);
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_VPATH_H_INCLUDED */
-/* end of file ./include/fossil-scm/fossil-vpath.h */
-/* start of file ./include/fossil-scm/fossil-internal.h */
+/* end of file ./include/fossil-scm/vpath.h */
+/* start of file ./include/fossil-scm/internal.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_INTERNAL_H_INCLUDED)
@@ -20255,8 +20653,8 @@ int fsl__symlink_copy(char const *zFrom, char const *zTo, bool realLink);
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_INTERNAL_H_INCLUDED */
-/* end of file ./include/fossil-scm/fossil-internal.h */
-/* start of file ./include/fossil-scm/fossil-auth.h */
+/* end of file ./include/fossil-scm/internal.h */
+/* start of file ./include/fossil-scm/auth.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_AUTH_H_INCLUDED)
@@ -20369,8 +20767,8 @@ FSL_EXPORT int fsl_repo_login_clear( fsl_cx * f, fsl_id_t userId );
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_AUTH_H_INCLUDED */
-/* end of file ./include/fossil-scm/fossil-auth.h */
-/* start of file ./include/fossil-scm/fossil-forum.h */
+/* end of file ./include/fossil-scm/auth.h */
+/* start of file ./include/fossil-scm/forum.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_FSL_FORUM_H_INCLUDED)
@@ -20410,8 +20808,8 @@ int fsl_repo_install_schema_forum(fsl_cx *f);
 #endif
 #endif
 /* ORG_FOSSIL_SCM_FSL_FORUM_H_INCLUDED */
-/* end of file ./include/fossil-scm/fossil-forum.h */
-/* start of file ./include/fossil-scm/fossil-pages.h */
+/* end of file ./include/fossil-scm/forum.h */
+/* start of file ./include/fossil-scm/pages.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(ORG_FOSSIL_SCM_PAGES_H_INCLUDED)
@@ -21159,8 +21557,8 @@ int fsl_repo_install_schema_forum(fsl_cx *f);
 
 #endif
 /* ORG_FOSSIL_SCM_PAGES_H_INCLUDED */
-/* end of file ./include/fossil-scm/fossil-pages.h */
-/* start of file ./include/fossil-scm/fossil-cli.h */
+/* end of file ./include/fossil-scm/pages.h */
+/* start of file ./include/fossil-scm/cli.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
 /* vim: set ts=2 et sw=2 tw=80: */
 #if !defined(_ORG_FOSSIL_SCM_FCLI_H_INCLUDED_)
@@ -22304,4 +22702,4 @@ FSL_EXPORT void fcli_dump_cache_metrics(void);
 
 #endif
 /* _ORG_FOSSIL_SCM_FCLI_H_INCLUDED_ */
-/* end of file ./include/fossil-scm/fossil-cli.h */
+/* end of file ./include/fossil-scm/cli.h */

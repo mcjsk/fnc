@@ -48,6 +48,8 @@ const fsl_card_J fsl_card_J_empty = fsl_card_J_empty_m;
 const fsl_card_Q fsl_card_Q_empty = fsl_card_Q_empty_m;
 const fsl_card_T fsl_card_T_empty = fsl_card_T_empty_m;
 const fsl_checkin_opt fsl_checkin_opt_empty = fsl_checkin_opt_empty_m;
+const fsl_cidiff_opt fsl_cidiff_opt_empty = fsl_cidiff_opt_empty_m;
+const fsl_cidiff_state fsl_cidiff_state_empty = fsl_cidiff_state_empty_m;
 const fsl_ckout_manage_opt fsl_ckout_manage_opt_empty =
   fsl_ckout_manage_opt_empty_m;
 const fsl_ckout_unmanage_opt fsl_ckout_unmanage_opt_empty =
@@ -5908,8 +5910,8 @@ static int fsl_strnicmp_int(char const *zA, char const * zB, fsl_size_t nByte){
   return fsl_strnicmp( zA, zB, (fsl_int_t)nByte);
 }
 
-int fsl_ckout_filename_check( fsl_cx * f, bool relativeToCwd,
-                              char const * zOrigName, fsl_buffer * pOut ){
+int fsl_ckout_filename_check( fsl_cx * const f, bool relativeToCwd,
+                              char const * zOrigName, fsl_buffer * const pOut ){
   int rc;
   if(!zOrigName || !*zOrigName) return FSL_RC_MISUSE;
   else if(!fsl_needs_ckout(f)/* will update f's error state*/){
@@ -6135,15 +6137,25 @@ static bool fsl_co_is_in_vfile(fsl_cx *f,
                        f->ckout.rid, zFilename,
                        fsl_cx_filename_collation(f));
 }
+
+
+/** Initialized-with-defaults fsl_ckout_manage_state structure, intended for
+    const-copy initialization. */
+#define fsl_ckout_manage_state_empty_m {NULL,NULL,NULL}
+/** Initialized-with-defaults fsl_ckout_manage_state structure, intended for
+    non-const copy initialization. */
+static const fsl_ckout_manage_state fsl_ckout_manage_state_empty
+= fsl_ckout_manage_state_empty_m;
+
 /**
    Internal machinery for fsl_ckout_manage(). zFilename MUST
    be a checkout-relative file which is known to exist. fst MUST
    be an object populated by fsl_stat()'ing zFilename. isInVFile
    MUST be the result of having passed zFilename to fsl_co_is_in_vfile().
  */
-static int fsl_ckout_manage_impl( fsl_cx * f, char const *zFilename,
-                                       fsl_fstat const *fst,
-                                       bool isInVFile){
+static int fsl_ckout_manage_impl(fsl_cx * const f, char const *zFilename,
+                                 fsl_fstat const *fst,
+                                 bool isInVFile){
   int rc = 0;
   fsl_db * const db = fsl_needs_ckout(f);
   assert(fsl_is_simple_pathname(zFilename, true));
@@ -6201,7 +6213,7 @@ static int fsl_dircrawl_f_add(fsl_dircrawl_state const *);
    current repository. isCrawling must be true if this is a
    fsl_dircrawl()-invoked call, else false.
 */
-static int co_add_one(CoAddState * cas, bool isCrawling){
+static int co_add_one(CoAddState * const cas, bool isCrawling){
   int rc = 0;
   fsl_buffer_reuse(cas->coRelBuf);
   rc = fsl_cx_stat2(cas->f, cas->opt->relativeToCwd,
@@ -6232,8 +6244,11 @@ static int co_add_one(CoAddState * cas, bool isCrawling){
         }
         if(!skipped && cas->opt->callback){
           bool yes = false;
-          rc = cas->opt->callback( zCoRel, &yes,
-                                   cas->opt->callbackState );
+          fsl_ckout_manage_state mst = fsl_ckout_manage_state_empty;
+          mst.opt = cas->opt;
+          mst.filename = zCoRel;
+          mst.f = cas->f;
+          rc = cas->opt->callback( &mst, &yes );
           if(rc) goto end;
           else if(!yes) skipped = true;
         }
@@ -6279,13 +6294,46 @@ static int co_add_one(CoAddState * cas, bool isCrawling){
   return rc;
 }
 
+/**
+   fsl_dircrawl_f() impl for fsl_ckout_manage().
+*/
 static int fsl_dircrawl_f_add(fsl_dircrawl_state const *dst){
-  if(FSL_FSTAT_TYPE_FILE!=dst->entryType) return 0;
-  CoAddState * cas = (CoAddState*)dst->callbackState;
-  int rc = fsl_buffer_appendf(fsl_buffer_reuse(cas->absBuf),
-                              "%s/%s", dst->absoluteDir, dst->entryName);
-  if(!rc) rc = co_add_one(cas, true);
-  return rc;
+  switch(dst->entryType){
+    case FSL_FSTAT_TYPE_DIR:
+    case FSL_FSTAT_TYPE_FILE:{
+      CoAddState * const cas = (CoAddState*)dst->callbackState;
+      int const rc = fsl_buffer_appendf(fsl_buffer_reuse(cas->absBuf),
+                                        "%s/%s", dst->absoluteDir, dst->entryName);
+      if(rc) return rc;
+      switch(dst->entryType){
+        case FSL_FSTAT_TYPE_DIR:
+          return fsl_is_top_of_ckout(fsl_buffer_cstr(cas->absBuf))
+            /* Never recurse into nested checkouts */
+            ? FSL_RC_NOOP : 0;
+        case FSL_FSTAT_TYPE_FILE:
+          return co_add_one(cas, true);
+        default:
+          fsl__fatal(FSL_RC_ERROR,"Not possible: caught above.");
+          return 0;
+      }
+    }
+    default:
+      return 0;
+  }
+}
+
+/**
+   Returns true if the absolute path zAbsName is f->ckout.dir, disregarding
+   an optional trailing slash on zAbsName.
+*/
+static bool fsl__is_ckout_dir(fsl_cx * const f, char const * const zAbsName){
+  /* Keeping in mind that f->ckout.dir is always slash-terminated...*/
+  assert(f->ckout.dirLen>0);
+  return (0==fsl_strncmp(zAbsName, f->ckout.dir, f->ckout.dirLen-1)
+          && 0==zAbsName[f->ckout.dirLen-1]
+          /* ==> matches except that zAbsName is NUL-terminated where
+             ckout.dir has a trailing slash. */)
+    || 0==fsl_strcmp(zAbsName, f->ckout.dir);
 }
 
 int fsl_ckout_manage( fsl_cx * const f, fsl_ckout_manage_opt * const opt_ ){
@@ -6302,10 +6350,13 @@ int fsl_ckout_manage( fsl_cx * const f, fsl_ckout_manage_opt * const opt_ ){
   cas.coRelBuf = fsl__cx_scratchpad(f);
   rc = fsl_file_canonical_name(opt.filename, cas.absBuf, false);
   if(!rc){
-    cas.f = f;
-    cas.opt = &opt;
-    rc = co_add_one(&cas, false);
-    opt_->counts = opt.counts;
+    char const * const zAbs = fsl_buffer_cstr(cas.absBuf);
+    if(!fsl_is_top_of_ckout(zAbs) || fsl__is_ckout_dir(f, zAbs)){
+      cas.f = f;
+      cas.opt = &opt;
+      rc = co_add_one(&cas, false);
+      opt_->counts = opt.counts;
+    }
   }
   fsl__cx_scratchpad_yield(f, cas.absBuf);
   fsl__cx_scratchpad_yield(f, cas.coRelBuf);
@@ -6355,6 +6406,14 @@ static int fsl_ckout_bag_to_ids(fsl_cx * const f, fsl_db * const db,
   rc = fsl_cx_uplift_db_error2(f, db, rc);
   goto end;
 }
+
+/** Initialized-with-defaults fsl_ckout_unmanage_state structure, intended for
+    const-copy initialization. */
+#define fsl_ckout_unmanage_state_empty_m {NULL,NULL,NULL}
+/** Initialized-with-defaults fsl_ckout_unmanage_state structure, intended for
+    non-const copy initialization. */
+static const fsl_ckout_unmanage_state fsl_ckout_unmanage_state_empty
+= fsl_ckout_unmanage_state_empty_m;
 
 int fsl_ckout_unmanage(fsl_cx * const f, fsl_ckout_unmanage_opt const * opt){
   int rc;
@@ -6438,9 +6497,16 @@ int fsl_ckout_unmanage(fsl_cx * const f, fsl_ckout_unmanage_opt const * opt){
   }/*opt->filename*/
 
   if(q.stmt){
+    fsl_ckout_unmanage_state ust = fsl_ckout_unmanage_state_empty;
+    ust.opt = opt;
+    ust.f = f;
     while(FSL_RC_STEP_ROW==fsl_stmt_step(&q)){
-      char const * fn = fsl_stmt_g_text(&q, 0, NULL);
-      rc = opt->callback(fn, opt->callbackState);
+      rc = fsl_stmt_get_text(&q, 0, &ust.filename, NULL);
+      if(rc){
+        rc = fsl_cx_uplift_db_error2(f, db, rc);
+        goto end;
+      }
+      rc = opt->callback(&ust);
       if(rc) goto end;
     }
     fsl_stmt_finalize(&q);
@@ -8682,6 +8748,29 @@ int fsl_card_F_ckout_mtime(fsl_cx * const f,
   return rc;
 }
 
+
+char const ** fsl_ckout_dbnames(void){
+  static char const *dbNames[] = {".fslckout", "_FOSSIL_", NULL};
+  return dbNames;
+}
+
+char const * fsl_is_top_of_ckout(char const *zDirName){
+  // counterpart of fossil(1)'s vfile_top_of_checkout()
+  enum {BufLen = 2048};
+  char nameBuf[BufLen];
+  char * z = &nameBuf[0];
+  fsl_size_t sz = fsl_strlcpy(z, zDirName, BufLen);
+  if(sz>=(fsl_size_t)BufLen - 11/*_FOSSIL_/.fslckout suffix*/) return NULL;
+  char const **dbNames = fsl_ckout_dbnames();
+  char const * dbName;
+  z[sz++] = '/';
+  z[sz] = 0;
+  for( int i = 0; NULL!=(dbName=dbNames[i]); ++i){
+    fsl_strlcpy(z + sz , dbName, (fsl_size_t)BufLen - sz);
+    if(fsl_file_size(z)>=1024) return dbName;
+  }
+  return NULL;
+}
 
 #undef MARKER
 /* end of file ./src/checkout.c */
@@ -12686,7 +12775,6 @@ int fsl_configs_get_buffer(fsl_cx * const f, char const * zCfg, char const * key
 #endif
 #if FSL_ENABLE_SQLITE_REGEXP
 #endif
-#include "sqlite3.h"
 #include <assert.h>
 
 #if defined(_WIN32)
@@ -17613,7 +17701,7 @@ char const * fsl_satype_event_cstr(fsl_satype_e t){
     d->f->error with a description of the constraint violation and
     returns 0.
  */
-static bool fsl_deck_check_type( fsl_deck * d, char card ){
+static bool fsl_deck_check_type( fsl_deck * const d, char card ){
   if(fsl_card_is_legal(d->type, card)) return true;
   else{
     fsl_cx_err_set(d->f, FSL_RC_TYPE,
@@ -18259,7 +18347,7 @@ int fsl_deck_F_add( fsl_deck * const mf, char const * name,
   }
 }
 
-int fsl_deck_F_foreach( fsl_deck * d, fsl_card_F_visitor_f cb, void * visitorState ){
+int fsl_deck_F_foreach( fsl_deck * const d, fsl_card_F_visitor_f cb, void * const visitorState ){
   if(!cb) return FSL_RC_MISUSE;
   else{
     fsl_card_F const * fc;
@@ -18358,7 +18446,7 @@ static int fsl_output_f_mf( void * arg, void const * data,
     Internal helper for fsl_deck_output(). Appends formatted output to
     os->out() via fsl_output_f_mf(). Returns os->rc (0 on success).
  */
-static int fsl_deck_append( fsl_deck_out_state * os,
+static int fsl_deck_append( fsl_deck_out_state * const os,
                             char const * fmt, ... ){
   fsl_int_t rc;
   va_list args;
@@ -18376,7 +18464,7 @@ static int fsl_deck_append( fsl_deck_out_state * os,
     overwriting any existing contents.
     Updates and returns os->rc.
  */
-static int fsl_deck_fossilize( fsl_deck_out_state * os,
+static int fsl_deck_fossilize( fsl_deck_out_state * const os,
                                unsigned char const * inp,
                                fsl_int_t len){
   fsl_buffer_reuse(os->scratch);
@@ -18389,7 +18477,7 @@ static int fsl_deck_fossilize( fsl_deck_out_state * os,
     updates os->rc and os->error if it's not. Returns true if it's
     valid.
 */
-static bool fsl_deck_out_tcheck(fsl_deck_out_state * os, char letter){
+static bool fsl_deck_out_tcheck(fsl_deck_out_state * const os, char letter){
   if(!fsl_card_is_legal(os->d->type, letter)){
     os->rc = fsl_error_set(&os->error, FSL_RC_TYPE,
                            "%c-card is not valid for deck type %s.",
@@ -18400,7 +18488,7 @@ static bool fsl_deck_out_tcheck(fsl_deck_out_state * os, char letter){
 
 /* Appends a UUID-valued card to os from os->d->{{card}} if the given
    UUID is not NULL, else this is a no-op. */
-static int fsl_deck_out_uuid( fsl_deck_out_state * os, char card, fsl_uuid_str uuid ){
+static int fsl_deck_out_uuid( fsl_deck_out_state * const os, char card, fsl_uuid_str uuid ){
   if(uuid && fsl_deck_out_tcheck(os, card)){
     if(!fsl_is_uuid(uuid)){
       os->rc = fsl_error_set(&os->error, FSL_RC_RANGE,
@@ -18413,13 +18501,13 @@ static int fsl_deck_out_uuid( fsl_deck_out_state * os, char card, fsl_uuid_str u
 }
 
 /* Appends the B card to os from os->d->B. */
-static int fsl_deck_out_B( fsl_deck_out_state * os ){
+static int fsl_deck_out_B( fsl_deck_out_state * const os ){
   return fsl_deck_out_uuid(os, 'B', os->d->B.uuid);
 }
 
 
 /* Appends the A card to os from os->d->A. */
-static int fsl_deck_out_A( fsl_deck_out_state * os ){
+static int fsl_deck_out_A( fsl_deck_out_state * const os ){
   if(os->d->A.name && fsl_deck_out_tcheck(os, 'A')){
     if(!os->d->A.name || !*os->d->A.name){
       os->rc = fsl_error_set(&os->error, FSL_RC_SYNTAX,
@@ -18455,7 +18543,7 @@ static int fsl_deck_out_A( fsl_deck_out_state * os ){
     the card letter being output. If doFossilize is true then
     the output gets fossilize-formatted.
  */
-static int fsl_deck_out_letter_str( fsl_deck_out_state * os, char letter,
+static int fsl_deck_out_letter_str( fsl_deck_out_state * const os, char letter,
                                     char const * str, char doFossilize ){
   if(str && fsl_deck_out_tcheck(os, letter)){
     if(doFossilize){
@@ -18471,13 +18559,13 @@ static int fsl_deck_out_letter_str( fsl_deck_out_state * os, char letter,
 }
 
 /* Appends the C card to os from os->d->C. */
-static int fsl_deck_out_C( fsl_deck_out_state * os ){
+static int fsl_deck_out_C( fsl_deck_out_state * const os ){
   return fsl_deck_out_letter_str( os, 'C', os->d->C, 1 );
 }
 
 
 /* Appends the D card to os from os->d->D. */
-static int fsl_deck_out_D( fsl_deck_out_state * os ){
+static int fsl_deck_out_D( fsl_deck_out_state * const os ){
   if((os->d->D > 0.0) && fsl_deck_out_tcheck(os, 'D')){
     char ds[24];
     if(!fsl_julian_to_iso8601(os->d->D, ds, 1)){
@@ -18492,7 +18580,7 @@ static int fsl_deck_out_D( fsl_deck_out_state * os ){
 }
 
 /* Appends the E card to os from os->d->E. */
-static int fsl_deck_out_E( fsl_deck_out_state * os ){
+static int fsl_deck_out_E( fsl_deck_out_state * const os ){
   if(os->d->E.uuid && fsl_deck_out_tcheck(os, 'E')){
     char ds[24];
     char msPrecision = FSL_SATYPE_EVENT!=os->d->type
@@ -18516,12 +18604,12 @@ static int fsl_deck_out_E( fsl_deck_out_state * os ){
 }
 
 /* Appends the G card to os from os->d->G. */
-static int fsl_deck_out_G( fsl_deck_out_state * os ){
+static int fsl_deck_out_G( fsl_deck_out_state * const os ){
   return fsl_deck_out_uuid(os, 'G', os->d->G);
 }
 
 /* Appends the H card to os from os->d->H. */
-static int fsl_deck_out_H( fsl_deck_out_state * os ){
+static int fsl_deck_out_H( fsl_deck_out_state * const os ){
   if(os->d->H && os->d->I){
     return os->rc = fsl_error_set(&os->error, FSL_RC_SYNTAX,
                                   "Forum post may not have both H- and I-cards.");
@@ -18530,7 +18618,7 @@ static int fsl_deck_out_H( fsl_deck_out_state * os ){
 }
 
 /* Appends the I card to os from os->d->I. */
-static int fsl_deck_out_I( fsl_deck_out_state * os ){
+static int fsl_deck_out_I( fsl_deck_out_state * const os ){
   if(os->d->I && os->d->H){
     return os->rc = fsl_error_set(&os->error, FSL_RC_SYNTAX,
                                   "Forum post may not have both H- and I-cards.");
@@ -18602,7 +18690,7 @@ static int fsl_deck_out_F_one(fsl_deck_out_state *os,
   return os->rc;
 }
 
-static int fsl_deck_out_list_obj( fsl_deck_out_state * os,
+static int fsl_deck_out_list_obj( fsl_deck_out_state * const os,
                                   char letter,
                                   fsl_list const * li,
                                   fsl_list_visitor_f visitor){
@@ -18612,7 +18700,7 @@ static int fsl_deck_out_list_obj( fsl_deck_out_state * os,
   return os->rc;
 }
 
-static int fsl_deck_out_F( fsl_deck_out_state * os ){
+static int fsl_deck_out_F( fsl_deck_out_state * const os ){
   if(os->d->F.used && fsl_deck_out_tcheck(os, 'F')){
     uint32_t i;
     for(i=0; !os->rc && i <os->d->F.used; ++i){
@@ -18653,7 +18741,7 @@ int fsl__qsort_cmp_J_cards( void const * lhs, void const * rhs ){
     be a (fsl_card_J *).
  */
 static int fsl_list_v_mf_output_card_J(void * obj, void * visitorState ){
-  fsl_deck_out_state * os = (fsl_deck_out_state *)visitorState;
+  fsl_deck_out_state * const os = (fsl_deck_out_state *)visitorState;
   fsl_card_J const * c = (fsl_card_J const *)obj;
   fsl_deck_fossilize( os, (unsigned char const *)c->field, -1 );
   if(!os->rc){
@@ -18672,13 +18760,13 @@ static int fsl_list_v_mf_output_card_J(void * obj, void * visitorState ){
   return os->rc;
 }
 
-static int fsl_deck_out_J( fsl_deck_out_state * os ){
+static int fsl_deck_out_J( fsl_deck_out_state * const os ){
   return fsl_deck_out_list_obj(os, 'J', &os->d->J,
                                fsl_list_v_mf_output_card_J);
 }
 
 /* Appends the K card to os from os->d->K. */
-static int fsl_deck_out_K( fsl_deck_out_state * os ){
+static int fsl_deck_out_K( fsl_deck_out_state * const os ){
   if(os->d->K && fsl_deck_out_tcheck(os, 'K')){
     if(!fsl_is_uuid(os->d->K)){
       os->rc = fsl_error_set(&os->error, FSL_RC_RANGE,
@@ -18693,12 +18781,12 @@ static int fsl_deck_out_K( fsl_deck_out_state * os ){
 
 
 /* Appends the L card to os from os->d->L. */
-static int fsl_deck_out_L( fsl_deck_out_state * os ){
+static int fsl_deck_out_L( fsl_deck_out_state * const os ){
   return fsl_deck_out_letter_str(os, 'L', os->d->L, 1);
 }
 
 /* Appends the N card to os from os->d->N. */
-static int fsl_deck_out_N( fsl_deck_out_state * os ){
+static int fsl_deck_out_N( fsl_deck_out_state * const os ){
   return fsl_deck_out_letter_str( os, 'N', os->d->N, 1 );
 }
 
@@ -18708,7 +18796,7 @@ static int fsl_deck_out_N( fsl_deck_out_state * os ){
     set to 0 before running the visit iteration.
  */
 static int fsl_list_v_mf_output_card_P(void * obj, void * visitorState ){
-  fsl_deck_out_state * os = (fsl_deck_out_state *)visitorState;
+  fsl_deck_out_state * const os = (fsl_deck_out_state *)visitorState;
   char const * uuid = (char const *)obj;
   int const uLen = uuid ? fsl_is_uuid(uuid) : 0;
   if(!uLen){
@@ -18725,7 +18813,7 @@ static int fsl_list_v_mf_output_card_P(void * obj, void * visitorState ){
 }
 
 
-static int fsl_deck_out_P( fsl_deck_out_state * os ){
+static int fsl_deck_out_P( fsl_deck_out_state * const os ){
   if(!fsl_deck_out_tcheck(os, 'P')) return os->rc;
   else if(os->d->P.used){
     os->counter = 0;
@@ -18783,7 +18871,7 @@ static int qsort_cmp_Q_cards( void const * lhs, void const * rhs ){
     be a (fsl_deck_out_state *).
 */
 static int fsl_list_v_mf_output_card_Q(void * obj, void * visitorState ){
-  fsl_deck_out_state * os = (fsl_deck_out_state *)visitorState;
+  fsl_deck_out_state * const os = (fsl_deck_out_state *)visitorState;
   fsl_card_Q const * cp = (fsl_card_Q const *)obj;
   char const prefix = (cp->type==FSL_CHERRYPICK_ADD)
     ? '+' : '-';
@@ -18815,7 +18903,7 @@ static int fsl_list_v_mf_output_card_Q(void * obj, void * visitorState ){
   return os->rc;
 }
 
-static int fsl_deck_out_Q( fsl_deck_out_state * os ){
+static int fsl_deck_out_Q( fsl_deck_out_state * const os ){
   return fsl_deck_out_list_obj(os, 'Q', &os->d->Q,
                                fsl_list_v_mf_output_card_Q);
 }
@@ -18823,7 +18911,7 @@ static int fsl_deck_out_Q( fsl_deck_out_state * os ){
 /**
     Appends the R card from os->d->R to os.
  */
-static int fsl_deck_out_R( fsl_deck_out_state * os ){
+static int fsl_deck_out_R( fsl_deck_out_state * const os ){
   if(os->d->R && fsl_deck_out_tcheck(os, 'R')){
     if((FSL_STRLEN_MD5!=fsl_strlen(os->d->R))
             || !fsl_validate16(os->d->R, FSL_STRLEN_MD5)){
@@ -18842,7 +18930,7 @@ static int fsl_deck_out_R( fsl_deck_out_state * os ){
     be a (fsl_deck_out_state *).
  */
 static int fsl_list_v_mf_output_card_T(void * obj, void * visitorState ){
-  fsl_deck_out_state * os = (fsl_deck_out_state *)visitorState;
+  fsl_deck_out_state * const os = (fsl_deck_out_state *)visitorState;
   fsl_card_T * t = (fsl_card_T *)obj;
   char prefix = 0;
   switch(os->d->type){
@@ -19044,7 +19132,7 @@ static int fsl_deck_T_verify_order( fsl_deck const * d, fsl_error * err ){
 }
 
 /* Appends the T cards to os from os->d->T. */
-static int fsl_deck_out_T( fsl_deck_out_state * os ){
+static int fsl_deck_out_T( fsl_deck_out_state * const os ){
   os->rc = fsl_deck_T_verify_order( os->d, &os->error);
   return os->rc
     ? os->rc
@@ -19053,12 +19141,12 @@ static int fsl_deck_out_T( fsl_deck_out_state * os ){
 }
 
 /* Appends the U card to os from os->d->U. */
-static int fsl_deck_out_U( fsl_deck_out_state * os ){
+static int fsl_deck_out_U( fsl_deck_out_state * const os ){
   return fsl_deck_out_letter_str(os, 'U', os->d->U, 1);
 }
 
 /* Appends the W card to os from os->d->W. */
-static int fsl_deck_out_W( fsl_deck_out_state * os ){
+static int fsl_deck_out_W( fsl_deck_out_state * const os ){
   if(os->d->W.used && fsl_deck_out_tcheck(os, 'W')){
     fsl_deck_append(os, "W %"FSL_SIZE_T_PFMT"\n%b\n",
                     (fsl_size_t)os->d->W.used,
@@ -19069,7 +19157,7 @@ static int fsl_deck_out_W( fsl_deck_out_state * os ){
 
 
 /* Appends the Z card to os from os' accummulated md5 hash. */
-static int fsl_deck_out_Z( fsl_deck_out_state * os ){
+static int fsl_deck_out_Z( fsl_deck_out_state * const os ){
   unsigned char digest[16];
   char md5[FSL_STRLEN_MD5+1];
   fsl_md5_final(&os->md5, digest);
@@ -19086,12 +19174,12 @@ static int qsort_cmp_strings( void const * lhs, void const * rhs ){
 }
 
 static int fsl_list_v_mf_output_card_M(void * obj, void * visitorState ){
-  fsl_deck_out_state * os = (fsl_deck_out_state *)visitorState;
+  fsl_deck_out_state * const os = (fsl_deck_out_state *)visitorState;
   char const * m = (char const *)obj;
   return fsl_deck_append(os, "M %s\n", m);
 }
 
-static int fsl_deck_output_cluster( fsl_deck_out_state * os ){
+static int fsl_deck_output_cluster( fsl_deck_out_state * const os ){
   if(!os->d->M.used){
     os->rc = fsl_error_set(&os->error, FSL_RC_RANGE,
                            "M-card list may not be empty.");
@@ -19107,7 +19195,7 @@ static int fsl_deck_output_cluster( fsl_deck_out_state * os ){
 #define DOUT(LETTER) rc = fsl_deck_out_##LETTER(os); \
   if(rc || os->rc) return os->rc ? os->rc : rc
 
-static int fsl_deck_output_control( fsl_deck_out_state * os ){
+static int fsl_deck_output_control( fsl_deck_out_state * const os ){
   int rc;
   /* Reminder: cards must be output in strict lexical order. */
   DOUT(D);
@@ -19116,7 +19204,7 @@ static int fsl_deck_output_control( fsl_deck_out_state * os ){
   return os->rc;
 }
 
-static int fsl_deck_output_event( fsl_deck_out_state * os ){
+static int fsl_deck_output_event( fsl_deck_out_state * const os ){
   int rc = 0;
   /* Reminder: cards must be output in strict lexical order. */
   DOUT(C);
@@ -19130,7 +19218,7 @@ static int fsl_deck_output_event( fsl_deck_out_state * os ){
   return os->rc;
 }
 
-static int fsl_deck_output_mf( fsl_deck_out_state * os ){
+static int fsl_deck_output_mf( fsl_deck_out_state * const os ){
   int rc = 0;
   /* Reminder: cards must be output in strict lexical order. */
   DOUT(B);
@@ -19150,7 +19238,7 @@ static int fsl_deck_output_mf( fsl_deck_out_state * os ){
 }
 
 
-static int fsl_deck_output_ticket( fsl_deck_out_state * os ){
+static int fsl_deck_output_ticket( fsl_deck_out_state * const os ){
   int rc;
   /* Reminder: cards must be output in strict lexical order. */
   DOUT(D);
@@ -19160,7 +19248,7 @@ static int fsl_deck_output_ticket( fsl_deck_out_state * os ){
   return os->rc;
 }
 
-static int fsl_deck_output_wiki( fsl_deck_out_state * os ){
+static int fsl_deck_output_wiki( fsl_deck_out_state * const os ){
   int rc;
   /* Reminder: cards must be output in strict lexical order. */
   DOUT(C);
@@ -19173,7 +19261,7 @@ static int fsl_deck_output_wiki( fsl_deck_out_state * os ){
   return os->rc;
 }
 
-static int fsl_deck_output_attachment( fsl_deck_out_state * os ){
+static int fsl_deck_output_attachment( fsl_deck_out_state * const os ){
   int rc = 0;
   /* Reminder: cards must be output in strict lexical order. */
   DOUT(A);
@@ -19184,7 +19272,7 @@ static int fsl_deck_output_attachment( fsl_deck_out_state * os ){
   return os->rc;
 }
 
-static int fsl_deck_output_forumpost( fsl_deck_out_state * os ){
+static int fsl_deck_output_forumpost( fsl_deck_out_state * const os ){
   int rc;
   /* Reminder: cards must be output in strict lexical order. */
   DOUT(D);
@@ -19203,7 +19291,7 @@ static int fsl_deck_output_forumpost( fsl_deck_out_state * os ){
     are not semantically legal and are CERTAINLY not legal to stuff in
     the database.
  */
-static int fsl_deck_output_any( fsl_deck_out_state * os ){
+static int fsl_deck_output_any( fsl_deck_out_state * const os ){
   int rc = 0;
   /* Reminder: cards must be output in strict lexical order. */
   DOUT(B);
@@ -19227,7 +19315,7 @@ static int fsl_deck_output_any( fsl_deck_out_state * os ){
 #undef DOUT
 
 
-int fsl_deck_unshuffle( fsl_deck * d, bool calculateRCard ){
+int fsl_deck_unshuffle( fsl_deck * const d, bool calculateRCard ){
   fsl_list * li;
   int rc = 0;
   if(!d || !d->f) return FSL_RC_MISUSE;
@@ -25672,7 +25760,7 @@ int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
 
 
 const fsl_diff_opt fsl_diff_opt_empty = fsl_diff_opt_empty_m;
-const fsl_diff_builder fsl_diff_builder_empty = fsl_diff_builder_empty_m;
+const fsl_dibu fsl_dibu_empty = fsl_dibu_empty_m;
 const fsl_dline fsl_dline_empty = fsl_dline_empty_m;
 const fsl_dline_change fsl_dline_change_empty = fsl_dline_change_empty_m;
 const fsl__diff_cx fsl__diff_cx_empty = fsl__diff_cx_empty_m;
@@ -26441,11 +26529,11 @@ static int diffBlockAlignment(
 
 
 /*
-** Format a diff using a fsl_diff_builder object
+** Format a diff using a fsl_dibu object
 */
 static int fdb__format(
   fsl__diff_cx * const cx,
-  fsl_diff_builder * const pBuilder
+  fsl_dibu * const pBuilder
 ){
   const fsl_dline *A;        /* Left side of the diff */
   const fsl_dline *B;        /* Right side of the diff */
@@ -26732,7 +26820,7 @@ static int fdb__format(
 */
 static int fsl_diff2_text_impl(fsl_buffer const *pA,
                                fsl_buffer const *pB,
-                               fsl_diff_builder * const pBuilder,
+                               fsl_dibu * const pBuilder,
                                fsl_diff_opt const * const opt_,
                                int ** outRaw){
   int rc = 0;
@@ -26836,7 +26924,7 @@ static int fsl_diff2_text_impl(fsl_buffer const *pA,
 
 int fsl_diff_v2(fsl_buffer const * pv1,
                 fsl_buffer const * pv2,
-                fsl_diff_builder * const pBuilder){
+                fsl_dibu * const pBuilder){
   return fsl_diff2_text_impl(pv1, pv2, pBuilder, pBuilder->opt, NULL);
 }
 
@@ -26848,23 +26936,23 @@ int fsl_diff_v2_raw(fsl_buffer const * pv1,
 }
 
 
-fsl_diff_builder * fsl_diff_builder_alloc(fsl_size_t extra){
-  fsl_diff_builder * rc =
-    (fsl_diff_builder*)fsl_malloc(sizeof(fsl_diff_builder) + extra);
+fsl_dibu * fsl_dibu_alloc(fsl_size_t extra){
+  fsl_dibu * rc =
+    (fsl_dibu*)fsl_malloc(sizeof(fsl_dibu) + extra);
   if(rc){
-    *rc = fsl_diff_builder_empty;
+    *rc = fsl_dibu_empty;
     if(extra){
-      rc->pimpl = ((unsigned char *)rc)+sizeof(fsl_diff_builder);
+      rc->pimpl = ((unsigned char *)rc)+sizeof(fsl_dibu);
     }
   }
   return rc;
 }
 
-static int fdb__out(fsl_diff_builder *const b,
+static int fdb__out(fsl_dibu *const b,
                     char const *z, fsl_size_t n){
   return b->opt->out(b->opt->outState, z, n);
 }
-static int fdb__outf(fsl_diff_builder * const b,
+static int fdb__outf(fsl_dibu * const b,
                      char const *fmt, ...){
   int rc = 0;
   va_list va;
@@ -26916,7 +27004,7 @@ typedef struct DiffCounter DiffCounter;
 static const DiffCounter DiffCounter_empty = {{1,10,3,1,10},{0,0},0};
 #define DICOSTATE(VNAME) DiffCounter * const VNAME = (DiffCounter *)b->pimpl
 
-static int maxColWidth(fsl_diff_builder const * const b,
+static int maxColWidth(fsl_dibu const * const b,
                        DiffCounter const * const sst,
                        int mwIndex){
   static const short minColWidth =
@@ -26953,7 +27041,7 @@ static void fdb__dico_update_maxlen(DiffCounter * const sst,
   }
 }
 
-static int fdb__debug_start(fsl_diff_builder * const b){
+static int fdb__debug_start(fsl_dibu * const b){
   int rc = fdb__outf(b, "DEBUG builder starting pass #%d.\n",
                      b->passNumber);
   if(1==b->passNumber){
@@ -26982,7 +27070,7 @@ static int fdb__debug_start(fsl_diff_builder * const b){
 }
 
 
-static int fdb__debug_chunkHeader(fsl_diff_builder* const b,
+static int fdb__debug_chunkHeader(fsl_dibu* const b,
                                   uint32_t lnnoLHS, uint32_t linesLHS,
                                   uint32_t lnnoRHS, uint32_t linesRHS ){
 #if 1
@@ -26999,7 +27087,7 @@ static int fdb__debug_chunkHeader(fsl_diff_builder* const b,
 #endif
 }
 
-static int fdb__debug_skip(fsl_diff_builder * const b, uint32_t n){
+static int fdb__debug_skip(fsl_dibu * const b, uint32_t n){
   if(1==b->passNumber){
     DICOSTATE(sst);
     b->lnLHS += n;
@@ -27013,7 +27101,7 @@ static int fdb__debug_skip(fsl_diff_builder * const b, uint32_t n){
   b->lnRHS += n;
   return rc;
 }
-static int fdb__debug_common(fsl_diff_builder * const b, fsl_dline const * pLine){
+static int fdb__debug_common(fsl_dibu * const b, fsl_dline const * pLine){
   DICOSTATE(sst);
   ++b->lnLHS;
   ++b->lnRHS;
@@ -27026,7 +27114,7 @@ static int fdb__debug_common(fsl_diff_builder * const b, fsl_dline const * pLine
   return fdb__outf(b, "COMMON  %8u %8u %.*s\n",
                    b->lnLHS, b->lnRHS, (int)pLine->n, pLine->z);
 }
-static int fdb__debug_insertion(fsl_diff_builder * const b, fsl_dline const * pLine){
+static int fdb__debug_insertion(fsl_dibu * const b, fsl_dline const * pLine){
   DICOSTATE(sst);
   ++b->lnRHS;
   if(1==b->passNumber){
@@ -27037,7 +27125,7 @@ static int fdb__debug_insertion(fsl_diff_builder * const b, fsl_dline const * pL
   return fdb__outf(b, "INSERT           %8u %.*s\n",
                    b->lnRHS, (int)pLine->n, pLine->z);
 }
-static int fdb__debug_deletion(fsl_diff_builder * const b, fsl_dline const * pLine){
+static int fdb__debug_deletion(fsl_dibu * const b, fsl_dline const * pLine){
   DICOSTATE(sst);
   ++b->lnLHS;
   if(1==b->passNumber){
@@ -27048,7 +27136,7 @@ static int fdb__debug_deletion(fsl_diff_builder * const b, fsl_dline const * pLi
   return fdb__outf(b, "DELETE  %8u          %.*s\n",
                    b->lnLHS, (int)pLine->n, pLine->z);
 }
-static int fdb__debug_replacement(fsl_diff_builder * const b,
+static int fdb__debug_replacement(fsl_dibu * const b,
                                   fsl_dline const * lineLhs,
                                   fsl_dline const * lineRhs) {
 #if 0
@@ -27075,7 +27163,7 @@ static int fdb__debug_replacement(fsl_diff_builder * const b,
 #endif
 }
                  
-static int fdb__debug_edit(fsl_diff_builder * const b,
+static int fdb__debug_edit(fsl_dibu * const b,
                            fsl_dline const * lineLHS,
                            fsl_dline const * lineRHS){
 #if 0
@@ -27166,7 +27254,7 @@ static int fdb__debug_edit(fsl_diff_builder * const b,
 #endif
 }
 
-static int fdb__debug_finish(fsl_diff_builder * const b){
+static int fdb__debug_finish(fsl_dibu * const b){
   DICOSTATE(sst);
   if(1==b->passNumber){
     sst->lineCount[0] = b->lnLHS;
@@ -27186,14 +27274,14 @@ static int fdb__debug_finish(fsl_diff_builder * const b){
   return rc;
 }
 
-void fsl_diff_builder_finalizer(fsl_diff_builder * const b){
-  *b = fsl_diff_builder_empty;
+void fsl_dibu_finalizer(fsl_dibu * const b){
+  *b = fsl_dibu_empty;
   fsl_free(b);
 }
 
-static fsl_diff_builder * fsl__diff_builder_debug(void){
-  fsl_diff_builder * rc =
-    fsl_diff_builder_alloc((fsl_size_t)sizeof(DiffCounter));
+static fsl_dibu * fsl__diff_builder_debug(void){
+  fsl_dibu * rc =
+    fsl_dibu_alloc((fsl_size_t)sizeof(DiffCounter));
   if(rc){
     rc->chunkHeader = fdb__debug_chunkHeader;
     rc->start = fdb__debug_start;
@@ -27204,7 +27292,7 @@ static fsl_diff_builder * fsl__diff_builder_debug(void){
     rc->replacement = fdb__debug_replacement;
     rc->edit = fdb__debug_edit;
     rc->finish = fdb__debug_finish;
-    rc->finalize = fsl_diff_builder_finalizer;
+    rc->finalize = fsl_dibu_finalizer;
     rc->twoPass = true;
     assert(0!=rc->pimpl);
     DiffCounter * const sst = (DiffCounter*)rc->pimpl;
@@ -27240,14 +27328,14 @@ static fsl_diff_builder * fsl__diff_builder_debug(void){
 ** not apply.
 */
 
-static int fdb__outj(fsl_diff_builder * const b,
+static int fdb__outj(fsl_dibu * const b,
                      char const *zJson, int n){
   return n<0
     ? fdb__outf(b, "%!j", zJson)
     : fdb__outf(b, "%!.*j", n, zJson);
 }
 
-static int fdb__json1_start(fsl_diff_builder * const b){
+static int fdb__json1_start(fsl_dibu * const b){
   int rc = fdb__outf(b, "{\"hashLHS\": %!j, \"hashRHS\": %!j, ",
                      b->opt->hashLHS, b->opt->hashRHS);
   if(0==rc && b->opt->nameLHS){
@@ -27262,10 +27350,10 @@ static int fdb__json1_start(fsl_diff_builder * const b){
   return rc;
 }
 
-static int fdb__json1_skip(fsl_diff_builder * const b, uint32_t n){
+static int fdb__json1_skip(fsl_dibu * const b, uint32_t n){
   return fdb__outf(b, "1,%" PRIu32 ",\n", n);
 }
-static int fdb__json1_common(fsl_diff_builder * const b, fsl_dline const * pLine){
+static int fdb__json1_common(fsl_dibu * const b, fsl_dline const * pLine){
   int rc = fdb__out(b, "2,",2);
   if(!rc) {
     rc = fdb__outj(b, pLine->z, (int)pLine->n);
@@ -27273,7 +27361,7 @@ static int fdb__json1_common(fsl_diff_builder * const b, fsl_dline const * pLine
   }
   return rc;
 }
-static int fdb__json1_insertion(fsl_diff_builder * const b, fsl_dline const * pLine){
+static int fdb__json1_insertion(fsl_dibu * const b, fsl_dline const * pLine){
   int rc = fdb__out(b, "3,",2);
   if(!rc){
     rc = fdb__outj(b, pLine->z, (int)pLine->n);
@@ -27281,7 +27369,7 @@ static int fdb__json1_insertion(fsl_diff_builder * const b, fsl_dline const * pL
   }
   return rc;
 }
-static int fdb__json1_deletion(fsl_diff_builder * const b, fsl_dline const * pLine){
+static int fdb__json1_deletion(fsl_dibu * const b, fsl_dline const * pLine){
   int rc = fdb__out(b, "4,",2);
   if(!rc){
     rc = fdb__outj(b, pLine->z, (int)pLine->n);
@@ -27289,7 +27377,7 @@ static int fdb__json1_deletion(fsl_diff_builder * const b, fsl_dline const * pLi
   }
   return rc;
 }
-static int fdb__json1_replacement(fsl_diff_builder * const b,
+static int fdb__json1_replacement(fsl_dibu * const b,
                               fsl_dline const * lineLhs,
                               fsl_dline const * lineRhs) {
   int rc = fdb__out(b, "5,[\"\",",6);
@@ -27300,7 +27388,7 @@ static int fdb__json1_replacement(fsl_diff_builder * const b,
   return rc;
 }
                  
-static int fdb__json1_edit(fsl_diff_builder * const b,
+static int fdb__json1_edit(fsl_dibu * const b,
                            fsl_dline const * lineLHS,
                            fsl_dline const * lineRHS){
   int rc = 0;
@@ -27328,12 +27416,12 @@ static int fdb__json1_edit(fsl_diff_builder * const b,
 #undef RC
 }
 
-static int fdb__json1_finish(fsl_diff_builder * const b){
+static int fdb__json1_finish(fsl_dibu * const b){
   return fdb__out(b, "0]}", 3);
 }
 
-static fsl_diff_builder * fsl__diff_builder_json1(void){
-  fsl_diff_builder * rc = fsl_diff_builder_alloc(0);
+static fsl_dibu * fsl__diff_builder_json1(void){
+  fsl_dibu * rc = fsl_dibu_alloc(0);
   if(rc){
     rc->chunkHeader = NULL;
     rc->start = fdb__json1_start;
@@ -27344,7 +27432,7 @@ static fsl_diff_builder * fsl__diff_builder_json1(void){
     rc->replacement = fdb__json1_replacement;
     rc->edit = fdb__json1_edit;
     rc->finish = fdb__json1_finish;
-    rc->finalize = fsl_diff_builder_finalizer;
+    rc->finalize = fsl_dibu_finalizer;
     assert(!rc->pimpl);
     assert(0==rc->implFlags);
     assert(0==rc->lnLHS);
@@ -27354,7 +27442,7 @@ static fsl_diff_builder * fsl__diff_builder_json1(void){
   return rc;
 }
 
-static int fdb__utxt_start(fsl_diff_builder * const b){
+static int fdb__utxt_start(fsl_dibu * const b){
   int rc = 0;
   if(0==(FSL_DIFF2_NOINDEX & b->opt->diffFlags)){
     rc = fdb__outf(b,"Index: %s\n%.66c\n",
@@ -27367,7 +27455,7 @@ static int fdb__utxt_start(fsl_diff_builder * const b){
   return rc;
 }
 
-static int fdb__utxt_chunkHeader(fsl_diff_builder* const b,
+static int fdb__utxt_chunkHeader(fsl_dibu* const b,
                                  uint32_t lnnoLHS, uint32_t linesLHS,
                                  uint32_t lnnoRHS, uint32_t linesRHS ){
   if(FSL_DIFF2_LINE_NUMBERS & b->opt->diffFlags){
@@ -27380,7 +27468,7 @@ static int fdb__utxt_chunkHeader(fsl_diff_builder* const b,
 }
 
 
-static int fdb__utxt_skip(fsl_diff_builder * const b, uint32_t n){
+static int fdb__utxt_skip(fsl_dibu * const b, uint32_t n){
   //MARKER(("SKIP\n"));
   b->lnLHS += n;
   b->lnRHS += n;
@@ -27388,7 +27476,7 @@ static int fdb__utxt_skip(fsl_diff_builder * const b, uint32_t n){
 }
 
 /** Outputs line numbers to b->opt->out. */
-static int fdb__utxt_lineno(fsl_diff_builder * const b, uint32_t lnL, uint32_t lnR){
+static int fdb__utxt_lineno(fsl_dibu * const b, uint32_t lnL, uint32_t lnR){
   int rc = 0;
   if(FSL_DIFF2_LINE_NUMBERS & b->opt->diffFlags){
     rc = lnL
@@ -27409,14 +27497,14 @@ static int fdb__utxt_lineno(fsl_diff_builder * const b, uint32_t lnL, uint32_t l
   return rc;
 }
 
-static int fdb__utxt_common(fsl_diff_builder * const b, fsl_dline const * pLine){
+static int fdb__utxt_common(fsl_dibu * const b, fsl_dline const * pLine){
   //MARKER(("COMMON\n"));
   ++b->lnLHS;
   ++b->lnRHS;
   const int rc = fdb__utxt_lineno(b, b->lnLHS, b->lnRHS);
   return rc ? rc : fdb__outf(b, " %.*s\n", (int)pLine->n, pLine->z);
 }
-static int fdb__utxt_insertion(fsl_diff_builder * const b, fsl_dline const * pLine){
+static int fdb__utxt_insertion(fsl_dibu * const b, fsl_dline const * pLine){
   //MARKER(("INSERT\n"));
   ++b->lnRHS;
   const int rc = fdb__utxt_lineno(b, 0, b->lnRHS);
@@ -27425,7 +27513,7 @@ static int fdb__utxt_insertion(fsl_diff_builder * const b, fsl_dline const * pLi
                              (int)pLine->n, pLine->z,
                              b->opt->ansiColor.reset);
 }
-static int fdb__utxt_deletion(fsl_diff_builder * const b, fsl_dline const * pLine){
+static int fdb__utxt_deletion(fsl_dibu * const b, fsl_dline const * pLine){
   //MARKER(("DELETE\n"));
   ++b->lnLHS;
   const int rc = fdb__utxt_lineno(b, b->lnLHS, 0);
@@ -27434,7 +27522,7 @@ static int fdb__utxt_deletion(fsl_diff_builder * const b, fsl_dline const * pLin
                              (int)pLine->n, pLine->z,
                              b->opt->ansiColor.reset);
 }
-static int fdb__utxt_replacement(fsl_diff_builder * const b,
+static int fdb__utxt_replacement(fsl_dibu * const b,
                                  fsl_dline const * lineLhs,
                                  fsl_dline const * lineRhs) {
   //MARKER(("REPLACE\n"));
@@ -27442,7 +27530,7 @@ static int fdb__utxt_replacement(fsl_diff_builder * const b,
   if(0==rc) rc = b->insertion(b, lineRhs);
   return rc;
 }
-static int fdb__utxt_edit(fsl_diff_builder * const b,
+static int fdb__utxt_edit(fsl_dibu * const b,
                            fsl_dline const * lineLhs,
                            fsl_dline const * lineRhs){
   //MARKER(("EDIT\n"));
@@ -27451,12 +27539,12 @@ static int fdb__utxt_edit(fsl_diff_builder * const b,
   return rc;
 }
 
-static void fdb__utxt_finalize(fsl_diff_builder * const b){
+static void fdb__utxt_finalize(fsl_dibu * const b){
   fsl_free(b);
 }
 
-static fsl_diff_builder * fsl__diff_builder_utxt(void){
-  fsl_diff_builder * rc = fsl_diff_builder_alloc(0);
+static fsl_dibu * fsl__diff_builder_utxt(void){
+  fsl_dibu * rc = fsl_dibu_alloc(0);
   if(!rc) return NULL;
   rc->chunkHeader = fdb__utxt_chunkHeader;
   rc->start = fdb__utxt_start;
@@ -27484,7 +27572,7 @@ static const DiBuTcl DiBuTcl_empty = {fsl_buffer_empty_m};
     rc = fdb__out(b, "}", 1)
 
 #define DTCL_BUFFER(B) &((DiBuTcl*)(B)->pimpl)->str
-static int fdb__outtcl(fsl_diff_builder * const b,
+static int fdb__outtcl(fsl_dibu * const b,
                        char const *z, unsigned int n,
                        char chAppend ){
   int rc;
@@ -27496,7 +27584,7 @@ static int fdb__outtcl(fsl_diff_builder * const b,
   return rc;
 }
 
-static int fdb__tcl_start(fsl_diff_builder * const b){
+static int fdb__tcl_start(fsl_dibu * const b){
   int rc = 0;
   fsl_buffer_reuse(DTCL_BUFFER(b));
   BR_OPEN;
@@ -27516,7 +27604,7 @@ static int fdb__tcl_start(fsl_diff_builder * const b){
   return rc;
 }
 
-static int fdb__tcl_skip(fsl_diff_builder * const b, uint32_t n){
+static int fdb__tcl_skip(fsl_dibu * const b, uint32_t n){
   int rc = 0;
   BR_OPEN;
   if(0==rc) rc = fdb__outf(b, "SKIP %" PRIu32, n);
@@ -27525,7 +27613,7 @@ static int fdb__tcl_skip(fsl_diff_builder * const b, uint32_t n){
   return rc;
 }
 
-static int fdb__tcl_common(fsl_diff_builder * const b, fsl_dline const * pLine){
+static int fdb__tcl_common(fsl_dibu * const b, fsl_dline const * pLine){
   int rc = 0;
   BR_OPEN;
   if(0==rc) rc = fdb__out(b, "COM  ", 5);
@@ -27534,7 +27622,7 @@ static int fdb__tcl_common(fsl_diff_builder * const b, fsl_dline const * pLine){
   if(0==rc) rc = fdb__outf(b, "\n", 1);
   return rc;
 }
-static int fdb__tcl_insertion(fsl_diff_builder * const b, fsl_dline const * pLine){
+static int fdb__tcl_insertion(fsl_dibu * const b, fsl_dline const * pLine){
   int rc = 0;
   BR_OPEN;
   if(0==rc) rc = fdb__out(b, "INS  ", 5);
@@ -27543,7 +27631,7 @@ static int fdb__tcl_insertion(fsl_diff_builder * const b, fsl_dline const * pLin
   if(0==rc) rc = fdb__outf(b, "\n", 1);
   return rc;
 }
-static int fdb__tcl_deletion(fsl_diff_builder * const b, fsl_dline const * pLine){
+static int fdb__tcl_deletion(fsl_dibu * const b, fsl_dline const * pLine){
   int rc = 0;
   BR_OPEN;
   if(0==rc) rc = fdb__out(b, "DEL  ", 5);
@@ -27552,7 +27640,7 @@ static int fdb__tcl_deletion(fsl_diff_builder * const b, fsl_dline const * pLine
   if(0==rc) rc = fdb__outf(b, "\n", 1);
   return rc;
 }
-static int fdb__tcl_replacement(fsl_diff_builder * const b,
+static int fdb__tcl_replacement(fsl_dibu * const b,
                                 fsl_dline const * lineLhs,
                                 fsl_dline const * lineRhs) {
   int rc = 0;
@@ -27565,7 +27653,7 @@ static int fdb__tcl_replacement(fsl_diff_builder * const b,
   return rc;
 }
                  
-static int fdb__tcl_edit(fsl_diff_builder * const b,
+static int fdb__tcl_edit(fsl_dibu * const b,
                          fsl_dline const * lineLHS,
                          fsl_dline const * lineRHS){
   int rc = 0;
@@ -27596,7 +27684,7 @@ static int fdb__tcl_edit(fsl_diff_builder * const b,
   return rc;
 }
 
-static int fdb__tcl_finish(fsl_diff_builder * const b){
+static int fdb__tcl_finish(fsl_dibu * const b){
   int rc = 0;
   BR_CLOSE;
   if(0==rc && FSL_DIFF2_TCL_BRACES & b->opt->diffFlags){
@@ -27607,15 +27695,15 @@ static int fdb__tcl_finish(fsl_diff_builder * const b){
 #undef BR_OPEN
 #undef BR_CLOSE
 
-static void fdb__tcl_finalize(fsl_diff_builder * const b){
+static void fdb__tcl_finalize(fsl_dibu * const b){
   fsl_buffer_clear( &((DiBuTcl*)b->pimpl)->str );
-  *b = fsl_diff_builder_empty;
+  *b = fsl_dibu_empty;
   fsl_free(b);
 }
 
-static fsl_diff_builder * fsl__diff_builder_tcl(void){
-  fsl_diff_builder * rc =
-    fsl_diff_builder_alloc((fsl_size_t)sizeof(DiBuTcl));
+static fsl_dibu * fsl__diff_builder_tcl(void){
+  fsl_dibu * rc =
+    fsl_dibu_alloc((fsl_size_t)sizeof(DiBuTcl));
   if(rc){
     rc->chunkHeader = NULL;
     rc->start = fdb__tcl_start;
@@ -27638,12 +27726,12 @@ static fsl_diff_builder * fsl__diff_builder_tcl(void){
   return rc;
 }
 
-static int fdb__splittxt_mod(fsl_diff_builder * const b, char ch){
+static int fdb__splittxt_mod(fsl_dibu * const b, char ch){
   assert(2==b->passNumber);
   return fdb__outf(b, " %c ", ch);
 }
 
-static int fdb__splittxt_lineno(fsl_diff_builder * const b,
+static int fdb__splittxt_lineno(fsl_dibu * const b,
                                 DiffCounter const * const sst,
                                 bool isLeft, uint32_t n){
   assert(2==b->passNumber);
@@ -27653,7 +27741,7 @@ static int fdb__splittxt_lineno(fsl_diff_builder * const b,
     : fdb__outf(b, "%.*c ", sst->maxWidths[col], ' ');
 }
 
-static int fdb__splittxt_start(fsl_diff_builder * const b){
+static int fdb__splittxt_start(fsl_dibu * const b){
   int rc = 0;
   if(1==b->passNumber){
     DICOSTATE(sst);
@@ -27680,7 +27768,7 @@ static int fdb__splittxt_start(fsl_diff_builder * const b){
   return rc;
 }
 
-static int fdb__splittxt_skip(fsl_diff_builder * const b, uint32_t n){
+static int fdb__splittxt_skip(fsl_dibu * const b, uint32_t n){
   b->lnLHS += n;
   b->lnRHS += n;
   if(1==b->passNumber) return 0;
@@ -27694,7 +27782,7 @@ static int fdb__splittxt_skip(fsl_diff_builder * const b, uint32_t n){
                  maxWidth2, '~');
 }
 
-static int fdb__splittxt_color(fsl_diff_builder * const b,
+static int fdb__splittxt_color(fsl_dibu * const b,
                                int modType){
   char const *z = 0;
   switch(modType){
@@ -27709,7 +27797,7 @@ static int fdb__splittxt_color(fsl_diff_builder * const b,
   return z&&*z ? fdb__outf(b, "%s", z) : 0;
 }
 
-static int fdb__splittxt_side(fsl_diff_builder * const b,
+static int fdb__splittxt_side(fsl_dibu * const b,
                               DiffCounter * const sst,
                               bool isLeft,
                               fsl_dline const * const pLine){
@@ -27733,7 +27821,7 @@ static int fdb__splittxt_side(fsl_diff_builder * const b,
   return rc;
 }
 
-static int fdb__splittxt_common(fsl_diff_builder * const b,
+static int fdb__splittxt_common(fsl_dibu * const b,
                                 fsl_dline const * const pLine){
   int rc = 0;
   DICOSTATE(sst);
@@ -27750,7 +27838,7 @@ static int fdb__splittxt_common(fsl_diff_builder * const b,
   return rc;
 }
 
-static int fdb__splittxt_insertion(fsl_diff_builder * const b,
+static int fdb__splittxt_insertion(fsl_dibu * const b,
                                    fsl_dline const * const pLine){
   int rc = 0;
   DICOSTATE(sst);
@@ -27767,7 +27855,7 @@ static int fdb__splittxt_insertion(fsl_diff_builder * const b,
   return rc;
 }
 
-static int fdb__splittxt_deletion(fsl_diff_builder * const b,
+static int fdb__splittxt_deletion(fsl_dibu * const b,
                                   fsl_dline const * const pLine){
   int rc = 0;
   DICOSTATE(sst);
@@ -27784,7 +27872,7 @@ static int fdb__splittxt_deletion(fsl_diff_builder * const b,
   return rc;
 }
 
-static int fdb__splittxt_replacement(fsl_diff_builder * const b,
+static int fdb__splittxt_replacement(fsl_dibu * const b,
                                      fsl_dline const * const lineLhs,
                                      fsl_dline const * const lineRhs) {
 #if 0
@@ -27810,7 +27898,7 @@ static int fdb__splittxt_replacement(fsl_diff_builder * const b,
 #endif
 }
                  
-static int fdb__splittxt_finish(fsl_diff_builder * const b){
+static int fdb__splittxt_finish(fsl_dibu * const b){
   int rc = 0;
   if(1==b->passNumber){
     DICOSTATE(sst);
@@ -27824,14 +27912,14 @@ static int fdb__splittxt_finish(fsl_diff_builder * const b){
   return rc;
 }
 
-static void fdb__splittxt_finalize(fsl_diff_builder * const b){
-  *b = fsl_diff_builder_empty;
+static void fdb__splittxt_finalize(fsl_dibu * const b){
+  *b = fsl_dibu_empty;
   fsl_free(b);
 }
 
-static fsl_diff_builder * fsl__diff_builder_splittxt(void){
-  fsl_diff_builder * rc =
-    fsl_diff_builder_alloc((fsl_size_t)sizeof(DiffCounter));
+static fsl_dibu * fsl__diff_builder_splittxt(void){
+  fsl_dibu * rc =
+    fsl_dibu_alloc((fsl_size_t)sizeof(DiffCounter));
   if(rc){
     rc->twoPass = true;
     rc->chunkHeader = NULL;
@@ -27851,26 +27939,27 @@ static fsl_diff_builder * fsl__diff_builder_splittxt(void){
   return rc;
 }
 
-int fsl_diff_builder_factory( fsl_diff_builder_e type,
-                              fsl_diff_builder **pOut ){
+int fsl_dibu_factory( fsl_dibu_e type,
+                              fsl_dibu **pOut ){
   int rc = FSL_RC_TYPE;
-  fsl_diff_builder * (*factory)(void) = NULL;
+  fsl_dibu * (*factory)(void) = NULL;
   switch(type){
-    case FSL_DIFF_BUILDER_DEBUG:
+    case FSL_DIBU_DEBUG:
       factory = fsl__diff_builder_debug;
       break;
-    case FSL_DIFF_BUILDER_JSON1:
+    case FSL_DIBU_JSON1:
       factory = fsl__diff_builder_json1;
       break;
-    case FSL_DIFF_BUILDER_UNIFIED_TEXT:
+    case FSL_DIBU_UNIFIED_TEXT:
       factory = fsl__diff_builder_utxt;
       break;
-    case FSL_DIFF_BUILDER_TCL:
+    case FSL_DIBU_TCL:
       factory = fsl__diff_builder_tcl;
       break;
-    case FSL_DIFF_BUILDER_SPLIT_TEXT:
+    case FSL_DIBU_SPLIT_TEXT:
       factory = fsl__diff_builder_splittxt;
       break;
+    case FSL_DIBU_INVALID: break;
   }
   if(NULL!=factory){
     *pOut = factory();
@@ -28233,7 +28322,6 @@ int fsl_event_ids_get( fsl_cx * f, fsl_list * tgt ){
 #ifdef _WIN32
 # undef __STRICT_ANSI__ /* Needed for _wfopen */
 #endif
-#include "sqlite3.h" /* sqlite3_randomness() */
 
 #include <assert.h>
 #include <string.h> /* strlen() */
@@ -29350,9 +29438,13 @@ int fsl_file_exec_set(const char *zFilename, bool isExe){
 #endif
 }
 
-static int fsl_dircrawl_impl(fsl_buffer * dbuf, fsl_fstat * fst,
-                             fsl_dircrawl_f cb, void * cbState,
-                             fsl_dircrawl_state * dst,
+/**
+   fsl_dircrawl() part for handling a single directory. fst must be
+   valid state from a freshly-fsl_fstat()'d DIRECTORY.
+*/
+static int fsl_dircrawl_impl(fsl_buffer * const dbuf, fsl_fstat * const fst,
+                             fsl_dircrawl_f cb, void * const cbState,
+                             fsl_dircrawl_state * const dst,
                              unsigned int depth){
   int rc = 0;
   DIR *dir = opendir(fsl_buffer_cstr(dbuf));
@@ -29400,6 +29492,8 @@ static int fsl_dircrawl_impl(fsl_buffer * dbuf, fsl_fstat * fst,
       if(FSL_FSTAT_TYPE_DIR==fst->type){
         rc = fsl_dircrawl_impl( dbuf, fst, cb, cbState, dst, depth+1 );
       }
+    }else if(FSL_RC_NOOP == rc){
+      rc = 0;
     }
   }
   closedir(dir);
@@ -35653,6 +35747,101 @@ int fsl_repo_rebuild(fsl_cx * const f, fsl_rebuild_opt const * const opt){
   return rc;
 }
 
+
+int fsl_cidiff(fsl_cx * const f, fsl_cidiff_opt const * const opt){
+  fsl_deck d1 = fsl_deck_empty;
+  fsl_deck d2 = fsl_deck_empty;
+  fsl_card_F const * fc1;
+  fsl_card_F const * fc2;
+  int rc;
+  fsl_cidiff_state cst = fsl_cidiff_state_empty;
+  if(!fsl_needs_repo(f)) return FSL_RC_NOT_A_REPO;
+  rc = fsl_deck_load_rid(f, &d1, opt->v1, FSL_SATYPE_CHECKIN);
+  if(rc) goto end;
+  rc = fsl_deck_load_rid(f, &d2, opt->v2, FSL_SATYPE_CHECKIN);
+  if(rc) goto end;
+  rc = fsl_deck_F_rewind(&d1);
+  if(0==rc) rc = fsl_deck_F_rewind(&d2);
+  if(rc) goto end;
+  fsl_deck_F_next(&d1, &fc1);
+  fsl_deck_F_next(&d2, &fc2);
+  cst.f = f;
+  cst.opt = opt;
+  cst.d1 = &d1;
+  cst.d2 = &d2;
+  rc = opt->callback(&cst);
+  cst.stepType = FSL_RC_STEP_ROW;
+  while(0==rc && (fc1 || fc2)){
+    int nameCmp;
+    cst.changes = FSL_CIDIFF_NONE;
+    if(!fc1) nameCmp = 1;
+    else if(!fc2) nameCmp = -1;
+    else{
+      nameCmp = fsl_strcmp(fc1->name, fc2->name);
+      if(fc2->priorName){
+        if(0==nameCmp){
+          cst.changes |= FSL_CIDIFF_FILE_RENAMED;
+        }else if(0==fsl_strcmp(fc1->name, fc2->priorName)){
+          /**
+             Treat these as being the same file for this purpose.
+
+             We ostensibly know that fc1 was renamed to fc2->name here
+             BUT there's a corner case we can't sensibly determine
+             here: file A renamed to B and file C renamed to A. If
+             both of those F-cards just happen to align at this point
+             in this loop, we're mis-informing the user. Reliably
+             catching that type of complex situation requires
+             significant hoop-jumping, as can be witness in
+             fsl_ckout_merge() (which still misses some convoluted
+             cases).
+          */
+          nameCmp = 0;
+          cst.changes |= FSL_CIDIFF_FILE_RENAMED;
+        }
+      }
+      if(fc1->perm!=fc2->perm){
+        cst.changes |= FSL_CIDIFF_FILE_PERMS;
+      }
+    }
+    if(nameCmp<0){
+      nameCmp = -1/*see below*/;
+      assert(fc1);
+      cst.changes |= FSL_CIDIFF_FILE_REMOVED;
+      cst.fc1 = fc1; cst.fc2 = NULL;
+    }else if(nameCmp>0){
+      nameCmp = 1/*see below*/;
+      cst.changes |= FSL_CIDIFF_FILE_ADDED;
+      cst.fc1 = NULL; cst.fc2 = fc2;
+    }else{
+      cst.fc1 = fc1; cst.fc2 = fc2;
+    }
+    if(fc1 && fc2 && 0!=fsl_strcmp(fc1->uuid, fc2->uuid)){
+      cst.changes |= FSL_CIDIFF_FILE_MODIFIED;
+    }
+    rc = opt->callback(&cst);
+    switch(rc ? 2 : nameCmp){
+      case  2: break;
+      case -1: rc = fsl_deck_F_next(&d1, &fc1); break;
+      case  1: rc = fsl_deck_F_next(&d2, &fc2); break;
+      case  0:
+        rc = fsl_deck_F_next(&d1, &fc1);
+        if(0==rc) rc = fsl_deck_F_next(&d2, &fc2);
+        break;
+      default:
+        fsl__fatal(FSL_RC_MISUSE,"Internal API misuse.");
+    }
+  }/*while(f-cards)*/
+  if(0==rc){
+    cst.fc1 = cst.fc2 = NULL;
+    cst.stepType = FSL_RC_STEP_DONE;
+    rc = opt->callback(&cst);
+  }
+  end:
+  fsl_deck_finalize(&d1);
+  fsl_deck_finalize(&d2);
+  return rc;
+}
+
 #undef MARKER
 /* end of file ./src/repo.c */
 /* start of file ./src/schema.c */
@@ -38351,6 +38540,32 @@ int fsl_sha3sum_filename(const char *zFilename, fsl_buffer *pCksum){
   }
 }
 
+#undef A00
+#undef A01
+#undef A02
+#undef A03
+#undef A04
+#undef A10
+#undef A11
+#undef A12
+#undef A13
+#undef A14
+#undef A20
+#undef A21
+#undef A22
+#undef A23
+#undef A24
+#undef A30
+#undef A31
+#undef A32
+#undef A33
+#undef A34
+#undef A40
+#undef A41
+#undef A42
+#undef A43
+#undef A44
+#undef ROL64
 
 #undef SHA3_BYTEORDER
 #undef MARKER
@@ -40030,7 +40245,6 @@ int fsl__ticket_rebuild(fsl_cx * const f, char const * zTktKCard){
 #endif
 #if FSL_ENABLE_SQLITE_REGEXP
 #endif
-#include "sqlite3.h"
 #include <assert.h>
 
 /* Only for debugging */

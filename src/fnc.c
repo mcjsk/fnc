@@ -938,10 +938,10 @@ static int		 write_diff_meta(fsl_buffer *, const char *,
 static int		 diff_file(fsl_buffer *, fsl_buffer *, const char *,
 			    fsl_uuid_str, const char *, enum fsl_ckout_change_e,
 			    int, int, bool);
-static int		 fnc_diff_builder(fsl_diff_builder **, fsl_uuid_cstr,
+static int		 fnc_diff_builder(fsl_dibu **, fsl_uuid_cstr,
 			    fsl_uuid_cstr, const char *, const char *, int,
 			    int, fsl_buffer *);
-static void		 fnc_free_diff_builder(fsl_diff_builder *);
+static void		 fnc_free_diff_builder(fsl_dibu *);
 static int		 diff_non_checkin(fsl_buffer *,
 			    struct fnc_commit_artifact *, int, int, int);
 static int		 diff_file_artifact(fsl_buffer *, fsl_id_t,
@@ -4907,12 +4907,12 @@ diff_file(fsl_buffer *buf, fsl_buffer *bminus, const char *zminus,
     fsl_uuid_str xminus, const char *abspath, enum fsl_ckout_change_e change,
     int diff_flags, int context, bool sbs)
 {
-	fsl_cx			*const f = fcli_cx();
-	fsl_diff_builder	*diffbld = NULL;
-	fsl_buffer		 bplus = fsl_buffer_empty;
-	fsl_buffer		 xplus = fsl_buffer_empty;
-	const char		*zplus = NULL;
-	int			 rc = 0;
+	fsl_cx		*const f = fcli_cx();
+	fsl_dibu	*diffbld = NULL;
+	fsl_buffer	 bplus = fsl_buffer_empty;
+	fsl_buffer	 xplus = fsl_buffer_empty;
+	const char	*zplus = NULL;
+	int		 rc = 0;
 
 	/*
 	 * If it exists, read content of abspath to diff EXCEPT for the content
@@ -4998,11 +4998,11 @@ end:
 }
 
 static int
-fnc_diff_builder(fsl_diff_builder **ptr, fsl_uuid_cstr xminus,
-    fsl_uuid_cstr xplus, const char *zminus, const char *zplus, int context,
-    int diff_flags, fsl_buffer *buf)
+fnc_diff_builder(fsl_dibu **ptr, fsl_uuid_cstr xminus, fsl_uuid_cstr xplus,
+    const char *zminus, const char *zplus, int context, int diff_flags,
+    fsl_buffer *buf)
 {
-	fsl_diff_builder		*diffbld = NULL;
+	fsl_dibu			*diffbld = NULL;
 	fsl_diff_opt			*diffopt = NULL;
 	struct fsl_diff_opt_ansi	 ansiopt = {"", "", "", ""};
 	int				 rc = FSL_RC_OK;
@@ -5025,7 +5025,7 @@ fnc_diff_builder(fsl_diff_builder **ptr, fsl_uuid_cstr xminus,
 	diffopt->out = fsl_output_f_buffer;
 	diffopt->outState = buf;
 
-	rc = fsl_diff_builder_factory(FSL_DIFF_BUILDER_UNIFIED_TEXT, &diffbld);
+	rc = fsl_dibu_factory(FSL_DIBU_UNIFIED_TEXT, &diffbld);
 	if (!rc) {
 		diffbld->opt = diffopt;
 		diffbld->start = NULL;
@@ -5037,7 +5037,7 @@ fnc_diff_builder(fsl_diff_builder **ptr, fsl_uuid_cstr xminus,
 }
 
 static void
-fnc_free_diff_builder(fsl_diff_builder *diffbld)
+fnc_free_diff_builder(fsl_dibu *diffbld)
 {
 	if (diffbld) {
 		if (diffbld->opt)
@@ -5055,13 +5055,13 @@ static int
 diff_non_checkin(fsl_buffer *buf, struct fnc_commit_artifact *commit,
     int diff_flags, int context, int sbs)
 {
-	fsl_cx			*const f = fcli_cx();
-	fsl_diff_builder	*diffbld = NULL;
-	fsl_buffer		 wiki = fsl_buffer_empty;
-	fsl_buffer		 pwiki = fsl_buffer_empty;
-	fsl_id_t		 prid = 0;
-	fsl_size_t		 idx;
-	int			 rc = 0;
+	fsl_cx		*const f = fcli_cx();
+	fsl_dibu	*diffbld = NULL;
+	fsl_buffer	 wiki = fsl_buffer_empty;
+	fsl_buffer	 pwiki = fsl_buffer_empty;
+	fsl_id_t	 prid = 0;
+	fsl_size_t	 idx;
+	int		 rc = 0;
 
 	fsl_deck *d = NULL;
 	d = fsl_deck_malloc();
@@ -5178,16 +5178,16 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
     fsl_id_t vid2, const fsl_card_F *b, enum fsl_ckout_change_e change,
     int diff_flags, int context, int sbs, enum fnc_diff_type diff_type)
 {
-	fsl_cx			*const f = fcli_cx();
-	fsl_diff_builder	*diffbld = NULL;
-	fsl_stmt		 stmt = fsl_stmt_empty;
-	fsl_buffer		 fbuf1 = fsl_buffer_empty;
-	fsl_buffer		 fbuf2 = fsl_buffer_empty;
-	char			*zminus0 = NULL, *zplus0 = NULL;
-	const char		*zplus = NULL, *zminus = NULL;
-	fsl_uuid_str		 xplus0 = NULL, xminus0 = NULL;
-	fsl_uuid_str		 xplus = NULL, xminus = NULL;
-	int			 rc = 0;
+	fsl_cx		*const f = fcli_cx();
+	fsl_dibu	*diffbld = NULL;
+	fsl_stmt	 stmt = fsl_stmt_empty;
+	fsl_buffer	 fbuf1 = fsl_buffer_empty;
+	fsl_buffer	 fbuf2 = fsl_buffer_empty;
+	char		*zminus0 = NULL, *zplus0 = NULL;
+	const char	*zplus = NULL, *zminus = NULL;
+	fsl_uuid_str	 xplus0 = NULL, xminus0 = NULL;
+	fsl_uuid_str	 xplus = NULL, xminus = NULL;
+	int		 rc = 0;
 
 	assert(vid1 != vid2);
 	assert(vid2 > 0 &&
