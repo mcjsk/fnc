@@ -78,6 +78,7 @@
 #define CTRL(key)	((key) & 037)	/* CTRL+<key> input. */
 #endif
 #define nitems(a)	(sizeof((a)) / sizeof((a)[0]))
+#define ndigits(_d, _n)	do { _d++; } while (_n /= 10)
 #define STRINGIFYOUT(s)	#s
 #define STRINGIFY(s)	STRINGIFYOUT(s)
 #define CONCATOUT(a, b)	a ## b
@@ -94,6 +95,7 @@
 #define MAX_DIFF_CTX	64		/* Max diff context lines. */
 #define HSPLIT_SCALE	0.4		/* Default horizontal split scale. */
 #define SPIN_INTERVAL	200		/* Status line progress indicator. */
+#define LINENO_WIDTH	6		/* View lineno max column width. */
 #define SPINNER		"\\|/-\0"
 #define NULL_DEVICE	"/dev/null"
 #define NULL_DEVICELEN	(sizeof(NULL_DEVICE) - 1)
@@ -677,12 +679,14 @@ struct fnc_diff_view_state {
 	int				 sbs;
 	int				 matched_line;
 	int				 current_line;
+	int				 lineno;
 	size_t				 ncols;
 	size_t				 nlines;
 	off_t				*line_offsets;
 	bool				 eof;
 	bool				 colour;
 	bool				 showmeta;
+	bool				 showln;
 };
 
 TAILQ_HEAD(fnc_parent_trees, fnc_parent_tree);
@@ -879,7 +883,9 @@ static int		 commit_builder(struct fnc_commit_artifact **, fsl_id_t,
 static int		 signal_tl_thread(struct fnc_view *, int);
 static int		 draw_commits(struct fnc_view *);
 static void		 parse_emailaddr_username(char **);
-static int		 formatln(wchar_t **, int *, const char *, int, int);
+static int		 formatln(wchar_t **, int *, const char *, int, int,
+			    bool);
+static size_t		 expand_tab(char *, size_t, const char *, int);
 static int		 multibyte_to_wchar(const char *, wchar_t **, size_t *);
 static int		 write_commit_line(struct fnc_view *,
 			    struct fnc_commit_artifact *, int);
@@ -953,12 +959,12 @@ static int		 write_diff(struct fnc_view *, char *);
 static int		 match_line(const char *, regex_t *, size_t,
 			    regmatch_t *);
 static int		 write_matched_line(int *, const char *, int, int,
-			    WINDOW *, regmatch_t *);
+			    WINDOW *, regmatch_t *, bool);
 static void		 drawborder(struct fnc_view *);
 static int		 diff_input_handler(struct fnc_view **,
 			    struct fnc_view *, int);
 static int		 request_tl_commits(struct fnc_view *);
-static int		 reset_diff_view(struct fnc_view *, int, bool);
+static int		 reset_diff_view(struct fnc_view *, bool);
 static int		 set_selected_commit(struct fnc_diff_view_state *,
 			    struct commit_entry *);
 static int		 diff_search_init(struct fnc_view *);
@@ -1069,6 +1075,7 @@ static int		 close_diff_view(struct fnc_view *);
 static int		 view_resize(struct fnc_view *, enum fnc_view_mode);
 static bool		 screen_is_split(struct fnc_view *);
 static bool		 screen_is_shared(struct fnc_view *);
+static void		 updatescreen(WINDOW *, bool, bool);
 static void		 fnc_resizeterm(void);
 static int		 join_tl_thread(struct fnc_tl_view_state *);
 static void		 fnc_free_commits(struct commit_queue *);
@@ -1077,6 +1084,7 @@ static int		 fsl_file_artifact_free(void *, void *);
 static void		 sigwinch_handler(int);
 static void		 sigpipe_handler(int);
 static void		 sigcont_handler(int);
+static int		 draw_lineno(struct fnc_view *, int, int, bool);
 static bool		 gotoline(struct fnc_view *, int *, int *);
 static int		 strtonumcheck(long *, const char *, const int,
 			    const int);
@@ -1965,18 +1973,11 @@ view_loop(struct fnc_view *view)
 				goto end;
 			if (view->child) {
 				rc = view->child->show(view->child);
-#ifdef __linux__
-				wnoutrefresh(view->child->window);
-#endif
 				if (rc)
 					goto end;
+				updatescreen(view->child->window, false, false);
 			}
-#ifdef __linux__
-			wnoutrefresh(view->window);
-#else
-			update_panels();
-#endif
-			doupdate();
+			updatescreen(view->window, true, true);
 		}
 	}
 end:
@@ -2430,7 +2431,7 @@ draw_commits(struct fnc_view *view)
 	}
 	if (SPINNER[++tcx->spin_idx] == '\0')
 		tcx->spin_idx = 0;
-	rc = formatln(&wcstr, &wstrlen, headln, view->ncols, 0);
+	rc = formatln(&wcstr, &wstrlen, headln, view->ncols, 0, false);
 	if (rc)
 		goto end;
 
@@ -2470,7 +2471,7 @@ draw_commits(struct fnc_view *view)
 		}
 		if (strpbrk(user, "<@>") != NULL)
 			parse_emailaddr_username(&user);
-		rc = formatln(&usr_wcstr, &usrlen, user, view->ncols, 0);
+		rc = formatln(&usr_wcstr, &usrlen, user, view->ncols, 0, false);
 		if (max_usrlen < usrlen)
 			max_usrlen = usrlen;
 		fsl_free(usr_wcstr);
@@ -2523,16 +2524,20 @@ parse_emailaddr_username(char **username)
 
 static int
 formatln(wchar_t **ptr, int *wstrlen, const char *mbstr, int column_limit,
-    int start_column)
+    int start_column, bool expand)
 {
 	wchar_t		*wline = NULL;
+	static char	 exstr[BUFSIZ];
 	size_t		 i, wlen;
 	int		 rc = 0, cols = 0;
 
 	*ptr = NULL;
 	*wstrlen = 0;
 
-	rc = multibyte_to_wchar(mbstr, &wline, &wlen);
+	if (expand)
+		expand_tab(exstr, sizeof(exstr), mbstr, fsl_strlen(mbstr));
+
+	rc = multibyte_to_wchar(expand ? exstr : mbstr, &wline, &wlen);
 	if (rc)
 		return rc;
 
@@ -2585,6 +2590,36 @@ end:
 	else
 		*ptr = wline;
 	return rc;
+}
+
+/*
+ * Copy the string src into the statically sized dst char array, and expand
+ * any tab ('\t') characters found into the equivalent number of space (' ')
+ * characters. Return number of bytes written to dst minus the terminating NUL.
+ */
+static size_t
+expand_tab(char *dst, size_t dstlen, const char *src, int srclen)
+{
+	size_t	sz = 0;
+	int	idx = 0;
+
+	while (sz < dstlen - 1 && idx < srclen && src[idx]) {
+		const char c = *(src + idx);
+
+		if (c == '\t') {
+			size_t spaces = TABSIZE - (sz % TABSIZE);
+			if (spaces + sz >= dstlen - 1)
+				spaces = dstlen - sz - 1;
+			memcpy(dst + sz, "        ", spaces);
+			sz += spaces;
+		} else {
+			dst[sz++] = src[idx];
+		}
+		++idx;
+	}
+
+	dst[sz] = '\0';
+	return idx;
 }
 
 static int
@@ -2693,7 +2728,7 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	if (strpbrk(user, "<@>") != NULL)
 		parse_emailaddr_username(&user);
 	rc = formatln(&usr_wcstr, &usrlen, user, view->ncols - col_pos,
-	    col_pos);
+	    col_pos, false);
 	if (rc)
 		goto end;
 	if (s->colour)
@@ -2720,7 +2755,8 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	if (eol)
 		*eol = '\0';
 	ncols_avail = view->ncols - col_pos;
-	rc = formatln(&wcomment, &commentlen, comment, ncols_avail, col_pos);
+	rc = formatln(&wcomment, &commentlen, comment, ncols_avail, col_pos,
+	    false);
 	if (rc)
 		goto end;
 	waddwstr(view->window, wcomment);
@@ -2949,6 +2985,7 @@ help(struct fnc_view *view)
 	    {"  Space            ", "  ❬Space❭         "},
 	    {"  b                ", "  ❬b❭             "},
 	    {"  i                ", "  ❬i❭             "},
+	    {"  l                ", "  ❬l❭             "},
 	    {"  v                ", "  ❬v❭             "},
 	    {"  w                ", "  ❬w❭             "},
 	    {"  -,_              ", "  ❬-❭❬_❭          "},
@@ -3016,6 +3053,7 @@ help(struct fnc_view *view)
 	    "Scroll down one page of diff output",
 	    "Open and populate branch view with all repository branches",
 	    "Toggle inversion of diff output",
+	    "Toggle display of diff view line numbers",
 	    "Toggle verbosity of diff output",
 	    "Toggle ignore whitespace-only changes in diff",
 	    "Decrease the number of context lines",
@@ -4144,12 +4182,7 @@ static void
 show_diff_status(struct fnc_view *view)
 {
 	mvwaddstr(view->window, 0, 0, "generating diff...");
-#ifdef __linux__
-	wnoutrefresh(view->window);
-#else
-	update_panels();
-#endif
-	doupdate();
+	updatescreen(view->window, true, true);
 }
 
 static int
@@ -4378,7 +4411,7 @@ write_commit_meta(struct fnc_diff_view_state *s)
 	while ((line = fnc_strsep(&st, "\n")) != NULL) {
 		linelen = fsl_strlen(line);
 		if (linelen >= s->ncols) {
-			rc = wrapline(line, s->ncols, s, &lnoff);
+			rc = wrapline(line, s->ncols - LINENO_WIDTH, s, &lnoff);
 			if (rc)
 				goto end;
 		}
@@ -5329,8 +5362,9 @@ write_diff(struct fnc_view *view, char *headln)
 	int				 wstrlen;
 	int				 max_lines = view->nlines;
 	int				 nlines = s->nlines;
-	int				 rc = 0, nprintln = 0;
+	int				 npad = 0, rc = 0, nprintln = 0;
 
+	s->lineno = s->first_line_onscreen;
 	line_offset = s->line_offsets[s->first_line_onscreen - 1];
 	if (fseeko(s->f, line_offset, SEEK_SET))
 		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR), "%s", "fseeko");
@@ -5339,9 +5373,9 @@ write_diff(struct fnc_view *view, char *headln)
 
 	if (headln) {
 		if ((line = fsl_mprintf("[%d/%d] %s", (s->first_line_onscreen -
-		    1 + s->current_line), nlines, headln)) == NULL)
+		    1 + s->current_line), nlines - 1, headln)) == NULL)
 			return RC(FSL_RC_RANGE, "%s", "fsl_mprintf");
-		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0);
+		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0, false);
 		fsl_free(line);
 		fsl_free(headln);
 		if (rc)
@@ -5379,20 +5413,25 @@ write_diff(struct fnc_view *view, char *headln)
 			return rc;
 		}
 
+		if (s->showln)
+			npad = draw_lineno(view, s->nlines, s->lineno++, true);
+
 		if (s->colour)
 			c = match_colour(&s->colours, line);
 		if (c)
 			wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
 		if (s->first_line_onscreen + nprintln == s->matched_line &&
 		    regmatch->rm_so >= 0 && regmatch->rm_so < regmatch->rm_eo) {
-			rc = write_matched_line(&wstrlen, line, view->ncols, 0,
-			    view->window, regmatch);
+			rc = write_matched_line(&wstrlen, line,
+			    view->ncols - npad, npad, view->window,
+			    regmatch, true);
 			if (rc) {
 				fsl_free(line);
 				return rc;
 			}
 		} else {
-			rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0);
+			rc = formatln(&wcstr, &wstrlen, line,
+			    view->ncols - npad, npad, true);
 			if (rc) {
 				fsl_free(line);
 				return rc;
@@ -5403,7 +5442,7 @@ write_diff(struct fnc_view *view, char *headln)
 		}
 		if (c)
 			wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
-		if (wstrlen <= view->ncols - 1)
+		if (wstrlen + npad <= view->ncols - 1)
 			waddch(view->window, '\n');
 		++nprintln;
 	}
@@ -5454,9 +5493,22 @@ screen_is_split(struct fnc_view *view)
 	return view->start_col > 0 || view->start_ln > 0;
 }
 
+static void
+updatescreen(WINDOW *win, bool panel, bool update)
+{
+#ifdef __linux__
+	wnoutrefresh(win);
+#else
+	if (panel)
+		update_panels();
+#endif
+	if (update)
+		doupdate();
+}
+
 static int
 write_matched_line(int *col_pos, const char *line, int ncols_avail,
-    int start_column, WINDOW *window, regmatch_t *regmatch)
+    int start_column, WINDOW *window, regmatch_t *regmatch, bool expand)
 {
 	wchar_t		*wcstr;
 	char		*s;
@@ -5470,7 +5522,7 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 	if (s == NULL)
 		return RC(FSL_RC_ERROR, "%s", "fsl_strndup");
 
-	rc = formatln(&wcstr, &wstrlen, s, ncols_avail, start_column);
+	rc = formatln(&wcstr, &wstrlen, s, ncols_avail, start_column, expand);
 	if (rc) {
 		free(s);
 		return rc;
@@ -5490,7 +5542,8 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 			free(s);
 			return rc;
 		}
-		rc = formatln(&wcstr, &wstrlen, s, ncols_avail, start_column);
+		rc = formatln(&wcstr, &wstrlen, s, ncols_avail, start_column,
+		    expand);
 		if (rc) {
 			free(s);
 			return rc;
@@ -5507,7 +5560,7 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 	/* Write the rest of the line if not yet at EOL. */
 	if (ncols_avail > 0 && fsl_strlen(line) > (fsl_size_t)regmatch->rm_eo) {
 		rc = formatln(&wcstr, &wstrlen, line + regmatch->rm_eo,
-		    ncols_avail, start_column);
+		    ncols_avail, start_column, expand);
 		if (rc)
 			return rc;
 		waddwstr(window, wcstr);
@@ -5541,9 +5594,8 @@ drawborder(struct fnc_view *view)
 		mvwvline(view->window, view->start_ln,
 		    view_above->start_col - 1, (strcmp(codeset, "UTF-8") == 0) ?
 		    ACS_VLINE : '|', view->nlines);
-#ifdef __linux__
-	wnoutrefresh(view->window);
-#endif
+
+	updatescreen(view->window, false, false);
 }
 
 static int
@@ -5613,6 +5665,9 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case KEY_HOME:
 		s->first_line_onscreen = 1;
 		break;
+	case 'l':
+		s->showln = !s->showln;
+		break;
 	case 'b': {
 		int start_col = 0;
 		if (view_is_parent(view))
@@ -5651,20 +5706,20 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			FLAG_TOG(s->diff_flags, FSL_DIFF_VERBOSE);
 		if (ch == 'w')
 			FLAG_TOG(s->diff_flags, FSL_DIFF2_IGNORE_ALLWS);
-		rc = reset_diff_view(view, s->nlines, false);
+		rc = reset_diff_view(view, true);
 		break;
 	case '-':
 	case '_':
 		if (s->context > 0) {
 			--s->context;
-			rc = reset_diff_view(view, s->nlines, false);
+			rc = reset_diff_view(view, true);
 		}
 		break;
 	case '+':
 	case '=':
 		if (s->context < MAX_DIFF_CTX) {
 			++s->context;
-			rc = reset_diff_view(view, s->nlines, false);
+			rc = reset_diff_view(view, true);
 		}
 		break;
 	case CTRL('j'):
@@ -5692,7 +5747,7 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		if ((rc = set_selected_commit(s, tlstate->selected_commit)))
 			break;
 
-		reset_diff_view(view, 0, true);
+		reset_diff_view(view, false);
 		break;
 	default:
 		break;
@@ -5702,26 +5757,23 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 }
 
 static int
-reset_diff_view(struct fnc_view *view, int n, bool resetln)
+reset_diff_view(struct fnc_view *view, bool stay)
 {
 	struct fnc_diff_view_state	*s = &view->state.diff;
-	int				 rc = FSL_RC_OK;
+	float				 scale;
+	int				 n, rc = FSL_RC_OK;
 
+	n = s->nlines;
 	show_diff_status(view);
 	rc = create_diff(s);
 	if (rc)
 		return rc;
 
-	n = n ? n - s->nlines : n;
-
-	if (n < 0) {
-		n = ABS(n);
-		s->first_line_onscreen += n;
-		s->last_line_onscreen += n;
-	} else if (n > 0 && s->first_line_onscreen > n) {
-		s->first_line_onscreen -= n;
-		s->last_line_onscreen -= n;
-	} else if (resetln) {
+	if (stay && s->first_line_onscreen > view->nlines) {
+		scale = (float)s->first_line_onscreen / n;
+		s->first_line_onscreen = (int)(s->nlines * scale);
+		s->last_line_onscreen = s->first_line_onscreen + view->nlines;
+	} else {
 		s->first_line_onscreen = 1;
 		s->last_line_onscreen = view->nlines;
 	}
@@ -6877,7 +6929,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 		return rc;
 
 	/* Write (highlighted) headline (if view is active in splitscreen). */
-	rc = formatln(&wcstr, &wstrlen, s->tree_label, view->ncols, 0);
+	rc = formatln(&wcstr, &wstrlen, s->tree_label, view->ncols, 0, false);
 	if (rc)
 		return rc;
 	if (screen_is_shared(view))
@@ -6901,7 +6953,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 		return rc;
 
 	/* Write this (sub)tree's absolute repository path subheader. */
-	rc = formatln(&wcstr, &wstrlen, treepath, view->ncols, 0);
+	rc = formatln(&wcstr, &wstrlen, treepath, view->ncols, 0, false);
 	if (rc)
 		return rc;
 	waddwstr(view->window, wcstr);
@@ -7003,7 +7055,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 		if (rc || line == NULL)
 			return RC(rc ? rc : FSL_RC_RANGE, "%s",
 			    rc ? "fsl_julian_to_iso8601" : "fsl_mprintf");
-		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0);
+		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0, false);
 		if (rc) {
 			fsl_free(line);
 			break;
@@ -8569,7 +8621,7 @@ draw_blame(struct fnc_view *view)
 		return rc;
 	}
 
-	rc = formatln(&wcstr, &width, line, view->ncols, 0);
+	rc = formatln(&wcstr, &width, line, view->ncols, 0, false);
 	fsl_free(line);
 	line = NULL;
 	if (rc)
@@ -8601,7 +8653,7 @@ draw_blame(struct fnc_view *view)
 	    s->blame_complete ? ' ' : SPINNER[s->spin_idx]);
 	if (SPINNER[++s->spin_idx] == '\0')
 		s->spin_idx = 0;
-	rc = formatln(&wcstr, &width, line, view->ncols, 0);
+	rc = formatln(&wcstr, &width, line, view->ncols, 0, false);
 	fsl_free(line);
 	line = NULL;
 	if (rc)
@@ -8671,19 +8723,13 @@ draw_blame(struct fnc_view *view)
 			prev_id = NULL;
 		}
 
-		if (s->showln) {
-			npad = snprintf(NULL, 0, "%d", blame->nlines);
-			wattr_on(view->window, A_BOLD, NULL);
-			wprintw(view->window, " %*d ", npad,
-			    blame_line->lineno);
-			wattr_off(view->window, A_BOLD, NULL);
-			npad += 3;  /* NUL + {ap,pre}pended ' ' */
-			width += npad;
-		}
+		if (s->showln)
+			npad = draw_lineno(view, blame->nlines,
+			    blame_line->lineno, false);
 
-		if (nprinted == s->selected_line - 1)
+		if (!s->showln && nprinted == s->selected_line - 1)
 			wattr_off(view->window, A_REVERSE, NULL);
-		waddstr(view->window, " ");
+		waddch(view->window, ' ');
 
 		if (view->ncols <= idfield) {
 			width = idfield;
@@ -8699,7 +8745,7 @@ draw_blame(struct fnc_view *view)
 		    regmatch->rm_so < regmatch->rm_eo) {
 			rc = write_matched_line(&width, line,
 			    view->ncols - idfield, idfield,
-			    view->window, regmatch);
+			    view->window, regmatch, true);
 			if (rc) {
 				fsl_free(line);
 				return rc;
@@ -8707,15 +8753,14 @@ draw_blame(struct fnc_view *view)
 			width += idfield;
 		} else {
 			rc = formatln(&wcstr, &width, line,
-			    view->ncols - idfield - (s->showln ? npad : 0),
-			    idfield + (s->showln ? npad : 0));
+			    view->ncols - idfield - npad, idfield + npad, true);
 			waddwstr(view->window, wcstr);
 			fsl_free(wcstr);
 			wcstr = NULL;
 			width += idfield;
 		}
 
-		if (width <= view->ncols - 1)
+		if (width + npad <= view->ncols - 1)
 			waddch(view->window, '\n');
 		if (++nprinted == 1)
 			s->first_line_onscreen = lineno;
@@ -8726,6 +8771,32 @@ draw_blame(struct fnc_view *view)
 	drawborder(view);
 
 	return rc;
+}
+
+/*
+ * Draw column of line numbers up to nlines for the given view.
+ */
+static int
+draw_lineno(struct fnc_view *view, int nlines, int lineno, bool update)
+{
+	int npad = 0;
+
+	ndigits(npad, nlines);  /* Number of digits to pad. */
+
+	wattr_on(view->window, A_BOLD, NULL);
+	wprintw(view->window, " %*d ", npad, lineno);
+	if (view->vid == FNC_VIEW_BLAME)  /* Don't highlight separator. */
+		wattr_off(view->window, A_REVERSE, NULL);
+	waddch(view->window, (strcmp(nl_langinfo(CODESET), "UTF-8") == 0) ?
+	    ACS_VLINE : '|');
+	wattr_off(view->window, A_BOLD, NULL);
+
+	npad += 3;  /* {ap,pre}pended ' ' + line separator */
+
+	if (update)
+		updatescreen(view->window, true, true);
+
+	return npad;
 }
 
 static bool
@@ -9597,7 +9668,7 @@ show_branch_view(struct fnc_view *view)
 	    s->nbranches)) == NULL)
 		return RC(FSL_RC_ERROR, "%s", "fsl_mprintf");
 
-	rc = formatln(&wline, &width, line, view->ncols, 0);
+	rc = formatln(&wline, &width, line, view->ncols, 0, false);
 	if (rc) {
 		fsl_free(line);
 		return rc;
@@ -9637,7 +9708,7 @@ show_branch_view(struct fnc_view *view)
 		if (s->colour)
 			c = match_colour(&s->colours, line);
 
-		rc = formatln(&wline, &width, line, view->ncols, 0);
+		rc = formatln(&wline, &width, line, view->ncols, 0, false);
 		if (rc) {
 			fsl_free(line);
 			return rc;
