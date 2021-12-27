@@ -3180,7 +3180,7 @@ padpopup(struct fnc_view *view, int width, int height, FILE *txt,
 			case KEY_PPAGE:
 			case CTRL('b'):
 				if (cury > 0) {
-					cury -= wy / 2;
+					cury -= wy - 3;
 					if (cury < 0)
 						cury = 0;
 				}
@@ -3189,7 +3189,7 @@ padpopup(struct fnc_view *view, int width, int height, FILE *txt,
 			case CTRL('f'):
 			case ' ':
 				if (cury < end) {
-					cury += wy / 2;
+					cury += wy - 3;
 					if (cury > end)
 						cury = end;
 				}
