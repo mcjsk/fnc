@@ -959,7 +959,7 @@ static int		 write_diff(struct fnc_view *, char *);
 static int		 match_line(const char *, regex_t *, size_t,
 			    regmatch_t *);
 static int		 write_matched_line(int *, const char *, int, int,
-			    WINDOW *, regmatch_t *, bool);
+			    WINDOW *, regmatch_t *, attr_t, bool);
 static void		 drawborder(struct fnc_view *);
 static int		 diff_input_handler(struct fnc_view **,
 			    struct fnc_view *, int);
@@ -5424,7 +5424,7 @@ write_diff(struct fnc_view *view, char *headln)
 		    regmatch->rm_so >= 0 && regmatch->rm_so < regmatch->rm_eo) {
 			rc = write_matched_line(&wstrlen, line,
 			    view->ncols - npad, npad, view->window,
-			    regmatch, true);
+			    regmatch, c ? COLOR_PAIR(c->scheme) : 0, true);
 			if (rc) {
 				fsl_free(line);
 				return rc;
@@ -5508,12 +5508,15 @@ updatescreen(WINDOW *win, bool panel, bool update)
 
 static int
 write_matched_line(int *col_pos, const char *line, int ncols_avail,
-    int start_column, WINDOW *window, regmatch_t *regmatch, bool expand)
+    int start_column, WINDOW *window, regmatch_t *regmatch, attr_t rx,
+    bool expand)
 {
 	wchar_t		*wcstr;
 	char		*s;
 	int		 wstrlen;
 	int		 rc = 0;
+	attr_t		 hl = A_BOLD | A_REVERSE;
+	short		 f;
 
 	*col_pos = 0;
 
@@ -5548,9 +5551,11 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 			free(s);
 			return rc;
 		}
-		wattr_on(window, A_REVERSE, NULL);
+		pair_content(FNC_COLOUR_HL_SEARCH, &f, NULL);
+		hl |= f ? COLOR_PAIR(FNC_COLOUR_HL_SEARCH) : 0;
+		wattron(window, hl);
 		waddwstr(window, wcstr);
-		wattr_off(window, A_REVERSE, NULL);
+		wattroff(window, hl);
 		free(wcstr);
 		free(s);
 		ncols_avail -= wstrlen;
@@ -5563,9 +5568,11 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 		    ncols_avail, start_column, expand);
 		if (rc)
 			return rc;
+		wattron(window, rx);
 		waddwstr(window, wcstr);
 		free(wcstr);
 		*col_pos += wstrlen;
+		wattroff(window, rx);
 	}
 
 	return rc;
@@ -7807,7 +7814,7 @@ view_set_child(struct fnc_view *view, struct fnc_view *child)
 static int
 set_colours(struct fnc_colours *s, enum fnc_view_id vid)
 {
-	int	rc = 0;
+	int	rc = FSL_RC_OK;
 
 	switch (vid) {
 	case FNC_VIEW_DIFF: {
@@ -7882,6 +7889,8 @@ set_colours(struct fnc_colours *s, enum fnc_view_id vid)
 	default:
 		rc = RC(FSL_RC_TYPE, "invalid fnc_view_id: %s", vid);
 	}
+
+	init_pair(FNC_COLOUR_HL_SEARCH, init_colour(FNC_COLOUR_HL_SEARCH), -1);
 
 	return rc;
 }
@@ -7996,38 +8005,31 @@ fnc_conf_getopt(enum fnc_opt_id id, bool ls)
 static int
 default_colour(enum fnc_opt_id id)
 {
-	if (id == FNC_COLOUR_COMMIT)
+	switch (id) {
+	case FNC_COLOUR_COMMIT:
+	case FNC_COLOUR_DIFF_META:
+	case FNC_COLOUR_TREE_EXEC:
+	case FNC_COLOUR_BRANCH_CURRENT:
 		return COLOR_GREEN;
-	if (id == FNC_COLOUR_USER)
+	case FNC_COLOUR_USER:
+	case FNC_COLOUR_DIFF_PLUS:
+	case FNC_COLOUR_TREE_DIR:
+	case FNC_COLOUR_BRANCH_OPEN:
 		return COLOR_CYAN;
-	if (id == FNC_COLOUR_DATE)
+	case FNC_COLOUR_DATE:
+	case FNC_COLOUR_DIFF_CHUNK:
+	case FNC_COLOUR_BRANCH_PRIVATE:
 		return COLOR_YELLOW;
-	if (id == FNC_COLOUR_DIFF_META)
-		return COLOR_GREEN;
-	if (id == FNC_COLOUR_DIFF_MINUS)
+	case FNC_COLOUR_DIFF_MINUS:
+	case FNC_COLOUR_DIFF_TAGS:
+	case FNC_COLOUR_TREE_LINK:
+	case FNC_COLOUR_BRANCH_CLOSED:
 		return COLOR_MAGENTA;
-	if (id == FNC_COLOUR_DIFF_PLUS)
-		return COLOR_CYAN;
-	if (id == FNC_COLOUR_DIFF_CHUNK)
-		return COLOR_YELLOW;
-	if (id == FNC_COLOUR_DIFF_TAGS)
-		return COLOR_MAGENTA;
-	if (id == FNC_COLOUR_TREE_LINK)
-		return COLOR_MAGENTA;
-	if (id == FNC_COLOUR_TREE_DIR)
-		return COLOR_CYAN;
-	if (id == FNC_COLOUR_TREE_EXEC)
-		return COLOR_GREEN;
-	if (id == FNC_COLOUR_BRANCH_OPEN)
-		return COLOR_CYAN;
-	if (id == FNC_COLOUR_BRANCH_CLOSED)
-		return COLOR_MAGENTA;
-	if (id == FNC_COLOUR_BRANCH_CURRENT)
-		return COLOR_GREEN;
-	if (id == FNC_COLOUR_BRANCH_PRIVATE)
-		return COLOR_YELLOW;
-
-	return -1;  /* Terminal default foreground colour. */
+	case FNC_COLOUR_HL_SEARCH:
+		return 0;   /* Invert existing text colour. */
+	default:
+		return -1;  /* Terminal default foreground colour. */
+	}
 }
 
 static int
@@ -8745,7 +8747,7 @@ draw_blame(struct fnc_view *view)
 		    regmatch->rm_so < regmatch->rm_eo) {
 			rc = write_matched_line(&width, line,
 			    view->ncols - idfield, idfield,
-			    view->window, regmatch, true);
+			    view->window, regmatch, 0, true);
 			if (rc) {
 				fsl_free(line);
 				return rc;
