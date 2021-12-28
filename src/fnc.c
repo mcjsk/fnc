@@ -5516,7 +5516,7 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 	int		 wstrlen;
 	int		 rc = 0;
 	attr_t		 hl = A_BOLD | A_REVERSE;
-	short		 f;
+	short		 b, f;
 
 	*col_pos = 0;
 
@@ -5551,7 +5551,7 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 			free(s);
 			return rc;
 		}
-		pair_content(FNC_COLOUR_HL_SEARCH, &f, NULL);
+		pair_content(FNC_COLOUR_HL_SEARCH, &f, &b);
 		hl |= f ? COLOR_PAIR(FNC_COLOUR_HL_SEARCH) : 0;
 		wattron(window, hl);
 		waddwstr(window, wcstr);
