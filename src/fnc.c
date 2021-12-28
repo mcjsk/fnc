@@ -678,8 +678,9 @@ struct fnc_diff_view_state {
 	int				 context;
 	int				 sbs;
 	int				 matched_line;
-	int				 current_line;
+	int				 selected_line;
 	int				 lineno;
+	int				 gtl;
 	size_t				 ncols;
 	size_t				 nlines;
 	off_t				*line_offsets;
@@ -2986,6 +2987,7 @@ help(struct fnc_view *view)
 	    {"  b                ", "  ❬b❭             "},
 	    {"  i                ", "  ❬i❭             "},
 	    {"  l                ", "  ❬l❭             "},
+	    {"  L                ", "  ❬L❭             "},
 	    {"  v                ", "  ❬v❭             "},
 	    {"  w                ", "  ❬w❭             "},
 	    {"  -,_              ", "  ❬-❭❬_❭          "},
@@ -3054,6 +3056,7 @@ help(struct fnc_view *view)
 	    "Open and populate branch view with all repository branches",
 	    "Toggle inversion of diff output",
 	    "Toggle display of diff view line numbers",
+	    "Open prompt to enter line number and navigate to line",
 	    "Toggle verbosity of diff output",
 	    "Toggle ignore whitespace-only changes in diff",
 	    "Decrease the number of context lines",
@@ -4137,7 +4140,7 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	s->selected_commit = commit;
 	s->first_line_onscreen = 1;
 	s->last_line_onscreen = view->nlines;
-	s->current_line = 1;
+	s->selected_line = 1;
 	s->f = NULL;
 	s->context = context;
 	s->sbs = 0;
@@ -5362,9 +5365,9 @@ write_diff(struct fnc_view *view, char *headln)
 	int				 wstrlen;
 	int				 max_lines = view->nlines;
 	int				 nlines = s->nlines;
-	int				 npad = 0, rc = 0, nprintln = 0;
+	int				 npad = 0, rc = 0, nprinted = 0;
 
-	s->lineno = s->first_line_onscreen;
+	s->lineno = s->first_line_onscreen - 1;
 	line_offset = s->line_offsets[s->first_line_onscreen - 1];
 	if (fseeko(s->f, line_offset, SEEK_SET))
 		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR), "%s", "fseeko");
@@ -5372,8 +5375,9 @@ write_diff(struct fnc_view *view, char *headln)
 	werase(view->window);
 
 	if (headln) {
-		if ((line = fsl_mprintf("[%d/%d] %s", (s->first_line_onscreen -
-		    1 + s->current_line), nlines - 1, headln)) == NULL)
+		if ((line = fsl_mprintf("[%d/%d] %s", s->gtl ?
+		    s->gtl : (s->first_line_onscreen - 1 + s->selected_line),
+		    nlines - 1, headln)) == NULL)
 			return RC(FSL_RC_RANGE, "%s", "fsl_mprintf");
 		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0, false);
 		fsl_free(line);
@@ -5400,7 +5404,7 @@ write_diff(struct fnc_view *view, char *headln)
 
 	s->eof = false;
 	line = NULL;
-	while (max_lines > 0 && nprintln < max_lines) {
+	while (max_lines > 0 && nprinted < max_lines) {
 		linelen = getline(&line, &linesz, s->f);
 		if (linelen == -1) {
 			if (feof(s->f)) {
@@ -5413,14 +5417,19 @@ write_diff(struct fnc_view *view, char *headln)
 			return rc;
 		}
 
+		if (++s->lineno < s->first_line_onscreen)
+			continue;
+		if (s->gtl)
+			if (!gotoline(view, &s->lineno, &nprinted))
+				continue;
 		if (s->showln)
-			npad = draw_lineno(view, s->nlines, s->lineno++, true);
+			npad = draw_lineno(view, s->nlines, s->lineno, true);
 
 		if (s->colour)
 			c = match_colour(&s->colours, line);
 		if (c)
 			wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
-		if (s->first_line_onscreen + nprintln == s->matched_line &&
+		if (s->first_line_onscreen + nprinted == s->matched_line &&
 		    regmatch->rm_so >= 0 && regmatch->rm_so < regmatch->rm_eo) {
 			rc = write_matched_line(&wstrlen, line,
 			    view->ncols - npad, npad, view->window,
@@ -5444,20 +5453,21 @@ write_diff(struct fnc_view *view, char *headln)
 			wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
 		if (wstrlen + npad <= view->ncols - 1)
 			waddch(view->window, '\n');
-		++nprintln;
+		if (++nprinted == 1)
+			s->first_line_onscreen = s->lineno;
 	}
 	fsl_free(line);
-	if (nprintln >= 1)
-		s->last_line_onscreen = s->first_line_onscreen + (nprintln - 1);
+	if (nprinted >= 1)
+		s->last_line_onscreen = s->first_line_onscreen + (nprinted - 1);
 	else
 		s->last_line_onscreen = s->first_line_onscreen;
 
 	drawborder(view);
 
 	if (s->eof) {
-		while (nprintln < view->nlines) {
+		while (nprinted < view->nlines) {
 			waddch(view->window, '\n');
-			++nprintln;
+			++nprinted;
 		}
 
 		wstandout(view->window);
@@ -5615,8 +5625,10 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	char				*line = NULL;
 	ssize_t				 linelen;
 	size_t				 linesz = 0;
-	int				 i, rc = 0;
+	int				 i, nlines, rc = FSL_RC_OK;
 	bool				 tl_down = false;
+
+	nlines = s->nlines;
 
 	switch (ch) {
 	case KEY_DOWN:
@@ -5672,6 +5684,25 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case KEY_HOME:
 		s->first_line_onscreen = 1;
 		break;
+	case 'L': {
+		char lineno[BUFSIZ];
+		long ln = 0;
+		rc = fnc_prompt_usr(lineno, BUFSIZ, view, "line: ", true);
+		if (rc || !lineno[0])
+			break;
+		rc = strtonumcheck(&ln, lineno, 1, nlines - 1);
+		if (rc == FSL_RC_MISUSE)
+			fnc_print_msg(view, "-- numeric input only --",
+			    false, true, true);
+		else if (rc == FSL_RC_RANGE || ln < 1 || ln > nlines - 1)
+			fnc_print_msg(view, "-- line outside file range --",
+			    false, true, true);
+		else
+			s->gtl = ln;
+		rc = FSL_RC_OK;
+		fcli_err_reset();
+		break;
+	}
 	case 'l':
 		s->showln = !s->showln;
 		break;
@@ -5889,7 +5920,7 @@ diff_search_next(struct fnc_view *view)
 
 	if (s->matched_line) {
 		s->first_line_onscreen = s->matched_line;
-		s->current_line = 1;
+		s->selected_line = 1;
 	}
 
 	return 0;
@@ -8804,24 +8835,41 @@ draw_lineno(struct fnc_view *view, int nlines, int lineno, bool update)
 static bool
 gotoline(struct fnc_view *view, int *lineno, int *nprinted)
 {
-	struct fnc_blame_view_state	*s = &view->state.blame;
-	struct fnc_blame		*blame = &s->blame;
+	FILE	*f = NULL;
+	int	*first, *selected, *gtl;
+	bool	*eof;
 
-	if (s->first_line_onscreen != 1 &&
-	    (*lineno >= s->gtl - (view->nlines - 3) / 2)) {
-		rewind(blame->f);
-		s->first_line_onscreen = 1;
+	if (view->vid == FNC_VIEW_BLAME) {
+		struct fnc_blame_view_state	*s = &view->state.blame;
+		first = &s->first_line_onscreen;
+		selected = &s->selected_line;
+		gtl = &s->gtl;
+		eof = &s->eof;
+		f = s->blame.f;
+	} else if (view->vid == FNC_VIEW_DIFF) {
+		struct fnc_diff_view_state	*s = &view->state.diff;
+		first = &s->first_line_onscreen;
+		selected = &s->selected_line;
+		gtl = &s->gtl;
+		eof = &s->eof;
+		f = s->f;
+	} else
+		return false;
+
+	if (*first != 1 && (*lineno >= *gtl - (view->nlines - 3) / 2)) {
+		rewind(f);
 		*nprinted = 0;
+		*eof = false;
+		*first = 1;
 		*lineno = 0;
-		s->eof = false;
 		return false;
 	}
-	if (*lineno < s->gtl - (view->nlines - 3) / 2)
+	if (*lineno < *gtl - (view->nlines - 3) / 2)
 		return false;
 
-	s->selected_line = s->gtl <= (view->nlines - 3) / 2 ?
-	    s->gtl : (view->nlines - 3) / 2 + 1;
-	s->gtl = 0;
+	*selected = *gtl <= (view->nlines - 3) / 2 ?
+	    *gtl : (view->nlines - 3) / 2 + 1;
+	*gtl = 0;
 
 	return true;
 }
