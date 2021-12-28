@@ -96,6 +96,7 @@
 #define HSPLIT_SCALE	0.4		/* Default horizontal split scale. */
 #define SPIN_INTERVAL	200		/* Status line progress indicator. */
 #define LINENO_WIDTH	6		/* View lineno max column width. */
+#define MAX_PCT_LEN	7		/* Line position upto max len 99.99% */
 #define SPINNER		"\\|/-\0"
 #define NULL_DEVICE	"/dev/null"
 #define NULL_DEVICELEN	(sizeof(NULL_DEVICE) - 1)
@@ -2362,6 +2363,7 @@ draw_commits(struct fnc_view *view)
 	char				*branch = NULL, *type = NULL;
 	char				*uuid = NULL;
 	wchar_t				*wcstr;
+	attr_t				 rx = A_BOLD;
 	int				 ncommits = 0, rc = 0, wstrlen = 0;
 	int				 ncols_needed, max_usrlen = -1;
 
@@ -2438,21 +2440,19 @@ draw_commits(struct fnc_view *view)
 
 	werase(view->window);
 
-	if (screen_is_shared(view))
-		wattron(view->window, A_REVERSE);
+	if (screen_is_shared(view) || view->active)
+		rx |= A_REVERSE;
 	if (s->colour)
 		c = get_colour(&s->colours, FNC_COLOUR_COMMIT);
 	if (c)
-		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
+		rx |= COLOR_PAIR(c->scheme);
+	wattron(view->window, rx);
 	waddwstr(view->window, wcstr);
 	while (wstrlen < view->ncols) {
 		waddch(view->window, ' ');
 		++wstrlen;
 	}
-	if (c)
-		wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
-	if (screen_is_shared(view))
-		wattroff(view->window, A_REVERSE);
+	wattroff(view->window, rx);
 	fsl_free(wcstr);
 	if (view->nlines <= 1)
 		goto end;
@@ -5362,6 +5362,7 @@ write_diff(struct fnc_view *view, char *headln)
 	size_t				 linesz = 0;
 	ssize_t				 linelen;
 	off_t				 line_offset;
+	attr_t				 rx = A_BOLD;
 	int				 wstrlen;
 	int				 max_lines = view->nlines;
 	int				 nlines = s->nlines;
@@ -5375,9 +5376,17 @@ write_diff(struct fnc_view *view, char *headln)
 	werase(view->window);
 
 	if (headln) {
-		if ((line = fsl_mprintf("[%d/%d] %s", s->gtl ?
-		    s->gtl : (s->first_line_onscreen - 1 + s->selected_line),
-		    nlines - 1, headln)) == NULL)
+		static char	pctstr[MAX_PCT_LEN];
+		double		pct;
+		int		ln, pctlen;
+		ln = s->gtl ? s->gtl : s->lineno + s->selected_line;
+		pct = 100.00 * ln / nlines;
+		pctlen = snprintf(pctstr, MAX_PCT_LEN, "%.*lf%%",
+		    ln >= nlines ? 0 : 2, pct);
+		if (pctlen < 0)
+			return RC(FSL_RC_RANGE, "%s", "snprintf");
+		line = fsl_mprintf("[%d/%d] %s", ln, nlines, headln);
+		if (line == NULL)
 			return RC(FSL_RC_RANGE, "%s", "fsl_mprintf");
 		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0, false);
 		fsl_free(line);
@@ -5385,21 +5394,21 @@ write_diff(struct fnc_view *view, char *headln)
 		if (rc)
 			return rc;
 
-		if (screen_is_shared(view))
-			wattron(view->window, A_REVERSE);
+		if (screen_is_shared(view) || view->active)
+			rx |= A_REVERSE;
+		wattron(view->window, rx);
 		waddwstr(view->window, wcstr);
 		fsl_free(wcstr);
 		wcstr = NULL;
-		while (wstrlen < view->ncols) {
+		view->pos.col = wstrlen;
+		while (wstrlen++ < view->ncols)
 			waddch(view->window, ' ');
-			++wstrlen;
-		}
-		if (screen_is_shared(view))
-			wattroff(view->window, A_REVERSE);
+		if (view->pos.col < view->ncols - pctlen)
+			mvwaddstr(view->window, 0, view->ncols - pctlen, pctstr);
+		wattroff(view->window, rx);
 
-		if (max_lines <= 1)
+		if (--max_lines < 1)
 			return rc;
-		--max_lines;
 	}
 
 	s->eof = false;
