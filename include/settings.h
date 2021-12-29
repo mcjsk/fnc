@@ -14,40 +14,60 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#define GEN_ENUM_SYM(pfx, id)	pfx##_##id
+#define GEN_ENUM(name, pfx, info)				\
+	enum name { info(pfx, GEN_ENUM_SYM) };
+
+#define GEN_STR_SYM(pfx, id)	#pfx"_"#id
+#define GEN_STR(name, pfx, info)				\
+	static const char *name[] = { info(pfx, GEN_STR_SYM) };
+
 /*
  * All configurable fnc settings, which can be stored in either the fossil(1)
  * repository (e.g., ./repo.fossil) or shell envvars with `export SETTING=val`.
  */
-#define SETTINGS(SET)						\
-	SET(START_SETTINGS),			/*  0 */	\
-	SET(COLOUR_COMMIT),			/*  1 */	\
-	SET(COLOUR_USER),			/*  2 */	\
-	SET(COLOUR_DATE),			/*  3 */	\
-	SET(COLOUR_DIFF_META),			/*  4 */	\
-	SET(COLOUR_DIFF_MINUS),			/*  5 */	\
-	SET(COLOUR_DIFF_PLUS),			/*  6 */	\
-	SET(COLOUR_DIFF_CHUNK),			/*  7 */	\
-	SET(COLOUR_DIFF_TAGS),			/*  8 */	\
-	SET(COLOUR_TREE_LINK),			/*  9 */	\
-	SET(COLOUR_TREE_DIR),			/* 10 */	\
-	SET(COLOUR_TREE_EXEC),			/* 11 */	\
-	SET(COLOUR_BRANCH_OPEN),		/* 12 */	\
-	SET(COLOUR_BRANCH_CLOSED),		/* 13 */	\
-	SET(COLOUR_BRANCH_CURRENT),		/* 14 */	\
-	SET(COLOUR_BRANCH_PRIVATE),		/* 15 */	\
-	SET(COLOUR_HL_SEARCH),			/* 16 */	\
-	SET(VIEW_SPLIT_MODE),			/* 17 */	\
-	SET(VIEW_SPLIT_WIDTH),			/* 18 */	\
-	SET(VIEW_SPLIT_HEIGHT),			/* 19 */	\
-	SET(EOF_SETTINGS)
+#define USER_OPTIONS(pfx, _)					\
+	_(pfx, START_SETTINGS),					\
+	_(pfx, COLOUR_COMMIT),					\
+	_(pfx, COLOUR_USER),					\
+	_(pfx, COLOUR_DATE),					\
+	_(pfx, COLOUR_DIFF_META),				\
+	_(pfx, COLOUR_DIFF_MINUS),				\
+	_(pfx, COLOUR_DIFF_PLUS),				\
+	_(pfx, COLOUR_DIFF_CHUNK),				\
+	_(pfx, COLOUR_DIFF_TAGS),				\
+	_(pfx, COLOUR_TREE_LINK),				\
+	_(pfx, COLOUR_TREE_DIR),				\
+	_(pfx, COLOUR_TREE_EXEC),				\
+	_(pfx, COLOUR_BRANCH_OPEN),				\
+	_(pfx, COLOUR_BRANCH_CLOSED),				\
+	_(pfx, COLOUR_BRANCH_CURRENT),				\
+	_(pfx, COLOUR_BRANCH_PRIVATE),				\
+	_(pfx, COLOUR_HL_LINE),					\
+	_(pfx, COLOUR_HL_SEARCH),				\
+	_(pfx, VIEW_SPLIT_MODE),				\
+	_(pfx, VIEW_SPLIT_WIDTH),				\
+	_(pfx, VIEW_SPLIT_HEIGHT),				\
+	_(pfx, EOF_SETTINGS)
 
-#define GEN_ENUM(_id)	FNC_##_id
-#define GEN_STR(_id)	("FNC_" #_id)
+#define LINE_ATTR_ENUM(pfx, _)					\
+	_(pfx, AUTO),						\
+	_(pfx, MONO)
 
-enum fnc_opt_id {
-	SETTINGS(GEN_ENUM)
-};
+#define INPUT_TYPE_ENUM(pfx, _)					\
+	_(pfx, ALPHA),						\
+	_(pfx, NUMERIC)
 
-static const char *fnc_opt_name[] = {
-	SETTINGS(GEN_STR)
-};
+#define ENUM_INFO(_)						\
+	_(fnc_opt_id, FNC, USER_OPTIONS)			\
+	_(line_attr, SLINE, LINE_ATTR_ENUM)			\
+	_(input_type, INPUT, INPUT_TYPE_ENUM)
+
+#define GEN_ENUMS(name, pfx, info) GEN_ENUM(name, pfx, info)
+ENUM_INFO(GEN_ENUMS)
+
+#define STR_INFO(_)						\
+	_(fnc_opt_name, FNC, USER_OPTIONS)
+
+#define GEN_STRINGS(name, pfx, info) GEN_STR(name, pfx, info)
+STR_INFO(GEN_STRINGS)

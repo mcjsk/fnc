@@ -488,9 +488,15 @@ Key bindings for
 are as follows:
 .Bl -tag -width Ds
 .It Cm Arrow-down, j
-Scroll down one line of diff output.
+Move the selection cursor down one line.
 .It Cm Arrow-up, k
-Scroll up one line of diff output.
+Move the selection cursor up one line.
+.It Cm C-y
+Scroll view one line upwards in the buffer.  Diff output moves downwards on the
+screen.
+.It Cm C-e
+Scroll view one line downwards in the buffer.  Diff output moves upwards on the
+screen.
 .It Cm C-f, Page-down, Space
 Scroll down one page of diff output.
 .It Cm C-b, Page-up
@@ -1010,7 +1016,8 @@ will search for user-defined colours in the following order:
 If none are found, the default colour scheme will be displayed.  This enables
 setting per-project colours to visually distinguish the current repository
 being viewed, and globally changing the colour scheme for all repositories with
-no local settings configured.  Colours supported in
+no local settings configured.  Except where documented below, colours supported
+in
 .Nm
 are:
 .Bl -column "black" "yellow" "magenta" "default" -offset indent-two
@@ -1084,11 +1091,18 @@ If not defined, the default value is
 Private branches displayed in the branch view.  If not defined, the default
 value is
 .Qq yellow .
+.It Ev FNC_COLOUR_HL_LINE
+Selected line highlight in the diff view.  Value can be one of
+.Sy auto
+or
+.Sy mono .
+The former will invert the foreground colour of the selected line, while the
+latter will use a monochromatic highlight.  If not defined, the default value is
+.Qq auto .
 .It Ev FNC_COLOUR_HL_SEARCH
 Search term highlight in blame and diff view.  If not defined, the default
 value is
-.Qq auto ,
-which inverts the foreground colour of the matched text.
+.Qq yellow .
 .El
 .Pp
 To clear environment variables, issue

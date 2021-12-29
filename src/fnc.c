@@ -35,6 +35,9 @@
 #  endif
 #endif
 
+#ifdef FCLI_USE_SIGACTION
+#define FCLI_USE_SIGACTION 0  /* We want C-c to exit. */
+#endif
 
 #include <sys/queue.h>
 #include <sys/ioctl.h>
@@ -513,6 +516,13 @@ enum fnc_diff_type {
 	FNC_DIFF_WIKI
 };
 
+struct fnc_input {
+	void		*data;
+	enum input_type	 type;
+	char		 buf[BUFSIZ];
+	long		 ret;
+};
+
 struct fnc_colour {
 	STAILQ_ENTRY(fnc_colour) entries;
 	regex_t	regex;
@@ -684,6 +694,7 @@ struct fnc_diff_view_state {
 	int				 gtl;
 	size_t				 ncols;
 	size_t				 nlines;
+	enum line_attr			 sline;
 	off_t				*line_offsets;
 	bool				 eof;
 	bool				 colour;
@@ -872,6 +883,7 @@ static volatile sig_atomic_t rec_sigcont;
 
 static void		 fnc_show_version(void);
 static int		 init_curses(void);
+static int		 fnc_set_signals(void);
 static struct fnc_view	*view_open(int, int, int, int, enum fnc_view_id);
 static int		 open_timeline_view(struct fnc_view *, fsl_id_t,
 			    const char *, const char *);
@@ -1086,13 +1098,14 @@ static int		 fsl_file_artifact_free(void *, void *);
 static void		 sigwinch_handler(int);
 static void		 sigpipe_handler(int);
 static void		 sigcont_handler(int);
-static int		 draw_lineno(struct fnc_view *, int, int, bool);
+static int		 draw_lineno(struct fnc_view *, int, int, attr_t);
 static bool		 gotoline(struct fnc_view *, int *, int *);
 static int		 strtonumcheck(long *, const char *, const int,
 			    const int);
-static int		 fnc_date_to_mtime(double *, const char *, int);
-static int		 fnc_prompt_usr(char *, int, struct fnc_view *,
+static int		 fnc_prompt_input(struct fnc_view *, struct fnc_input *,
 			    const char *, bool);
+static int		 fnc_date_to_mtime(double *, const char *, int);
+static int		 cook_input(char *, int, WINDOW *);
 static void		 fnc_print_msg(struct fnc_view *, const char *, bool,
 			    bool, bool);
 static char		*fnc_strsep (char **, const char *);
@@ -1528,6 +1541,7 @@ init_curses(void)
 	nonl();
 	intrflush(stdscr, FALSE);
 	keypad(stdscr, TRUE);
+	raw();  /* Don't signal control characters, specifically C-y */
 	curs_set(0);
 	set_escdelay(0);  /* ESC should return immediately. */
 #ifndef __linux__
@@ -1539,6 +1553,12 @@ init_curses(void)
 		use_default_colors();
 	}
 
+	return fnc_set_signals();
+}
+
+static int
+fnc_set_signals(void)
+{
 	if (sigaction(SIGPIPE, &(struct sigaction){{sigpipe_handler}}, NULL)
 	    == -1)
 		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR),
@@ -1552,7 +1572,7 @@ init_curses(void)
 		return RC(fsl_errno_to_rc(errno, FSL_RC_ERROR),
 		    "%s", "sigaction(SIGCONT)");
 
-	return 0;
+	return FSL_RC_OK;
 }
 
 static struct fnc_view *
@@ -2088,7 +2108,7 @@ tl_producer_thread(void *state)
 static int
 block_main_thread_signals(void)
 {
-	sigset_t	 set;
+	sigset_t set;
 
 	if (sigemptyset(&set) == -1)
 		return RC(fsl_errno_to_rc(errno, FSL_RC_MISUSE), "%s",
@@ -2111,7 +2131,7 @@ block_main_thread_signals(void)
 		return RC(fsl_errno_to_rc(errno, FSL_RC_MISUSE), "%s",
 		    "pthread_sigmask");
 
-	return 0;
+	return FSL_RC_OK;
 }
 
 static int
@@ -2876,9 +2896,12 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 		break;
 	case ERR:
 		break;
+	case CTRL('c'):
 	case 'Q':
 		*done = 1;
 		break;
+	case CTRL('z'):
+		raise(SIGTSTP);
 	default:
 		rc = view->input(new, view, ch);
 		break;
@@ -3345,8 +3368,8 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		break;
 	case 'F': {
 		struct fnc_view *new;
-		char glob[BUFSIZ];
-		rc = fnc_prompt_usr(glob, BUFSIZ, view, "filter: ", true);
+		struct fnc_input input = {NULL, INPUT_ALPHA};
+		rc = fnc_prompt_input(view, &input, "filter: ", true);
 		if (rc)
 			return rc;
 		if (view_is_parent(view))
@@ -3355,7 +3378,7 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		    start_col, FNC_VIEW_TIMELINE);
 		if (new == NULL)
 			return RC(FSL_RC_ERROR, "%s", "view_open");
-		rc = open_timeline_view(new, 0, "/", glob);
+		rc = open_timeline_view(new, 0, "/", input.buf);
 		if (rc) {
 			if (rc != FSL_RC_BREAK)
 				return rc;
@@ -3800,7 +3823,7 @@ view_split_start_ln(int lines)
 static int
 view_search_start(struct fnc_view *view)
 {
-	char	pattern[BUFSIZ];
+	struct	fnc_input input = {NULL, INPUT_ALPHA};
 	int	rc = FSL_RC_OK;
 
 	if (view->started_search) {
@@ -3824,11 +3847,11 @@ view_search_start(struct fnc_view *view)
 		return rc;
 	}
 
-	rc = fnc_prompt_usr(pattern, BUFSIZ, view, "/", true);
+	rc = fnc_prompt_input(view, &input, "/", true);
 	if (rc)
 		return rc;
 
-	if (regcomp(&view->regex, pattern, REG_EXTENDED | REG_NEWLINE) == 0) {
+	if (regcomp(&view->regex, input.buf, REG_EXTENDED | REG_NEWLINE) == 0) {
 		if ((rc = view->search_init(view))) {
 			regfree(&view->regex);
 			return rc;
@@ -4134,7 +4157,13 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
     struct fnc_pathlist_head *paths)
 {
 	struct fnc_diff_view_state	*s = &view->state.diff;
+	char				*opt;
 	int				 rc = 0;
+
+	opt = fnc_conf_getopt(FNC_COLOUR_HL_LINE, false);
+	if (!fsl_stricmp(opt, "mono"))
+		s->sline = SLINE_MONO;
+	fsl_free(opt);
 
 	s->paths = paths;
 	s->selected_commit = commit;
@@ -4287,12 +4316,7 @@ create_diff(struct fnc_diff_view_state *s)
 			goto end;
 	}
 
-	fputc('\n', s->f);
-	++lnoff;
-	rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff);
-	if (rc)
-		goto end;
-
+	--s->nlines;  /* Don't count EOF '\n' */
 end:
 	free(st0);
 	fsl_buffer_clear(&s->buf);
@@ -4434,6 +4458,9 @@ write_commit_meta(struct fnc_diff_view_state *s)
 	if ((rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff)))
 		goto end;
 
+	if (s->selected_commit->diff_type == FNC_DIFF_WIKI)
+		goto end;  /* No changeset for wiki commits. */
+
 	for (idx = 0; idx < s->selected_commit->changeset.used; ++idx) {
 		char				*changeline;
 		struct fsl_file_artifact	*file_change;
@@ -4466,6 +4493,10 @@ write_commit_meta(struct fnc_diff_view_state *s)
 			goto end;
 	}
 
+	/* Add blank line between end of changeset and diff. */
+	fputc('\n', s->f);
+	++lnoff;
+	rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff);
 end:
 	free(st0);
 	free(line);
@@ -4915,8 +4946,8 @@ write_diff_meta(fsl_buffer *buf, const char *zminus, fsl_uuid_str xminus,
 	}
 
 	if (!FLAG_CHK(diff_flags, (FSL_DIFF_SIDEBYSIDE | FSL_DIFF_BRIEF))) {
-		rc = fsl_buffer_appendf(buf, "\nIndex: %s\n%.71c\n",
-		    index, '=');
+		rc = fsl_buffer_appendf(buf, "%sIndex: %s\n%.71c\n",
+		    buf->used ? "\n" : "", index, '=');
 		if (!rc)
 			rc = fsl_buffer_appendf(buf, "hash - %s\nhash + %s\n",
 			    minus, plus);
@@ -5367,6 +5398,7 @@ write_diff(struct fnc_view *view, char *headln)
 	int				 max_lines = view->nlines;
 	int				 nlines = s->nlines;
 	int				 npad = 0, rc = 0, nprinted = 0;
+	bool				 selected;
 
 	s->lineno = s->first_line_onscreen - 1;
 	line_offset = s->line_offsets[s->first_line_onscreen - 1];
@@ -5431,18 +5463,25 @@ write_diff(struct fnc_view *view, char *headln)
 		if (s->gtl)
 			if (!gotoline(view, &s->lineno, &nprinted))
 				continue;
+
+		rx = 0;
+		if ((selected = nprinted == s->selected_line - 1))
+			rx = A_BOLD | A_REVERSE;
 		if (s->showln)
-			npad = draw_lineno(view, s->nlines, s->lineno, true);
+			npad = draw_lineno(view, nlines, s->lineno, rx);
 
 		if (s->colour)
 			c = match_colour(&s->colours, line);
-		if (c)
-			wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
+		if (c && !(selected && s->sline == SLINE_MONO))
+			rx |= COLOR_PAIR(c->scheme);
+		if (c || selected)
+			wattron(view->window, rx);
+
 		if (s->first_line_onscreen + nprinted == s->matched_line &&
 		    regmatch->rm_so >= 0 && regmatch->rm_so < regmatch->rm_eo) {
 			rc = write_matched_line(&wstrlen, line,
 			    view->ncols - npad, npad, view->window,
-			    regmatch, c ? COLOR_PAIR(c->scheme) : 0, true);
+			    regmatch, rx, true);
 			if (rc) {
 				fsl_free(line);
 				return rc;
@@ -5458,10 +5497,12 @@ write_diff(struct fnc_view *view, char *headln)
 			fsl_free(wcstr);
 			wcstr = NULL;
 		}
-		if (c)
-			wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
-		if (wstrlen + npad <= view->ncols - 1)
-			waddch(view->window, '\n');
+		view->pos.col = wstrlen + npad;
+		while (view->pos.col++ < view->ncols)
+			waddch(view->window, ' ');
+
+		if (c || selected)
+			wattroff(view->window, rx);
 		if (++nprinted == 1)
 			s->first_line_onscreen = s->lineno;
 	}
@@ -5474,10 +5515,8 @@ write_diff(struct fnc_view *view, char *headln)
 	drawborder(view);
 
 	if (s->eof) {
-		while (nprinted < view->nlines) {
+		while (nprinted++ < view->nlines)
 			waddch(view->window, '\n');
-			++nprinted;
-		}
 
 		wstandout(view->window);
 		waddstr(view->window, "(END)");
@@ -5535,7 +5574,6 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 	int		 wstrlen;
 	int		 rc = 0;
 	attr_t		 hl = A_BOLD | A_REVERSE;
-	short		 b, f;
 
 	*col_pos = 0;
 
@@ -5570,11 +5608,9 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 			free(s);
 			return rc;
 		}
-		pair_content(FNC_COLOUR_HL_SEARCH, &f, &b);
-		hl |= f ? COLOR_PAIR(FNC_COLOUR_HL_SEARCH) : 0;
-		wattron(window, hl);
+		wattron(window, COLOR_PAIR(FNC_COLOUR_HL_SEARCH) | hl);
 		waddwstr(window, wcstr);
-		wattroff(window, hl);
+		wattroff(window, COLOR_PAIR(FNC_COLOUR_HL_SEARCH) | hl);
 		free(wcstr);
 		free(s);
 		ncols_avail -= wstrlen;
@@ -5590,7 +5626,12 @@ write_matched_line(int *col_pos, const char *line, int ncols_avail,
 		wattron(window, rx);
 		waddwstr(window, wcstr);
 		free(wcstr);
+		ncols_avail -= wstrlen;
 		*col_pos += wstrlen;
+		while (--ncols_avail >= 0) {
+			++(*col_pos);
+			waddch(window, ' ');
+		}
 		wattroff(window, rx);
 	}
 
@@ -5634,82 +5675,100 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	char				*line = NULL;
 	ssize_t				 linelen;
 	size_t				 linesz = 0;
-	int				 i, nlines, rc = FSL_RC_OK;
+	int				 nlines, i = 0, rc = FSL_RC_OK;
 	bool				 tl_down = false;
 
 	nlines = s->nlines;
+	s->lineno = s->first_line_onscreen - 1 + s->selected_line;
 
 	switch (ch) {
+	case CTRL('e'):
+		if (!s->eof) {
+			++s->first_line_onscreen;
+			if (s->lineno == nlines)
+				--s->selected_line;
+		}
+		break;
+	case CTRL('y'):
+		if (s->first_line_onscreen > 1)
+			--s->first_line_onscreen;
+		break;
 	case KEY_DOWN:
 	case 'j':
-		if (!s->eof)
+		if (s->first_line_onscreen + s->selected_line == nlines + 2)
+			break;
+		if (s->selected_line < view->nlines - 1 && s->lineno != nlines)
+			++s->selected_line;
+		else if (s->last_line_onscreen <= nlines && !s->eof) {
 			++s->first_line_onscreen;
+			if (s->lineno == nlines)
+				--s->selected_line;
+		}
+		break;
+	case KEY_UP:
+	case 'k':
+		if (s->selected_line > 1)
+			--s->selected_line;
+		else if (s->selected_line == 1 && s->first_line_onscreen > 1)
+			--s->first_line_onscreen;
 		break;
 	case KEY_NPAGE:
 	case CTRL('f'):
 	case ' ':
-		if (s->eof)
+		if (s->eof && s->last_line_onscreen == nlines) {
+			s->selected_line += nlines - s->lineno;
 			break;
-		i = 0;
-		while (!s->eof && i++ < view->nlines - 1) {
+		}
+		while (!s->eof && i++ < view->nlines - 2) {
 			linelen = getline(&line, &linesz, s->f);
 			++s->first_line_onscreen;
 			if (linelen == -1) {
-				if (feof(s->f))
+				if (feof(s->f)) {
+					s->selected_line = view->nlines - 2;
 					s->eof = true;
-				else
+				} else
 					RC(ferror(s->f) ?
 					    fsl_errno_to_rc(errno, FSL_RC_IO) :
 					    FSL_RC_IO, "%s", "getline");
 				break;
 			}
 		}
-		free(line);
-		break;
-	case KEY_END:
-	case 'G':
-		if (s->eof)
-			break;
-		s->first_line_onscreen = (s->nlines - view->nlines) + 2;
-		s->eof = true;
-		break;
-	case KEY_UP:
-	case 'k':
-		if (s->first_line_onscreen > 1)
-			--s->first_line_onscreen;
+		fsl_free(line);
 		break;
 	case KEY_PPAGE:
 	case CTRL('b'):
-		if (s->first_line_onscreen == 1)
+		if (s->first_line_onscreen == 1) {
+			s->selected_line = 1;
 			break;
+		}
 		i = 0;
-		while (i++ < view->nlines - 1 && s->first_line_onscreen > 1)
+		while (i++ < view->nlines - 2 && s->first_line_onscreen > 1)
 			--s->first_line_onscreen;
+		break;
+	case KEY_END:
+	case 'G':
+		if (nlines < view->nlines - 1) {
+			s->selected_line = nlines;
+			s->first_line_onscreen = 1;
+		} else {
+			s->selected_line = view->nlines - 2;
+			s->first_line_onscreen = nlines - view->nlines + 3;
+		}
+		s->eof = true;
 		break;
 	case 'g':
 		if (!fnc_home(view))
 			break;
 		/* FALL THROUGH */
 	case KEY_HOME:
+		s->selected_line = 1;
 		s->first_line_onscreen = 1;
 		break;
 	case 'L': {
-		char lineno[BUFSIZ];
-		long ln = 0;
-		rc = fnc_prompt_usr(lineno, BUFSIZ, view, "line: ", true);
-		if (rc || !lineno[0])
-			break;
-		rc = strtonumcheck(&ln, lineno, 1, nlines - 1);
-		if (rc == FSL_RC_MISUSE)
-			fnc_print_msg(view, "-- numeric input only --",
-			    false, true, true);
-		else if (rc == FSL_RC_RANGE || ln < 1 || ln > nlines - 1)
-			fnc_print_msg(view, "-- line outside file range --",
-			    false, true, true);
-		else
-			s->gtl = ln;
-		rc = FSL_RC_OK;
-		fcli_err_reset();
+		int range[] = {1, nlines};
+		struct fnc_input input = {&range, INPUT_NUMERIC};
+		rc = fnc_prompt_input(view, &input, "line: ", true);
+		s->gtl = input.ret;
 		break;
 	}
 	case 'l':
@@ -5794,6 +5853,7 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		if ((rc = set_selected_commit(s, tlstate->selected_commit)))
 			break;
 
+		s->selected_line = 1;
 		reset_diff_view(view, false);
 		break;
 	default:
@@ -5895,7 +5955,7 @@ diff_search_next(struct fnc_view *view)
 	while (1) {
 		off_t offset;
 
-		if (start_ln <= 0 || start_ln > (int)s->nlines) {
+		if (start_ln <= 0 || (size_t)start_ln > s->nlines) {
 			if (s->matched_line == 0) {
 				view->search_status = SEARCH_CONTINUE;
 				break;
@@ -7854,7 +7914,7 @@ view_set_child(struct fnc_view *view, struct fnc_view *child)
 static int
 set_colours(struct fnc_colours *s, enum fnc_view_id vid)
 {
-	int	rc = FSL_RC_OK;
+	int rc = FSL_RC_OK;
 
 	switch (vid) {
 	case FNC_VIEW_DIFF: {
@@ -8066,7 +8126,7 @@ default_colour(enum fnc_opt_id id)
 	case FNC_COLOUR_BRANCH_CLOSED:
 		return COLOR_MAGENTA;
 	case FNC_COLOUR_HL_SEARCH:
-		return 0;   /* Invert existing text colour. */
+		return COLOR_YELLOW;
 	default:
 		return -1;  /* Terminal default foreground colour. */
 	}
@@ -8650,9 +8710,10 @@ draw_blame(struct fnc_view *view)
 	ssize_t				 linelen;
 	size_t				 linesz = 0;
 	int				 width, lineno = 0, nprinted = 0;
-	int				 rc = 0;
+	int				 rc = FSL_RC_OK;
 	int				 npad = 0;
 	const int			 idfield = 11;  /* Prefix + space. */
+	bool				 selected;
 
 	rewind(blame->f);
 	werase(view->window);
@@ -8708,6 +8769,7 @@ draw_blame(struct fnc_view *view)
 
 	s->eof = false;
 	while (nprinted < view->nlines - 2) {
+		attr_t rx = 0;
 		linelen = getline(&line, &linesz, blame->f);
 		if (linelen == -1) {
 			if (feof(blame->f)) {
@@ -8724,15 +8786,16 @@ draw_blame(struct fnc_view *view)
 			if (!gotoline(view, &lineno, &nprinted))
 				continue;
 
-		if (nprinted == s->selected_line - 1)
-			wattr_on(view->window, A_REVERSE, NULL);
+		if ((selected = nprinted == s->selected_line - 1)) {
+			rx = A_BOLD | A_REVERSE;
+			wattron(view->window, rx);
+		}
 
 		if (blame->nlines > 0) {
 			blame_line = &blame->lines[lineno - 1];
 			if (blame_line->annotated && prev_id &&
-			    fsl_uuidcmp(prev_id, blame_line->id) == 0 &&
-			    !(view->active &&
-			    nprinted == s->selected_line - 1)) {
+			    !fsl_uuidcmp(prev_id, blame_line->id) &&
+			    !selected) {
 				waddstr(view->window, "          ");
 			} else if (blame_line->annotated) {
 				char *id_str;
@@ -8767,10 +8830,10 @@ draw_blame(struct fnc_view *view)
 
 		if (s->showln)
 			npad = draw_lineno(view, blame->nlines,
-			    blame_line->lineno, false);
+			    blame_line->lineno, rx);
 
-		if (!s->showln && nprinted == s->selected_line - 1)
-			wattr_off(view->window, A_REVERSE, NULL);
+		if (selected)
+			wattroff(view->window, rx);
 		waddch(view->window, ' ');
 
 		if (view->ncols <= idfield) {
@@ -8786,7 +8849,7 @@ draw_blame(struct fnc_view *view)
 		    && regmatch->rm_so >= 0 &&
 		    regmatch->rm_so < regmatch->rm_eo) {
 			rc = write_matched_line(&width, line,
-			    view->ncols - idfield, idfield,
+			    view->ncols - idfield - npad, idfield + npad,
 			    view->window, regmatch, 0, true);
 			if (rc) {
 				fsl_free(line);
@@ -8819,24 +8882,21 @@ draw_blame(struct fnc_view *view)
  * Draw column of line numbers up to nlines for the given view.
  */
 static int
-draw_lineno(struct fnc_view *view, int nlines, int lineno, bool update)
+draw_lineno(struct fnc_view *view, int nlines, int lineno, attr_t rx)
 {
 	int npad = 0;
 
 	ndigits(npad, nlines);  /* Number of digits to pad. */
 
-	wattr_on(view->window, A_BOLD, NULL);
+	wattron(view->window, rx | A_BOLD);
 	wprintw(view->window, " %*d ", npad, lineno);
 	if (view->vid == FNC_VIEW_BLAME)  /* Don't highlight separator. */
-		wattr_off(view->window, A_REVERSE, NULL);
+		wattroff(view->window, A_REVERSE);
 	waddch(view->window, (strcmp(nl_langinfo(CODESET), "UTF-8") == 0) ?
 	    ACS_VLINE : '|');
-	wattr_off(view->window, A_BOLD, NULL);
+	wattroff(view->window, rx | A_BOLD);
 
 	npad += 3;  /* {ap,pre}pended ' ' + line separator */
-
-	if (update)
-		updatescreen(view->window, true, true);
 
 	return npad;
 }
@@ -8849,14 +8909,14 @@ gotoline(struct fnc_view *view, int *lineno, int *nprinted)
 	bool	*eof;
 
 	if (view->vid == FNC_VIEW_BLAME) {
-		struct fnc_blame_view_state	*s = &view->state.blame;
+		struct fnc_blame_view_state *s = &view->state.blame;
 		first = &s->first_line_onscreen;
 		selected = &s->selected_line;
 		gtl = &s->gtl;
 		eof = &s->eof;
 		f = s->blame.f;
 	} else if (view->vid == FNC_VIEW_DIFF) {
-		struct fnc_diff_view_state	*s = &view->state.diff;
+		struct fnc_diff_view_state *s = &view->state.diff;
 		first = &s->first_line_onscreen;
 		selected = &s->selected_line;
 		gtl = &s->gtl;
@@ -8945,22 +9005,10 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			++s->first_line_onscreen;
 		break;
 	case 'L': {
-		char lineno[BUFSIZ];
-		long ln = 0;
-		rc = fnc_prompt_usr(lineno, BUFSIZ, view, "line: ", true);
-		if (rc || !lineno[0])
-			break;
-		rc = strtonumcheck(&ln, lineno, 1, s->blame.nlines);
-		if (rc == FSL_RC_MISUSE)
-			fnc_print_msg(view, "-- numeric input only --",
-			    false, true, true);
-		else if (rc == FSL_RC_RANGE || ln < 1 || ln > s->blame.nlines)
-			fnc_print_msg(view, "-- line outside file range --",
-			    false, true, true);
-		else
-			s->gtl = ln;
-		rc = FSL_RC_OK;
-		fcli_err_reset();
+		int range[] = {1, s->blame.nlines};
+		struct fnc_input input = {range, INPUT_NUMERIC};
+		rc = fnc_prompt_input(view, &input, "line: ", true);
+		s->gtl = input.ret;
 		break;
 	}
 	case 'l':
@@ -10297,19 +10345,52 @@ strtonumcheck(long *ret, const char *nstr, const int min, const int max)
 }
 
 static int
-fnc_prompt_usr(char *ret, int sz, struct fnc_view *view, const char *msg,
-    bool clrtoel)
+fnc_prompt_input(struct fnc_view *view, struct fnc_input *input,
+    const char *prompt, bool clear)
+{
+	int rc = FSL_RC_OK;
+
+	if (prompt)
+		fnc_print_msg(view, prompt, clear, false, false);
+
+	rc = cook_input(input->buf, sizeof(input->buf), view->window);
+	if (rc || !input->buf[0])
+		return rc;
+
+	if (input->type == INPUT_NUMERIC) {
+		long n = 0;
+		int min = INT_MIN, max = INT_MAX;
+		if (input->data) {
+			min = *(int *)input->data;
+			max = ((int *)input->data)[1];
+		}
+		rc = strtonumcheck(&n, input->buf, min, max);
+		if (rc == FSL_RC_MISUSE)
+			fnc_print_msg(view, "-- numeric input only --",
+			    false, true, true);
+		else if (rc == FSL_RC_RANGE || n < min || n > max)
+			fnc_print_msg(view, "-- line outside file range --",
+			    false, true, true);
+		else
+			input->ret = n;
+		rc = FSL_RC_OK;
+		fcli_err_reset();
+	}
+
+	return rc;
+}
+
+static int
+cook_input(char *ret, int sz, WINDOW *win)
 {
 	int rc;
 
-	if (msg)
-		fnc_print_msg(view, msg, clrtoel, false, false);
-
 	nocbreak();
 	echo();
-	rc = wgetnstr(view->window, ret, sz);
+	rc = wgetnstr(win, ret, sz);
 	cbreak();
 	noecho();
+	raw();
 
 	return rc == ERR ? FSL_RC_ERROR : FSL_RC_OK;
 }
