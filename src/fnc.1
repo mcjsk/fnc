@@ -491,11 +491,21 @@ are as follows:
 Move the selection cursor down one line.
 .It Cm Arrow-up, k
 Move the selection cursor up one line.
-.It Cm C-y
-Scroll view one line upwards in the buffer.  Diff output moves downwards on the
-screen.
+.It Cm Arrow-right, l
+Scroll the view two columns to the right in the buffer.  Diff output moves
+left on the screen.
+.It Cm Arrow-left, h
+Scroll the view two columns to the left in the buffer.  Diff output moves
+right on the screen.
+.It Cm $
+Scroll the view right to the end of the longest line in the diff.
+.It Cm 0
+Scroll the view left to the beginning of the line.
 .It Cm C-e
 Scroll view one line downwards in the buffer.  Diff output moves upwards on the
+screen.
+.It Cm C-y
+Scroll view one line upwards in the buffer.  Diff output moves downwards on the
 screen.
 .It Cm C-f, Page-down, Space
 Scroll down one page of diff output.
@@ -519,6 +529,8 @@ if the diff was accessed from the timeline.)
 Decrease the number of context lines shown in diff output.
 .It Cm \&=, \&+
 Increase the number of context lines shown in diff output.
+.It Cm #
+Toggle display of diff view line numbers.
 .It Cm b
 Open and populate branch view with all repository branches.
 .It Cm c
@@ -529,8 +541,6 @@ will default to displaying changes and diff metadata in colour.
 Toggle inversion of diff output.
 .It Cm L
 Open prompt to enter line number and navigate to line.
-.It Cm l
-Toggle display of diff view line numbers.
 .It Cm v
 Toggle verbosity of diff output. By default,
 .Nm
@@ -759,6 +769,16 @@ are as follows:
 Move selection cursor down one line.
 .It Cm Arrow-up, k
 Move selection cursor up one line.
+.It Cm Arrow-right, l
+Scroll the view two columns to the right in the buffer.  File output moves
+left on the screen.
+.It Cm Arrow-left, h
+Scroll the view two columns to the left in the buffer.  File output moves
+right on the screen.
+.It Cm $
+Scroll the view right to the end of the longest line in the file.
+.It Cm 0
+Scroll the view left to the beginning of the line.
 .It Cm Page-down, C-f
 Move selection cursor down one page.
 .It Cm Page-up, C-b
@@ -771,6 +791,8 @@ Move selection cursor to the last line in the file.
 Display the
 .Cm diff
 of the commit corresponding to the currently selected line.
+.It Cm #
+Toggle display of file line numbers.
 .It Cm B, Backspace
 Reload the previous blamed version of the file.
 .It Cm b
@@ -782,8 +804,6 @@ Toggle coloured output. On supported terminals,
 will default to displaying the blamed file in colour.
 .It Cm L
 Open prompt to enter line number and navigate to line.
-.It Cm l
-Toggle display of file line numbers.
 .It Cm p
 Blame the version of the file corresponding to the parent of the commit in
 the currently selected line.

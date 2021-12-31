@@ -58,10 +58,27 @@
 	_(pfx, ALPHA),						\
 	_(pfx, NUMERIC)
 
+#define LINE_TYPE_ENUM(pfx, _)					\
+	_(pfx, TIMELINE_HEADER),				\
+	_(pfx, TIMELINE_COMMIT),				\
+	_(pfx, DIFF_HEADER),					\
+	_(pfx, DIFF_ARTIFACT),					\
+	_(pfx, DIFF_USER),					\
+	_(pfx, DIFF_TAGS),					\
+	_(pfx, DIFF_DATE),					\
+	_(pfx, DIFF_COMMENT),					\
+	_(pfx, DIFF_CHANGESET),					\
+	_(pfx, DIFF_INDEX),					\
+	_(pfx, DIFF_META),					\
+	_(pfx, DIFF_MINUS),					\
+	_(pfx, DIFF_PLUS),					\
+	_(pfx, DIFF_CHUNK),					\
+
 #define ENUM_INFO(_)						\
 	_(fnc_opt_id, FNC, USER_OPTIONS)			\
 	_(line_attr, SLINE, LINE_ATTR_ENUM)			\
-	_(input_type, INPUT, INPUT_TYPE_ENUM)
+	_(input_type, INPUT, INPUT_TYPE_ENUM)			\
+	_(line_type, LINE, LINE_TYPE_ENUM)
 
 #define GEN_ENUMS(name, pfx, info) GEN_ENUM(name, pfx, info)
 ENUM_INFO(GEN_ENUMS)

@@ -690,6 +690,7 @@ struct fnc_diff_view_state {
 	int				 sbs;
 	int				 matched_line;
 	int				 selected_line;
+	int				 maxx;
 	int				 lineno;
 	int				 gtl;
 	size_t				 ncols;
@@ -735,6 +736,7 @@ struct fnc_blame_cb_cx {
 	fsl_uuid_str		 commit_id;
 	fsl_uuid_str		 root_commit;
 	int			 nlines;
+	uint32_t		 maxlen;
 	bool			*quit;
 };
 
@@ -782,6 +784,7 @@ struct fnc_blame_view_state {
 	int				 matched_line;
 	int				 spin_idx;
 	int				 gtl;
+	uint32_t			*maxx;
 	bool				 done;
 	bool				 blame_complete;
 	bool				 eof;
@@ -832,6 +835,13 @@ struct fnc_branch_view_state {
 	bool				 show_id;
 };
 
+struct line {
+	char		buf[BUFSIZ];
+	int		sz;
+	enum line_type	type;
+	bool		selected;
+};
+
 struct position {
 	int	col;
 	int	line;
@@ -845,6 +855,7 @@ struct fnc_view {
 	PANEL			*panel;
 	struct fnc_view		*parent;
 	struct fnc_view		*child;
+	struct line		 line;
 	struct position		 pos;
 	union {
 		struct fnc_diff_view_state	diff;
@@ -898,7 +909,7 @@ static int		 signal_tl_thread(struct fnc_view *, int);
 static int		 draw_commits(struct fnc_view *);
 static void		 parse_emailaddr_username(char **);
 static int		 formatln(wchar_t **, int *, const char *, int, int,
-			    bool);
+			    size_t, bool);
 static size_t		 expand_tab(char *, size_t, const char *, int);
 static int		 multibyte_to_wchar(const char *, wchar_t **, size_t *);
 static int		 write_commit_line(struct fnc_view *,
@@ -972,8 +983,8 @@ static int		 show_diff(struct fnc_view *);
 static int		 write_diff(struct fnc_view *, char *);
 static int		 match_line(const char *, regex_t *, size_t,
 			    regmatch_t *);
-static int		 write_matched_line(int *, const char *, int, int,
-			    WINDOW *, regmatch_t *, attr_t, bool);
+static int		 draw_matched_line(struct fnc_view *, int *,
+			    int, regmatch_t *, attr_t);
 static void		 drawborder(struct fnc_view *);
 static int		 diff_input_handler(struct fnc_view **,
 			    struct fnc_view *, int);
@@ -2454,7 +2465,7 @@ draw_commits(struct fnc_view *view)
 	}
 	if (SPINNER[++tcx->spin_idx] == '\0')
 		tcx->spin_idx = 0;
-	rc = formatln(&wcstr, &wstrlen, headln, view->ncols, 0, false);
+	rc = formatln(&wcstr, &wstrlen, headln, view->ncols, 0, 0, false);
 	if (rc)
 		goto end;
 
@@ -2492,7 +2503,8 @@ draw_commits(struct fnc_view *view)
 		}
 		if (strpbrk(user, "<@>") != NULL)
 			parse_emailaddr_username(&user);
-		rc = formatln(&usr_wcstr, &usrlen, user, view->ncols, 0, false);
+		rc = formatln(&usr_wcstr, &usrlen, user, view->ncols, 0, 0,
+		    false);
 		if (max_usrlen < usrlen)
 			max_usrlen = usrlen;
 		fsl_free(usr_wcstr);
@@ -2545,20 +2557,23 @@ parse_emailaddr_username(char **username)
 
 static int
 formatln(wchar_t **ptr, int *wstrlen, const char *mbstr, int column_limit,
-    int start_column, bool expand)
+    int start_column, size_t skip, bool expand)
 {
 	wchar_t		*wline = NULL;
 	static char	 exstr[BUFSIZ];
-	size_t		 i, wlen;
+	size_t		 exsz, i, sz, wlen;
 	int		 rc = 0, cols = 0;
 
 	*ptr = NULL;
 	*wstrlen = 0;
+	sz = fsl_strlen(mbstr);
 
 	if (expand)
-		expand_tab(exstr, sizeof(exstr), mbstr, fsl_strlen(mbstr));
+		exsz = expand_tab(exstr, sizeof(exstr), mbstr, sz);
+	if (skip)
+		skip = MIN(skip, expand ? exsz : sz);
 
-	rc = multibyte_to_wchar(expand ? exstr : mbstr, &wline, &wlen);
+	rc = multibyte_to_wchar((expand ? exstr : mbstr) + skip, &wline, &wlen);
 	if (rc)
 		return rc;
 
@@ -2640,7 +2655,7 @@ expand_tab(char *dst, size_t dstlen, const char *src, int srclen)
 	}
 
 	dst[sz] = '\0';
-	return idx;
+	return sz;
 }
 
 static int
@@ -2749,7 +2764,7 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	if (strpbrk(user, "<@>") != NULL)
 		parse_emailaddr_username(&user);
 	rc = formatln(&usr_wcstr, &usrlen, user, view->ncols - col_pos,
-	    col_pos, false);
+	    col_pos, 0, false);
 	if (rc)
 		goto end;
 	if (s->colour)
@@ -2776,7 +2791,7 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	if (eol)
 		*eol = '\0';
 	ncols_avail = view->ncols - col_pos;
-	rc = formatln(&wcomment, &commentlen, comment, ncols_avail, col_pos,
+	rc = formatln(&wcomment, &commentlen, comment, ncols_avail, col_pos, 0,
 	    false);
 	if (rc)
 		goto end;
@@ -3007,9 +3022,15 @@ help(struct fnc_view *view)
 	    {""},
 	    {""}, /* Diff */
 	    {"  Space            ", "  ❬Space❭         "},
+	    {"  #                ", "  ❬#❭             "},
+	    {"  $                ", "  ❬$❭             "},
+	    {"  0                ", "  ❬0❭             "},
+	    {"  C-e              ", "  ❬C-e❭           "},
+	    {"  C-y              ", "  ❬C-y❭           "},
+	    {"  l<Right>         ", "  ❬l❭❬→❭          "},
+	    {"  h<Left>          ", "  ❬h❭❬←❭          "},
 	    {"  b                ", "  ❬b❭             "},
 	    {"  i                ", "  ❬i❭             "},
-	    {"  l                ", "  ❬l❭             "},
 	    {"  L                ", "  ❬L❭             "},
 	    {"  v                ", "  ❬v❭             "},
 	    {"  w                ", "  ❬w❭             "},
@@ -3029,7 +3050,11 @@ help(struct fnc_view *view)
 	    {""}, /* Blame */
 	    {"  Space            ", "  ❬Space❭         "},
 	    {"  Enter            ", "  ❬Enter❭         "},
-	    {"  l                ", "  ❬l❭             "},
+	    {"  #                ", "  ❬#❭             "},
+	    {"  $                ", "  ❬$❭             "},
+	    {"  0                ", "  ❬0❭             "},
+	    {"  l<Right>         ", "  ❬l❭❬→❭          "},
+	    {"  h<Left>          ", "  ❬h❭❬←❭          "},
 	    {"  L                ", "  ❬L❭             "},
 	    {"  b                ", "  ❬b❭             "},
 	    {"  p                ", "  ❬p❭             "},
@@ -3076,9 +3101,15 @@ help(struct fnc_view *view)
 	    "",
 	    "Diff",
 	    "Scroll down one page of diff output",
+	    "Toggle display of diff view line numbers",
+	    "Scroll the view right to the end of the longest line",
+	    "Scroll the view left to the beginning of the line",
+	    "Scroll the view down in the buffer",
+	    "Scroll the view up in the buffer",
+	    "Scroll the view right",
+	    "Scroll the view left",
 	    "Open and populate branch view with all repository branches",
 	    "Toggle inversion of diff output",
-	    "Toggle display of diff view line numbers",
 	    "Open prompt to enter line number and navigate to line",
 	    "Toggle verbosity of diff output",
 	    "Toggle ignore whitespace-only changes in diff",
@@ -3099,6 +3130,10 @@ help(struct fnc_view *view)
 	    "Scroll down one page",
 	    "Display the diff of the commit corresponding to the selected line",
 	    "Toggle display of file line numbers",
+	    "Scroll the view right to the end of the longest line",
+	    "Scroll the view left to the beginning of the line",
+	    "Scroll the view right",
+	    "Scroll the view left",
 	    "Open prompt to enter line number and navigate to line",
 	    "Blame the version of the file found in the selected line's commit",
 	    "Blame the version of the file found in the selected line's parent "
@@ -3284,7 +3319,6 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 {
 	struct fnc_tl_view_state	*s = &view->state.timeline;
 	struct fnc_view			*branch_view = NULL;
-	struct fnc_view			*tree_view = NULL;
 	int				 rc = 0, start_col = 0;
 
 	switch (ch) {
@@ -3412,7 +3446,7 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			rc = 0;
 			break;
 		}
-		rc = request_new_view(&tree_view, view, FNC_VIEW_TREE);
+		rc = request_new_view(new_view, view, FNC_VIEW_TREE);
 		break;
 	case 'q':
 		s->quit = 1;
@@ -4165,6 +4199,7 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 		s->sline = SLINE_MONO;
 	fsl_free(opt);
 
+	s->maxx = 0;
 	s->paths = paths;
 	s->selected_commit = commit;
 	s->first_line_onscreen = 1;
@@ -4223,7 +4258,7 @@ create_diff(struct fnc_diff_view_state *s)
 	FILE	*fout = NULL;
 	char	*line, *st0 = NULL, *st = NULL;
 	off_t	 lnoff = 0;
-	int	 n, rc = 0;
+	int	 rc = 0;
 
 	free(s->line_offsets);
 	s->line_offsets = fsl_malloc(sizeof(off_t));
@@ -4309,7 +4344,8 @@ create_diff(struct fnc_diff_view_state *s)
 	st = st0;
 	lnoff = (s->line_offsets)[s->nlines - 1];
 	while ((line = fnc_strsep(&st, "\n")) != NULL) {
-		n = fprintf(s->f, "%s\n", line);
+		int n = fprintf(s->f, "%s\n", line);
+		s->maxx = MAX((int)s->maxx, n);
 		lnoff += n;
 		rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff);
 		if (rc)
@@ -5394,10 +5430,9 @@ write_diff(struct fnc_view *view, char *headln)
 	ssize_t				 linelen;
 	off_t				 line_offset;
 	attr_t				 rx = A_BOLD;
-	int				 wstrlen;
-	int				 max_lines = view->nlines;
+	int				 col, wstrlen, max_lines = view->nlines;
 	int				 nlines = s->nlines;
-	int				 npad = 0, rc = 0, nprinted = 0;
+	int				 npad = 0, nprinted = 0, rc = FSL_RC_OK;
 	bool				 selected;
 
 	s->lineno = s->first_line_onscreen - 1;
@@ -5408,19 +5443,19 @@ write_diff(struct fnc_view *view, char *headln)
 	werase(view->window);
 
 	if (headln) {
-		static char	pctstr[MAX_PCT_LEN];
-		double		pct;
+		static char	pct[MAX_PCT_LEN];
+		double		percent;
 		int		ln, pctlen;
 		ln = s->gtl ? s->gtl : s->lineno + s->selected_line;
-		pct = 100.00 * ln / nlines;
-		pctlen = snprintf(pctstr, MAX_PCT_LEN, "%.*lf%%",
-		    ln >= nlines ? 0 : 2, pct);
+		percent = 100.00 * ln / nlines;
+		pctlen = snprintf(pct, MAX_PCT_LEN, "%.*lf%%",
+		    ln >= nlines ? 0 : 2, percent);
 		if (pctlen < 0)
 			return RC(FSL_RC_RANGE, "%s", "snprintf");
 		line = fsl_mprintf("[%d/%d] %s", ln, nlines, headln);
 		if (line == NULL)
 			return RC(FSL_RC_RANGE, "%s", "fsl_mprintf");
-		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0, false);
+		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0, 0, false);
 		fsl_free(line);
 		fsl_free(headln);
 		if (rc)
@@ -5432,11 +5467,11 @@ write_diff(struct fnc_view *view, char *headln)
 		waddwstr(view->window, wcstr);
 		fsl_free(wcstr);
 		wcstr = NULL;
-		view->pos.col = wstrlen;
-		while (wstrlen++ < view->ncols)
+		col = wstrlen;
+		while (col++ < view->ncols)
 			waddch(view->window, ' ');
-		if (view->pos.col < view->ncols - pctlen)
-			mvwaddstr(view->window, 0, view->ncols - pctlen, pctstr);
+		if (wstrlen < view->ncols - pctlen)
+			mvwaddstr(view->window, 0, view->ncols - pctlen, pct);
 		wattroff(view->window, rx);
 
 		if (--max_lines < 1)
@@ -5479,16 +5514,15 @@ write_diff(struct fnc_view *view, char *headln)
 
 		if (s->first_line_onscreen + nprinted == s->matched_line &&
 		    regmatch->rm_so >= 0 && regmatch->rm_so < regmatch->rm_eo) {
-			rc = write_matched_line(&wstrlen, line,
-			    view->ncols - npad, npad, view->window,
-			    regmatch, rx, true);
+			rc = draw_matched_line(view, &wstrlen, npad, regmatch,
+			    rx);
 			if (rc) {
 				fsl_free(line);
 				return rc;
 			}
 		} else {
 			rc = formatln(&wcstr, &wstrlen, line,
-			    view->ncols - npad, npad, true);
+			    view->ncols - npad, npad, view->pos.col, true);
 			if (rc) {
 				fsl_free(line);
 				return rc;
@@ -5497,8 +5531,8 @@ write_diff(struct fnc_view *view, char *headln)
 			fsl_free(wcstr);
 			wcstr = NULL;
 		}
-		view->pos.col = wstrlen + npad;
-		while (view->pos.col++ < view->ncols)
+		col = wstrlen + npad;
+		while (col++ < view->ncols)
 			waddch(view->window, ' ');
 
 		if (c || selected)
@@ -5565,74 +5599,91 @@ updatescreen(WINDOW *win, bool panel, bool update)
 }
 
 static int
-write_matched_line(int *col_pos, const char *line, int ncols_avail,
-    int start_column, WINDOW *window, regmatch_t *regmatch, attr_t rx,
-    bool expand)
+draw_matched_line(struct fnc_view *view, int *col, int offset,
+    regmatch_t *regmatch, attr_t rx)
 {
 	wchar_t		*wcstr;
 	char		*s;
-	int		 wstrlen;
-	int		 rc = 0;
+	int		 rme, rms, skip = view->pos.col, wstrlen;
+	int		 n = 0, ncols_avail = view->ncols - offset, rc = 0;
 	attr_t		 hl = A_BOLD | A_REVERSE;
 
-	*col_pos = 0;
+	*col = 0;
+	rms = regmatch->rm_so;
+	rme = regmatch->rm_eo;
 
-	/* Copy the line up to the matching substring & write it to screen. */
-	s = fsl_strndup(line, regmatch->rm_so);
+	/*
+	 * Copy line up to string match and draw to screen. Trim preceding skip
+	 * chars if scrolled right. Don't copy if skip consumes substring.
+	 */
+	s = fsl_strndup(view->line.buf + skip, MAX(rms - skip, 0));
 	if (s == NULL)
 		return RC(FSL_RC_ERROR, "%s", "fsl_strndup");
 
-	rc = formatln(&wcstr, &wstrlen, s, ncols_avail, start_column, expand);
+	rc = formatln(&wcstr, &wstrlen, s, ncols_avail, offset, 0, false);
 	if (rc) {
 		free(s);
 		return rc;
 	}
-	waddwstr(window, wcstr);
+	waddwstr(view->window, wcstr);
 	free(wcstr);
 	free(s);
 	ncols_avail -= wstrlen;
-	*col_pos += wstrlen;
+	*col += wstrlen;
 
-	/* If not EOL, copy matching string & write to screen with highlight. */
+	/*
+	 * Copy string match and draw with highlight. If skip traverses string
+	 * match, trim n chars off the front. Don't copy if skip consumed match.
+	 */
 	if (ncols_avail > 0) {
-		s = fsl_strndup(line + regmatch->rm_so,
-		    regmatch->rm_eo - regmatch->rm_so);
+		int len = rme - rms;
+		if (skip > rms) {
+			n = skip - rms;
+			len = MAX(len - n, 0);
+		}
+		s = fsl_strndup(view->line.buf + rms + n, len);
 		if (s == NULL) {
 			rc = RC(FSL_RC_ERROR, "%s", "fsl_strndup");
 			free(s);
 			return rc;
 		}
-		rc = formatln(&wcstr, &wstrlen, s, ncols_avail, start_column,
-		    expand);
+		rc = formatln(&wcstr, &wstrlen, s, ncols_avail, offset,
+		    0, false);
 		if (rc) {
 			free(s);
 			return rc;
 		}
-		wattron(window, COLOR_PAIR(FNC_COLOUR_HL_SEARCH) | hl);
-		waddwstr(window, wcstr);
-		wattroff(window, COLOR_PAIR(FNC_COLOUR_HL_SEARCH) | hl);
+		wattron(view->window, COLOR_PAIR(FNC_COLOUR_HL_SEARCH) | hl);
+		waddwstr(view->window, wcstr);
+		wattroff(view->window, COLOR_PAIR(FNC_COLOUR_HL_SEARCH) | hl);
 		free(wcstr);
 		free(s);
 		ncols_avail -= wstrlen;
-		*col_pos += wstrlen;
+		*col += wstrlen;
 	}
 
-	/* Write the rest of the line if not yet at EOL. */
-	if (ncols_avail > 0 && fsl_strlen(line) > (fsl_size_t)regmatch->rm_eo) {
-		rc = formatln(&wcstr, &wstrlen, line + regmatch->rm_eo,
-		    ncols_avail, start_column, expand);
+	/*
+	 * Write rest of line if not yet at EOL. If skip passes the end of
+	 * string match, trim n chars off the front of substring.
+	 */
+	if (ncols_avail > 0 && view->line.sz > rme) {
+		n = 0;
+		if (skip > rme)
+			n = MIN(skip - rme, view->line.sz - rme);
+		rc = formatln(&wcstr, &wstrlen, view->line.buf + rme + n,
+		    ncols_avail, offset, 0, false);
 		if (rc)
 			return rc;
-		wattron(window, rx);
-		waddwstr(window, wcstr);
+		wattron(view->window, rx);
+		waddwstr(view->window, wcstr);
 		free(wcstr);
 		ncols_avail -= wstrlen;
-		*col_pos += wstrlen;
+		*col += wstrlen;
 		while (--ncols_avail >= 0) {
-			++(*col_pos);
-			waddch(window, ' ');
+			++(*col);
+			waddch(view->window, ' ');
 		}
-		wattroff(window, rx);
+		wattroff(view->window, rx);
 	}
 
 	return rc;
@@ -5682,6 +5733,21 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	s->lineno = s->first_line_onscreen - 1 + s->selected_line;
 
 	switch (ch) {
+	case '0':
+		view->pos.col = 0;
+		break;
+	case '$':
+		view->pos.col = s->maxx - view->ncols / 2;
+		break;
+	case KEY_RIGHT:
+	case 'l':
+		if (view->pos.col + view->ncols / 2 < s->maxx)
+			view->pos.col += 2;
+		break;
+	case KEY_LEFT:
+	case 'h':
+		view->pos.col -= MIN(view->pos.col, 2);
+		break;
 	case CTRL('e'):
 		if (!s->eof) {
 			++s->first_line_onscreen;
@@ -5771,7 +5837,7 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		s->gtl = input.ret;
 		break;
 	}
-	case 'l':
+	case '#':
 		s->showln = !s->showln;
 		break;
 	case 'b': {
@@ -5867,7 +5933,6 @@ static int
 reset_diff_view(struct fnc_view *view, bool stay)
 {
 	struct fnc_diff_view_state	*s = &view->state.diff;
-	float				 scale;
 	int				 n, rc = FSL_RC_OK;
 
 	n = s->nlines;
@@ -5876,15 +5941,15 @@ reset_diff_view(struct fnc_view *view, bool stay)
 	if (rc)
 		return rc;
 
-	if (stay && s->first_line_onscreen > view->nlines) {
-		scale = (float)s->first_line_onscreen / n;
-		s->first_line_onscreen = (int)(s->nlines * scale);
-		s->last_line_onscreen = s->first_line_onscreen + view->nlines;
+	if (stay) {
+		float scale = (float)s->first_line_onscreen / n;
+		s->first_line_onscreen = MAX(1, (int)(s->nlines * scale));
 	} else {
 		s->first_line_onscreen = 1;
-		s->last_line_onscreen = view->nlines;
+		view->pos.col = 0;
 	}
 
+	s->last_line_onscreen = s->first_line_onscreen + view->nlines;
 	s->matched_line = 0;
 
 	return rc;
@@ -5933,7 +5998,7 @@ diff_search_next(struct fnc_view *view)
 	char				*line = NULL;
 	ssize_t				 linelen;
 	size_t				 linesz = 0;
-	int				 start_ln;
+	int				 lineno;
 
 	if (view->searching == SEARCH_DONE) {
 		view->search_status = SEARCH_CONTINUE;
@@ -5942,50 +6007,58 @@ diff_search_next(struct fnc_view *view)
 
 	if (s->matched_line) {
 		if (view->searching == SEARCH_FORWARD)
-			start_ln = s->matched_line + 1;
+			lineno = s->matched_line + 1;
 		else
-			start_ln = s->matched_line - 1;
+			lineno = s->matched_line - 1;
 	} else {
 		if (view->searching == SEARCH_FORWARD)
-			start_ln = 1;
+			lineno = 1;
 		else
-			start_ln = s->nlines;
+			lineno = s->nlines;
 	}
 
 	while (1) {
 		off_t offset;
 
-		if (start_ln <= 0 || (size_t)start_ln > s->nlines) {
+		if (lineno <= 0 || (size_t)lineno > s->nlines) {
 			if (s->matched_line == 0) {
 				view->search_status = SEARCH_CONTINUE;
 				break;
 			}
 
 			if (view->searching == SEARCH_FORWARD)
-				start_ln = 1;
+				lineno = 1;
 			else
-				start_ln = s->nlines;
+				lineno = s->nlines;
 		}
 
-		offset = s->line_offsets[start_ln - 1];
+		offset = s->line_offsets[lineno - 1];
 		if (fseeko(s->f, offset, SEEK_SET) != 0) {
-			free(line);
+			fsl_free(line);
 			return RC(fsl_errno_to_rc(errno, FSL_RC_IO),
 			    "%s", "fseeko");
 		}
+		/*
+		 * Expand tabs for accurate rm_so/rm_eo offsets, and save to
+		 * view->line so we don't have to expand when drawing matches.
+		 */
 		linelen = getline(&line, &linesz, s->f);
-		if (linelen != -1 && regexec(&view->regex, line, 1,
+		view->line.sz = expand_tab(view->line.buf,
+		    sizeof(view->line.buf), line, linelen);
+		if (linelen != -1 && regexec(&view->regex, view->line.buf, 1,
 		    &view->regmatch, 0) == 0) {
 			view->search_status = SEARCH_CONTINUE;
-			s->matched_line = start_ln;
+			s->matched_line = lineno;
+			while (view->pos.col > view->regmatch.rm_so)
+				--view->pos.col;  /* Scroll till on-screen. */
 			break;
 		}
 		if (view->searching == SEARCH_FORWARD)
-			++start_ln;
+			++lineno;
 		else
-			--start_ln;
+			--lineno;
 	}
-	free(line);
+	fsl_free(line);
 
 	if (s->matched_line) {
 		s->first_line_onscreen = s->matched_line;
@@ -7036,7 +7109,8 @@ draw_tree(struct fnc_view *view, const char *treepath)
 		return rc;
 
 	/* Write (highlighted) headline (if view is active in splitscreen). */
-	rc = formatln(&wcstr, &wstrlen, s->tree_label, view->ncols, 0, false);
+	rc = formatln(&wcstr, &wstrlen, s->tree_label, view->ncols, 0, 0,
+	    false);
 	if (rc)
 		return rc;
 	if (screen_is_shared(view))
@@ -7060,7 +7134,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 		return rc;
 
 	/* Write this (sub)tree's absolute repository path subheader. */
-	rc = formatln(&wcstr, &wstrlen, treepath, view->ncols, 0, false);
+	rc = formatln(&wcstr, &wstrlen, treepath, view->ncols, 0, 0, false);
 	if (rc)
 		return rc;
 	waddwstr(view->window, wcstr);
@@ -7162,7 +7236,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 		if (rc || line == NULL)
 			return RC(rc ? rc : FSL_RC_RANGE, "%s",
 			    rc ? "fsl_julian_to_iso8601" : "fsl_mprintf");
-		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0, false);
+		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0, 0, false);
 		if (rc) {
 			fsl_free(line);
 			break;
@@ -8482,6 +8556,7 @@ run_blame(struct fnc_view *view)
 		s->selected_line = 1;
 	}
 	s->matched_line = 0;
+	s->maxx = &blame->thread_cx.cb_cx->maxlen;
 end:
 	fsl_free(master);
 	fsl_free(root);
@@ -8687,6 +8762,7 @@ blame_cb(void *state, fsl_annotate_opt const * const opt,
 	}
 
 	line->lineno = step->lineNumber;
+	cx->maxlen = MAX(step->lineLength, cx->maxlen);
 	++cx->nlines;
 end:
 	rc = pthread_mutex_unlock(&fnc_mutex);
@@ -8724,7 +8800,7 @@ draw_blame(struct fnc_view *view)
 		return rc;
 	}
 
-	rc = formatln(&wcstr, &width, line, view->ncols, 0, false);
+	rc = formatln(&wcstr, &width, line, view->ncols, 0, 0, false);
 	fsl_free(line);
 	line = NULL;
 	if (rc)
@@ -8756,7 +8832,7 @@ draw_blame(struct fnc_view *view)
 	    s->blame_complete ? ' ' : SPINNER[s->spin_idx]);
 	if (SPINNER[++s->spin_idx] == '\0')
 		s->spin_idx = 0;
-	rc = formatln(&wcstr, &width, line, view->ncols, 0, false);
+	rc = formatln(&wcstr, &width, line, view->ncols, 0, 0, false);
 	fsl_free(line);
 	line = NULL;
 	if (rc)
@@ -8848,9 +8924,8 @@ draw_blame(struct fnc_view *view)
 		} else if (s->first_line_onscreen + nprinted == s->matched_line
 		    && regmatch->rm_so >= 0 &&
 		    regmatch->rm_so < regmatch->rm_eo) {
-			rc = write_matched_line(&width, line,
-			    view->ncols - idfield - npad, idfield + npad,
-			    view->window, regmatch, 0, true);
+			rc = draw_matched_line(view, &width, idfield + npad,
+			    regmatch, 0);
 			if (rc) {
 				fsl_free(line);
 				return rc;
@@ -8858,7 +8933,8 @@ draw_blame(struct fnc_view *view)
 			width += idfield;
 		} else {
 			rc = formatln(&wcstr, &width, line,
-			    view->ncols - idfield - npad, idfield + npad, true);
+			    view->ncols - idfield - npad, idfield + npad,
+			    view->pos.col, true);
 			waddwstr(view->window, wcstr);
 			fsl_free(wcstr);
 			wcstr = NULL;
@@ -8951,6 +9027,21 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	int				 start_col = 0, rc = 0;
 
 	switch (ch) {
+	case '0':
+		view->pos.col = 0;
+		break;
+	case '$':
+		view->pos.col = *s->maxx - view->ncols / 2;
+		break;
+	case KEY_RIGHT:
+	case 'l':
+		if ((size_t)view->pos.col + view->ncols / 2 < *s->maxx)
+			view->pos.col += 2;
+		break;
+	case KEY_LEFT:
+	case 'h':
+		view->pos.col -= MIN(view->pos.col, 2);
+		break;
 	case 'q':
 		s->done = true;
 		if (s->selected_commit)
@@ -9011,7 +9102,7 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		s->gtl = input.ret;
 		break;
 	}
-	case 'l':
+	case '#':
 		s->showln = !s->showln;
 		break;
 	case 'b':
@@ -9261,11 +9352,19 @@ blame_search_next(struct fnc_view *view)
 			return RC(fsl_errno_to_rc(errno, FSL_RC_IO),
 			    "%s", "fseeko");
 		}
+		/*
+		 * Expand tabs for accurate rm_so/rm_eo offsets, and save to
+		 * view->line so we don't have to expand when drawing matches.
+		 */
 		linelen = getline(&line, &linesz, s->blame.f);
-		if (linelen != -1 && regexec(&view->regex, line, 1,
+		view->line.sz = expand_tab(view->line.buf,
+		    sizeof(view->line.buf), line, linelen);
+		if (linelen != -1 && regexec(&view->regex, view->line.buf, 1,
 		    &view->regmatch, 0) == 0) {
 			view->search_status = SEARCH_CONTINUE;
 			s->matched_line = lineno;
+			while (view->pos.col > view->regmatch.rm_so)
+				--view->pos.col;  /* Scroll till on-screen. */
 			break;
 		}
 		if (view->searching == SEARCH_FORWARD)
@@ -9775,7 +9874,7 @@ show_branch_view(struct fnc_view *view)
 	    s->nbranches)) == NULL)
 		return RC(FSL_RC_ERROR, "%s", "fsl_mprintf");
 
-	rc = formatln(&wline, &width, line, view->ncols, 0, false);
+	rc = formatln(&wline, &width, line, view->ncols, 0, 0, false);
 	if (rc) {
 		fsl_free(line);
 		return rc;
@@ -9815,7 +9914,7 @@ show_branch_view(struct fnc_view *view)
 		if (s->colour)
 			c = match_colour(&s->colours, line);
 
-		rc = formatln(&wline, &width, line, view->ncols, 0, false);
+		rc = formatln(&wline, &width, line, view->ncols, 0, 0, false);
 		if (rc) {
 			fsl_free(line);
 			return rc;
