@@ -2279,18 +2279,22 @@ static int spech_json( fsl_output_f pf, void * pfArg,
       outc;
     }else if( c<' ' ){
       out("\\",1);
-      if( c=='\n' ){
-        out("n",1);
-      }else if( c=='\r' ){
-        out("r",1);
-      }else{
-        unsigned char ubuf[5] = {'u',0,0,0,0};
-        int i;
-        for(i = 4; i>0; --i){
-          ubuf[i] = "0123456789abcdef"[c&0xf];
-          c >>= 4;
+      switch(c){
+        case '\b': out("b",1); break;
+        case '\f': out("f",1); break;
+        case '\n': out("n",1); break;
+        case '\t': out("t",1); break;
+        case '\r': out("r",1); break;
+        default:{
+          unsigned char ubuf[5] = {'u',0,0,0,0};
+          int i;
+          for(i = 4; i>0; --i){
+            ubuf[i] = "0123456789abcdef"[c&0xf];
+            c >>= 4;
+          }
+          out(ubuf,5);
+          break;
         }
-        out(ubuf,5);
       }
     }else if(c<128){
       outc;
@@ -4887,7 +4891,7 @@ int fsl_checkin_enqueue(fsl_cx * f, fsl_checkin_queue_opt const * opt){
   return rc;
 }
 
-int fsl_checkin_dequeue(fsl_cx * f, fsl_checkin_queue_opt const * opt){
+int fsl_checkin_dequeue(fsl_cx * const f, fsl_checkin_queue_opt const * opt){
   fsl_db * const db = fsl_needs_ckout(f);
   if(!db) return FSL_RC_NOT_A_CKOUT;
   int rc = fsl_db_transaction_begin(db);
@@ -4956,7 +4960,7 @@ bool fsl_checkin_is_enqueued(fsl_cx * const f, char const * zName,
   }
 }
 
-void fsl_checkin_discard(fsl_cx * f){
+void fsl_checkin_discard(fsl_cx * const f){
   if(f){
     fsl_id_bag_clear(&f->ckin.selectedIds);
     fsl_deck_finalize(&f->ckin.mf);
@@ -8864,11 +8868,7 @@ static int fcli_open(void){
   }
   else if(fcli.clientFlags.checkoutDir){
     fsl_buffer dir = fsl_buffer_empty;
-    char const * dirName;
-    rc = fsl_file_canonical_name(fcli.clientFlags.checkoutDir,
-                                 &dir, 0);
-    assert(!rc);
-    dirName = (char const *)fsl_buffer_cstr(&dir);
+    char const * dirName = fcli.clientFlags.checkoutDir;
     FCLI_V3(("Trying to open checkout from [%s]...\n",
              dirName));
     rc = fsl_ckout_open_dir(f, dirName, true);
@@ -10127,8 +10127,6 @@ void fcli_dump_cache_metrics(void){
         f->cache.blobContent.metrics.misses,
         f->cache.blobContent.used,
         f->cache.blobContent.szTotal);
-  f_out("fsl_cx::cache::deltaIds.capacity = %u\n",
-        f->cache.deltaIds.capacity);
 }
 
 #undef FCLI_V3
@@ -10316,7 +10314,6 @@ int fsl_content_get( fsl_cx * const f, fsl_id_t rid,
       /* Early out if we know the content is not available */
       return FSL_RC_NOT_FOUND;
     }
-
     /* Look for the artifact in the cache first */
     if(0!=(FSL_CX_F_BLOB_CACHE & f->flags)
        && fsl_id_bag_contains(&ac->inCache, rid) ){
@@ -10346,23 +10343,16 @@ int fsl_content_get( fsl_cx * const f, fsl_id_t rid,
       /* Looks like a delta, so let's expand it... */
       fsl_int_t n           /* number of used entries in 'a' */;
       fsl_int_t mx;
-      fsl_id_t * a = f->cache.deltaIds.list;
+      fsl_id_t * a = NULL;
       //fsl_buffer D = fsl_buffer_empty;
       fsl_buffer * const delta = &f->cache.deltaContent;
       fsl_buffer next = fsl_buffer_empty  /* delta-applied content */ ;
       assert(nextRid>0);
+      unsigned int nAlloc = 20;
+      a = (fsl_id_t*)fsl_malloc(sizeof(fsl_id_t) * nAlloc);
       if(!a){
-        unsigned int const nAlloc = 400
-          /* Testing in the libfossil tree shows that this list can easily
-             surpass 300 elements, and more than 1000 in the fossil(1) tree,
-             thus we allocate relatively many up front. */;
-        a = f->cache.deltaIds.list = (fsl_id_t*)
-          fsl_malloc(sizeof(fsl_id_t) * nAlloc);
-        if(!a){
-          rc = FSL_RC_OOM;
-          goto end_delta;
-        }
-        f->cache.deltaIds.capacity = nAlloc;
+        rc = FSL_RC_OOM;
+        goto end_delta;
       }
       a[0] = rid;
       a[1] = nextRid;
@@ -10372,7 +10362,7 @@ int fsl_content_get( fsl_cx * const f, fsl_id_t rid,
              && (nextRid>0)){
         /* Figure out how big n needs to be... */
         ++n;
-        if( n >= f->cache.deltaIds.capacity ){
+        if( n >= (fsl_int_t)nAlloc ){
           /* Expand 'a' */
           void * remem;
           if( n > fsl_db_g_int64(db, 0,
@@ -10381,17 +10371,15 @@ int fsl_content_get( fsl_cx * const f, fsl_id_t rid,
                                 "Infinite loop in delta table.");
             goto end_delta;
           }
-          unsigned int const nAlloc = f->cache.deltaIds.capacity * 2;
-          assert(nAlloc > f->cache.deltaIds.capacity);
-          remem = fsl_realloc(a, nAlloc * sizeof(fsl_id_t));
+          unsigned int const nAlloc2 = nAlloc * 2;
+          remem = fsl_realloc(a, nAlloc2 * sizeof(fsl_id_t));
           if(!remem){
             rc = FSL_RC_OOM;
             goto end_delta;
           }
-          a = f->cache.deltaIds.list = (fsl_id_t*)remem;
-          f->cache.deltaIds.capacity = nAlloc;
-          /*MARKER(("f->cache.deltaIds.capacity = %u\n",
-            f->cache.deltaIds.capacity));*/
+          a = (fsl_id_t*)remem;
+          nAlloc = nAlloc2;
+          /*MARKER(("deltaIds allocated = %u\n", nAlloc));*/
         }
         a[n] = nextRid;
       }
@@ -10465,6 +10453,7 @@ int fsl_content_get( fsl_cx * const f, fsl_id_t rid,
         *tgt = next;
       }
       end_delta:
+      fsl_free(a);
       fsl_buffer_reuse(delta);
       gotIt = 0==rc;
     }
@@ -10496,7 +10485,7 @@ int fsl_content_get_sym( fsl_cx * const f, char const * sym,
     missing is now available. Returns 0 on success. f must have
     an opened repo and rid must be valid.
  */
-static int fsl_content_mark_available(fsl_cx * const f, fsl_id_t rid){
+static int fsl__content_mark_available(fsl_cx * const f, fsl_id_t rid){
   fsl_id_bag pending = fsl_id_bag_empty;
   int rc;
   fsl_stmt * st = NULL;
@@ -10506,18 +10495,17 @@ static int fsl_content_mark_available(fsl_cx * const f, fsl_id_t rid){
   assert(rid>0);
   if( fsl_id_bag_contains(&f->cache.blobContent.available, rid) ) return 0;
   rc = fsl_id_bag_insert(&pending, rid);
-  if(rc) goto end;
   while( 0==rc && (rid = fsl_id_bag_first(&pending))!=0 ){
     fsl_id_bag_remove(&pending, rid);
     rc = fsl_id_bag_insert(&f->cache.blobContent.available, rid);
-    if(rc) goto end;
+    if(rc) break;
     fsl_id_bag_remove(&f->cache.blobContent.missing, rid);
     if(!st){
       rc = fsl_db_prepare_cached(db, &st,
                                  "SELECT rid FROM delta "
                                  "WHERE srcid=?"
                                  "/*%s()*/",__func__);
-      if(rc) goto end;
+      if(rc) break;
     }
     rc = fsl_stmt_bind_id(st, 1, rid);
     while( !rc && (FSL_RC_STEP_ROW==fsl_stmt_step(st)) ){
@@ -10526,7 +10514,6 @@ static int fsl_content_mark_available(fsl_cx * const f, fsl_id_t rid){
       rc = fsl_id_bag_insert(&pending, nx);
     }
   }
-  end:
   if(st) fsl_stmt_cached_yield(st);
   fsl_id_bag_clear(&pending);
   return rc;
@@ -10832,7 +10819,7 @@ int fsl__content_put_ex( fsl_cx * const f,
       if( !rc && (srcId==0 ||
                   0==fsl__bccache_check_available(f, srcId)) ){
         isDephantomize = true;
-        rc = fsl_content_mark_available(f, rid);
+        rc = fsl__content_mark_available(f, rid);
       }
     }
     fsl_stmt_cached_yield(s1);
@@ -10896,7 +10883,7 @@ int fsl__content_put_ex( fsl_cx * const f,
       TODO: document what this is for.
       TODO: figure out what that is.
     */
-    rc = fsl_content_mark_available(f, rid);
+    rc = fsl__content_mark_available(f, rid);
     if(rc) goto end;
   }
   if( isDephantomize ){
@@ -10960,8 +10947,8 @@ int fsl_uuid_is_shunned(fsl_cx * const f, fsl_uuid_cstr zUuid){
                             zUuid);
 }
 
-int fsl__content_new( fsl_cx * f, fsl_uuid_cstr uuid, bool isPrivate,
-                     fsl_id_t * newId ){
+int fsl__content_new( fsl_cx * const f, fsl_uuid_cstr uuid,
+                      bool isPrivate, fsl_id_t * const newId ){
   fsl_id_t rid = 0;
   int rc;
   fsl_db * db = fsl_cx_db_repo(f);
@@ -12915,7 +12902,7 @@ int fsl_cx_init( fsl_cx ** tgt, fsl_cx_init_opt const * param ){
   return rc;
 }
 
-static void fsl__cx_mcache_clear(fsl_cx * const f){
+void fsl__cx_mcache_clear(fsl_cx * const f){
   const unsigned cacheLen =
     (unsigned)(sizeof(fsl__mcache_empty.aAge)
                /sizeof(fsl__mcache_empty.aAge[0]));
@@ -12976,7 +12963,6 @@ static void fsl__cx_reset(fsl_cx * const f, bool closeDatabases){
     fsl_free(f->xlinkers.list);
     f->xlinkers = fsl_xlinker_list_empty;
   }
-  fsl_free(f->cache.deltaIds.list);
 #define SLIST(L) fsl_list_visit_free(L, 1)
 #define GLOBL(X) SLIST(&f->cache.globs.X)
   GLOBL(ignore);
@@ -13131,15 +13117,11 @@ int fsl_cx_uplift_db_error2(fsl_cx * const f, fsl_db * db, int rc){
 }
 
 fsl_db * fsl_cx_db_config( fsl_cx * const f ){
-  if(!f) return NULL;
-  else if(f->dbMain && (FSL_DBROLE_CONFIG & f->dbMain->role)) return f->dbMain;
-  else if(f->config.db.dbh) return &f->config.db;
-  else return NULL;
+  return f->config.db.dbh ? &f->config.db : NULL;
 }
 
 fsl_db * fsl_cx_db_repo( fsl_cx * const f ){
-  if(!f) return NULL;
-  else if(f->dbMain && (FSL_DBROLE_REPO & f->dbMain->role)) return f->dbMain;
+  if(f->dbMain && (FSL_DBROLE_REPO & f->dbMain->role)) return f->dbMain;
   else if(f->repo.db.dbh) return &f->repo.db;
   else return NULL;
 }
@@ -13163,14 +13145,13 @@ fsl_db * fsl_needs_ckout(fsl_cx * const f){
 }
 
 fsl_db * fsl_cx_db_ckout( fsl_cx * const f ){
-  if(!f) return NULL;
-  else if(f->dbMain && (FSL_DBROLE_CKOUT & f->dbMain->role)) return f->dbMain;
+  if(f->dbMain && (FSL_DBROLE_CKOUT & f->dbMain->role)) return f->dbMain;
   else if(f->ckout.db.dbh) return &f->ckout.db;
   else return NULL;
 }
 
 fsl_db * fsl_cx_db( fsl_cx * const f ){
-  return f ? f->dbMain : NULL;
+  return f->dbMain;
 }
 /** @internal
 
@@ -13207,6 +13188,7 @@ fsl_db * fsl_cx_db_for_role(fsl_cx * const f, fsl_dbrole_e r){
     from f->dbMain->role.
 */
 static int fsl_cx_detach_role(fsl_cx * const f, fsl_dbrole_e r){
+  assert(FSL_DBROLE_CONFIG!=r && "Config db now has its own handle.");
   if(NULL==f->dbMain) return FSL_RC_MISUSE;
   else if(!(r & f->dbMain->role)){
     assert(!"Misuse: cannot detach unattached role.");
@@ -13252,6 +13234,7 @@ int fsl_cx_attach_role(fsl_cx * const f, const char *zDbName,
   fsl_db * const db = fsl_cx_db_for_role(f, r);
   char ** nameDest = NULL;
   int rc;
+  assert(FSL_DBROLE_CONFIG!=r && "Config db now has its own handle.");
   if(!f->dbMain){
     fsl__fatal(FSL_RC_MISUSE,"Internal API misuse: f->dbMain has "
               "not been set, so cannot attach role.");
@@ -13314,16 +13297,8 @@ int fsl_cx_attach_role(fsl_cx * const f, const char *zDbName,
   return rc;
 }
 
-int fsl_config_close( fsl_cx * const f ){
-  int rc = 0;
-  fsl_db * const db = &f->config.db;
-  if(f->dbMain && (FSL_DBROLE_CONFIG & f->dbMain->role)){
-    /* Config db is ATTACHed. */
-    rc = fsl_cx_detach_role(f, FSL_DBROLE_CONFIG);
-  }else{
-    fsl_db_close(db);
-  }
-  return rc;
+void fsl_config_close( fsl_cx * const f ){
+  fsl_db_close(&f->config.db);
 }
 
 int fsl_repo_close( fsl_cx * const f ){
@@ -13583,7 +13558,8 @@ int fsl_config_open( fsl_cx * const f, char const * openDbName ){
   char * zPrefName = 0;
   if(fsl_cx_db_config(f)){
     if(NULL==openDbName || 0==*openDbName) return 0/*nothing to do*/;
-    else fsl_config_close(f);
+    fsl_config_close(f);
+    assert(!f->config.db.dbh);
   }
   if(openDbName && *openDbName){
     zDbName = openDbName;
@@ -13612,7 +13588,20 @@ int fsl_config_open( fsl_cx * const f, char const * openDbName ){
   }
 #endif
   assert(NULL==fsl_cx_db_config(f));
-  rc = fsl_cx_attach_role(f, zDbName, FSL_DBROLE_CONFIG);
+  rc = fsl_db_open(&f->config.db, zDbName,
+                   FSL_OPEN_F_RW | (f->cxConfig.traceSql
+                                    ? FSL_OPEN_F_TRACE_SQL
+                                    : 0));
+  if(0==rc){
+    int const sqrc = sqlite3_db_config(f->config.db.dbh,
+                                       SQLITE_DBCONFIG_MAINDBNAME,
+                                       fsl_db_role_label(FSL_DBROLE_CONFIG));
+    if(sqrc) rc = fsl__db_errcode(&f->config.db, sqrc);
+  }
+  if(rc){
+    rc = fsl_cx_uplift_db_error2(f, &f->config.db, rc);
+    fsl_db_close(&f->config.db);
+  }
   end:
   fsl_free(zPrefName);
   return rc;
@@ -13964,7 +13953,6 @@ int fsl_ckout_db_search( char const * dirName, bool checkParentDirs,
   const char aDbName[DbCount][10] = { "_FOSSIL_", ".fslckout" };
   fsl_buffer Buf = fsl_buffer_empty;
   fsl_buffer * buf = &Buf;
-  buf->used = 0;
   if(dirName){
     dLen = fsl_strlen(dirName);
     if(0==dLen) return FSL_RC_RANGE;
@@ -14051,7 +14039,7 @@ int fsl_ckout_db_search( char const * dirName, bool checkParentDirs,
   return FSL_RC_NOT_FOUND;
 }
 
-int fsl_cx_getcwd(fsl_cx * f, fsl_buffer * pOut){
+int fsl_cx_getcwd(fsl_cx * const f, fsl_buffer * const pOut){
   char cwd[FILENAME_MAX] = {0};
   fsl_size_t cwdLen = 0;
   int rc = fsl_getcwd(cwd, (fsl_size_t)sizeof(cwd), &cwdLen);
@@ -14065,17 +14053,21 @@ int fsl_cx_getcwd(fsl_cx * f, fsl_buffer * pOut){
     : 0;
 }
 
-int fsl_ckout_open_dir( fsl_cx * f, char const * dirName,
+int fsl_ckout_open_dir( fsl_cx * const f, char const * dirName,
                         bool checkParentDirs ){
   int rc;
-  fsl_buffer Buf = fsl_buffer_empty;
-  fsl_buffer * buf = &Buf;
+  fsl_buffer * const buf = fsl__cx_scratchpad(f);
+  fsl_buffer * const bufD = fsl__cx_scratchpad(f);
   char const * zName;
   if(fsl_cx_db_ckout(f)){
-    return fsl_cx_err_set( f, FSL_RC_ACCESS,
-                           "A checkout is already opened. "
-                           "Close it before opening another.");
+    rc = fsl_cx_err_set( f, FSL_RC_ACCESS,
+                         "A checkout is already opened. "
+                         "Close it before opening another.");
+    goto end;
   }
+  rc = fsl_file_canonical_name( dirName, bufD, false );
+  if(rc) goto end;
+  dirName = fsl_buffer_cstr(bufD);
   rc = fsl_ckout_db_search(dirName, checkParentDirs, buf);
   if(rc){
     if(FSL_RC_NOT_FOUND==rc){
@@ -14083,16 +14075,12 @@ int fsl_ckout_open_dir( fsl_cx * f, char const * dirName,
                           "Could not find checkout under [%s].",
                           dirName ? dirName : ".");
     }
-    fsl_buffer_clear(buf);
-    return rc;
+    goto end;
   }
   assert(buf->used>1 /* "/<FILENAME>" */);
   zName = fsl_buffer_cstr(buf);
   rc = fsl_cx_ckout_open_db(f, zName);
-  if(rc){
-    fsl_buffer_clear(buf);
-    return rc;
-  }else{
+  if(0==rc){
     /* Checkout db is now opened. Fiddle some internal
        bits...
     */
@@ -14117,8 +14105,11 @@ int fsl_ckout_open_dir( fsl_cx * f, char const * dirName,
       /* Is this sane? Is not doing it sane? */
       fsl_ckout_close(f);
     }
-    return rc;
   }
+  end:
+  fsl__cx_scratchpad_yield(f, buf);
+  fsl__cx_scratchpad_yield(f, bufD);
+  return rc;
 }
 
 
@@ -14412,8 +14403,7 @@ int fsl_cx_close_dbs( fsl_cx * const f ){
   if(rc1) rc = rc1;
   rc1 = fsl_repo_close(f);
   if(rc1) rc = rc1;
-  rc1 = fsl_config_close(f);
-  if(rc1) rc = rc1;
+  fsl_config_close(f);
   /* Forcibly reset the role and db strings for this case, even
      if closing ostensibly fails. */
   f->dbMain->role = FSL_DBROLE_MAIN;
@@ -14797,12 +14787,7 @@ int fsl_ckout_rm_empty_dirs_for_file(fsl_cx * const f, char const *zAbsPath){
   }
 }
 
-bool fsl_repo_forbids_delta_manifests(fsl_cx * f){
-  return fsl_config_get_bool(f, FSL_CONFDB_REPO, false,
-                             "forbid-delta-manifests");
-}
-
-int fsl_ckout_fingerprint_check(fsl_cx * f){
+int fsl_ckout_fingerprint_check(fsl_cx * const f){
   fsl_db * const db = fsl_cx_db_ckout(f);
   if(!db) return 0;
   int rc = 0;
@@ -14940,13 +14925,7 @@ static int fsl_list_v_fsl_stmt_finalize(void * obj, void * visitorState ){
 #endif
 
 
-/**
-   Translates sqliteCode (or, if it's 0, sqlite3_errcode()) to an
-   approximate FSL_RC_xxx match but treats SQLITE_ROW and SQLITE_DONE
-   as non-errors (result code 0). If non-0 is returned db's error
-   state is updated with the current sqlite3_errmsg() string.
-*/
-static int fsl__db_errcode(fsl_db * const db, int sqliteCode){
+int fsl__db_errcode(fsl_db * const db, int sqliteCode){
   int rc = sqliteCode ? sqliteCode : sqlite3_errcode(db->dbh);
   switch(sqliteCode){
     case SQLITE_ROW:
@@ -15052,9 +15031,9 @@ static fsl_size_t fsl_db_stmt_cache_clear(fsl_db * const db){
 }
 
 void fsl_db_close( fsl_db * const db ){
-  if(!db) return;
-  void const * allocStamp = db->allocStamp;
+  void const * const allocStamp = db->allocStamp;
   fsl_cx * const f = db->f;
+  if(!db->dbh) return;
   fsl_db_stmt_cache_clear(db);
   if(db->f && db->f->dbMain==db){
     /*
@@ -15073,9 +15052,9 @@ void fsl_db_close( fsl_db * const db ){
             (int)db->openStatementCount, db->filename));
   }
   if(db->dbh){
-    sqlite3_close(db->dbh);
-    /* ignoring results in the style of "destructors may not
-       throw". */
+    sqlite3_close_v2(db->dbh);
+    /* Ignore results in the style of "destructors
+       may not throw.". */
   }
   fsl__db_clear_strings(db, true);
   fsl_db_cleanup_beforeCommit(db);
@@ -16251,33 +16230,47 @@ int fsl_db_transaction_end(fsl_db * const db, bool doRollback){
   if(--db->beginCount > 0) return 0;
   assert(0==db->beginCount && "The commit-hook check relies on this.");
   assert(db->doRollback>=0);
-  if((0==db->doRollback)
-     && (db->priorChanges < sqlite3_total_changes(db->dbh))){
-    /* Execute before-commit hooks and leaf checks */
-    fsl_size_t x = 0;
-    for( ; !rc && (x < db->beforeCommit.used); ++x ){
-      char const * sql = (char const *)db->beforeCommit.list[x];
-      /* MARKER(("Running before-commit code: [%s]\n", sql)); */
-      if(sql) rc = fsl_db_exec_multi( db, "%s", sql );
-    }
-    if(!rc && db->f && (FSL_DBROLE_REPO & db->role)){
-      /*
-         i don't like this one bit - this is low-level SCM
-         functionality in an otherwise generic routine. Maybe we need
-         fsl_cx_transaction_begin/end() instead.
-
-         Much later: we have that routine now but will need to replace
-         all relevant calls to fsl_db_transaction_begin()/end() with
-         those routines before we can consider moving this there.
-      */
-      rc = fsl__repo_leafdo_pending_checks(db->f);
-      if(!rc && db->f->cache.toVerify.used){
-        rc = fsl__repo_verify_at_commit(db->f);
-      }else{
-        fsl_repo_verify_cancel(db->f);
+  if(0==db->doRollback){
+    if(db->priorChanges < sqlite3_total_changes(db->dbh)){
+      /* Execute before-commit hooks and leaf checks */
+      fsl_size_t x = 0;
+      for( ; !rc && (x < db->beforeCommit.used); ++x ){
+        char const * sql = (char const *)db->beforeCommit.list[x];
+        /* MARKER(("Running before-commit code: [%s]\n", sql)); */
+        if(sql) rc = fsl_db_exec_multi( db, "%s", sql );
       }
+      if(!rc && db->f && (FSL_DBROLE_REPO & db->role)){
+        /*
+          i don't like this one bit - this is low-level SCM
+          functionality in an otherwise generic routine. Maybe we need
+          fsl_cx_transaction_begin/end() instead.
+
+          Much later: we have that routine now but will need to replace
+          all relevant calls to fsl_db_transaction_begin()/end() with
+          those routines before we can consider moving this there.
+        */
+        rc = fsl__repo_leafdo_pending_checks(db->f);
+        if(!rc && db->f->cache.toVerify.used){
+          rc = fsl__repo_verify_at_commit(db->f);
+        }else{
+          fsl_repo_verify_cancel(db->f);
+        }
+      }
+      db->doRollback = rc ? 1 : 0;
     }
-    db->doRollback = rc ? 1 : 0;
+  }
+  if(db->doRollback && db->f){
+    /**
+       If a rollback is underway, certain fsl_cx caches might be
+       referring to record IDs which were injected as part of the
+       being-rolled-back transaction. The only(?) reasonably sane way
+       to deal with that is to flush all relevant caches. It is
+       unfortunate that this bit is in the db class, as opposed to the
+       fsl_cx class, but we currently have no hook which would allow
+       us to trigger this from that class.
+    */
+    fsl__bccache_reset(&db->f->cache.blobContent);
+    fsl__cx_mcache_clear(db->f);
   }
   fsl_db_cleanup_beforeCommit(db);
   fsl_db_reset_change_count(db);
@@ -16973,11 +16966,12 @@ FSL_CARD_F_LIST_NEEDS_SORT = 0x01
    Transfers the contents of d into f->cache.mcache. If d is
    dynamically allocated then it is also freed. In any case, after
    calling this the caller must behave as if the deck had been passed
-   to fsl_deck_finalize().
+   to fsl_deck_finalize() and (if it is unknown whether d is stack
+   allocated) also freed.
 
    If manifest caching is disabled for f, d is immediately finalized.
 */
-static void fsl__cx_mcache_insert(fsl_cx *f, fsl_deck * d){
+static void fsl__cx_mcache_insert(fsl_cx * const f, fsl_deck * d){
   if(!(f->flags & FSL_CX_F_MANIFEST_CACHE)){
     fsl_deck_finalize(d);
     return;
@@ -17013,7 +17007,7 @@ static void fsl__cx_mcache_insert(fsl_cx *f, fsl_deck * d){
          send it through fsl_deck_finalize() because that would try to
          clean up the memory we just transferred ownership of to
          mc->decks[i]. So... */
-      mc->decks[i].allocStamp = 0;
+      mc->decks[i].allocStamp = NULL;
       fsl_free(d);
     }
     d = pBaseline;
@@ -26632,11 +26626,25 @@ static int fdb__format(
 
     //MARKER(("Chunk header... a=%u, b=%u, na=%u, nb=%u, skip=%d\n", a, b, na, nb, skip));
     if(pBuilder->chunkHeader
+       /* The following bit is a kludge to keep from injecting a chunk
+          header between chunks which are directly adjacent.
+
+          The problem, however, is that we cannot skip _reliably_
+          without also knowing how the next chunk aligns. If we skip
+          it here, the _previous_ chunk header may well be telling
+          the user a lie with regards to line numbers.
+
+          Fossil itself does not have this issue because it generates
+          these chunk headers directly in this routine, instead of in
+          the diff builder, depending on a specific flag being set in
+          builder->opt. Also (related), in that implementation, fossil
+          will collapse chunks which are separated by less than the
+          context distance into contiguous chunks (see below). Because
+          we farm out the chunkHeader lines to the builder, we cannot
+          reliably do that here.
+       */
 #if 0
-       /* The following two bits are a kludge to keep from injecting
-          a chunk header between chunks which are directly adjacent */
-       && pBuilder->lnLHS != (uint32_t)(na ? a+skip+1 : a+skip)-1
-       && pBuilder->lnRHS != (uint32_t)(nb ? b+skip+1 : b+skip)-1
+       && !skip
 #endif
        ){
       rc = pBuilder->chunkHeader(pBuilder,
@@ -26660,8 +26668,10 @@ static int fdb__format(
            format. The generated header lines say we're skipping X
            lines but we then end up including lines which that header
            says to skip. As a workaround, we'll only run this when
-           pBuilder->chunkHeader is NULL, noting that fossil's
-           diff builder interface does not have that method.
+           pBuilder->chunkHeader is NULL, noting that fossil's diff
+           builder interface does not have that method (and thus
+           doesn't have this issue, instead generating chunk headers
+           directly in this algorithm).
 
            Without this block, our "utxt" diff builder can mimic
            fossil's non-diff builder unified diff format, except that
@@ -27399,6 +27409,9 @@ static int fdb__json1_edit(fsl_dibu * const b,
   rc = fdb__out(b, "5,[", 3); RC;
   fsl_dline_change_spans(lineLHS, lineRHS, &chng);
   for(i=x=0; i<(int)chng.n; i++){
+    if(i>0){
+      rc = fdb__out(b, ",", 1); RC;
+    }
     rc = fdb__outj(b, lineLHS->z + x, (int)chng.a[i].iStart1 - x); RC;
     x = chng.a[i].iStart1;
     rc = fdb__out(b, ",", 1); RC;
@@ -27442,8 +27455,44 @@ static fsl_dibu * fsl__diff_builder_json1(void){
   return rc;
 }
 
+/**
+   State for the text-mode unified(-ish) diff builder.  We do some
+   hoop-jumping here in order to combine runs of delete/insert pairs
+   into a group of deletes followed by a group of inserts. It's a
+   cosmetic detail only but it makes for more readable output.
+*/
+struct DiBuUnified {
+  /** True if currently processing a block of deletes, else false. */
+  bool deleting;
+  /** Buffer for insertion lines which are part of delete/insert
+      pairs. */
+  fsl_buffer bufIns;
+};
+typedef struct DiBuUnified DiBuUnified;
+
+#define UIMPL(V) DiBuUnified * const V = (DiBuUnified*)b->pimpl
+/**
+   If utxt diff builder b has any INSERT lines to flush, this
+   flushes them. Sets b->impl->deleting to false. Returns non-0
+   on output error.
+*/
+static int fdb__utxt_flush_ins(fsl_dibu * const b){
+  int rc = 0;
+  UIMPL(p);
+  p->deleting = false;
+  if(p->bufIns.used>0){
+    rc = fdb__out(b, fsl_buffer_cstr(&p->bufIns), p->bufIns.used);
+    fsl_buffer_reuse(&p->bufIns);
+  }
+  return rc;
+}
+
 static int fdb__utxt_start(fsl_dibu * const b){
   int rc = 0;
+  UIMPL(p);
+  p->deleting = false;
+  if(p->bufIns.mem) fsl_buffer_reuse(&p->bufIns);
+  else fsl_buffer_reserve(&p->bufIns, 1024 * 4);
   if(0==(FSL_DIFF2_NOINDEX & b->opt->diffFlags)){
     rc = fdb__outf(b,"Index: %s\n%.66c\n",
                    b->opt->nameLHS/*RHS?*/, '=');
@@ -27458,40 +27507,106 @@ static int fdb__utxt_start(fsl_dibu * const b){
 static int fdb__utxt_chunkHeader(fsl_dibu* const b,
                                  uint32_t lnnoLHS, uint32_t linesLHS,
                                  uint32_t lnnoRHS, uint32_t linesRHS ){
-  if(FSL_DIFF2_LINE_NUMBERS & b->opt->diffFlags){
-    return fdb__outf(b, "%.40c\n", '~');
-  }else{
-    return fdb__outf(b, "@@ -%" PRIu32 ",%" PRIu32
+  /*
+     Annoying cosmetic bug: the libf impl of this diff will sometimes
+     render two directly-adjecent chunks with a separator, e.g.:
+  */
+
+  // $ f-vdiff --forat u 072d63965188 a725befe5863 -l '*vdiff*' | head -30
+  // Index: f-apps/f-vdiff.c
+  // ==================================================================
+  // --- f-apps/f-vdiff.c
+  // +++ f-apps/f-vdiff.c
+  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  //     36     36    fsl_buffer fname;
+  //     37     37    fsl_buffer fcontent1;
+  //     38     38    fsl_buffer fcontent2;
+  //     39     39    fsl_buffer fhash;
+  //     40     40    fsl_list globs;
+  //            41 +  fsl_diff_opt diffOpt;
+  //            42 +  fsl_diff_builder * diffBuilder;
+  //     41     43  } VDiffApp = {
+  //     42     44  NULL/*glob*/,
+  //     43     45  5/*contextLines*/,
+  //     44     46  0/*sbsWidth*/,
+  //     45     47  0/*diffFlags*/,
+  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  //     46     48  0/*brief*/,
+  //     47     49  fsl_buffer_empty_m/*fname*/,
+  //     48     50  fsl_buffer_empty_m/*fcontent1*/,
+
+  /*
+    Note now the chunks before/after the second ~~~ line are
+    consecutive lines of code. In fossil(1) that case is accounted for
+    in the higher-level diff engine, which can not only collapse
+    adjacent blocks but also does the rendering of chunk headers in
+    that main algorithm (something we cannot do in the library because
+    we need the fsl_dibu to be able to output to arbitrary
+    distinations). We can only _partially_ account for it here,
+    eliminating the extraneous ~~~ line when we're in line-number
+    mode. In non-line-number mode we have to output the chunk header
+    as-is. If we skip it then the _previous_ chunk header, if any,
+    will contain incorrect numbers for the chunk, invaliding the diff
+    for purposes of tools which import unified-format diffs.
+  */
+  int rc = fdb__utxt_flush_ins(b);
+  if(0==rc){
+    if(FSL_DIFF2_LINE_NUMBERS & b->opt->diffFlags){
+      rc = (lnnoLHS == b->lnLHS+1 && lnnoRHS == b->lnRHS+1)
+        ? 0
+        : fdb__outf(b, "%.40c\n", '~');
+    }else{
+      rc = fdb__outf(b, "@@ -%" PRIu32 ",%" PRIu32
                      " +%" PRIu32 ",%" PRIu32 " @@\n",
                      lnnoLHS, linesLHS, lnnoRHS, linesRHS);
+    }
   }
+  return rc;
 }
 
 
 static int fdb__utxt_skip(fsl_dibu * const b, uint32_t n){
   //MARKER(("SKIP\n"));
+  int rc = fdb__utxt_flush_ins(b);
   b->lnLHS += n;
   b->lnRHS += n;
-  return 0;
+  return rc;
 }
 
-/** Outputs line numbers to b->opt->out. */
+/**
+   Outputs line numbers, if configured to, to b->opt->out.
+
+   - 2 line numbers = common lines
+   - lnL only = deletion
+   - lnR only = insertion
+*/
 static int fdb__utxt_lineno(fsl_dibu * const b, uint32_t lnL, uint32_t lnR){
   int rc = 0;
   if(FSL_DIFF2_LINE_NUMBERS & b->opt->diffFlags){
-    rc = lnL
-      ? fdb__outf(b, "%s%6" PRIu32 "%s ",
-                  (lnR ? "" : b->opt->ansiColor.deletion),
-                  lnL,
-                  (lnR ? "" : b->opt->ansiColor.reset))
-      : fdb__out(b, "       ", 7);
+    UIMPL(p);
+    if(lnL){ // common or delete
+      rc = fdb__outf(b, "%s%6" PRIu32 "%s ",
+                     (lnR ? "" : b->opt->ansiColor.deletion),
+                     lnL,
+                     (lnR ? "" : b->opt->ansiColor.reset));
+    }else if(p->deleting){ // insert during deletion grouping
+      rc = fsl_buffer_append(&p->bufIns, "       ", 7);
+    }else{ // insert w/o deleting grouping
+      rc = fdb__out(b, "       ", 7);
+    }
     if(0==rc){
-      rc = lnR
-      ? fdb__outf(b, "%s%6" PRIu32 "%s ",
-                  (lnL ? "" : b->opt->ansiColor.insertion),
-                  lnR,
-                  (lnL ? "" : b->opt->ansiColor.reset))
-      : fdb__out(b, "       ", 7);
+      if(!lnL && lnR && p->deleting){ // insert during deletion grouping
+        rc = fsl_buffer_appendf(&p->bufIns, "%s%6" PRIu32 "%s ",
+                                b->opt->ansiColor.insertion,
+                                lnR, b->opt->ansiColor.reset);
+      }else if(lnR){ // common or insert w/o deletion grouping.
+        rc = fdb__outf(b, "%s%6" PRIu32 "%s ",
+                       (lnL ? "" : b->opt->ansiColor.insertion),
+                       lnR,
+                       (lnL ? "" : b->opt->ansiColor.reset));
+      }else{ // deletion
+        rc = fdb__out(b, "       ", 7);
+      }
     }
   }
   return rc;
@@ -27499,24 +27614,45 @@ static int fdb__utxt_lineno(fsl_dibu * const b, uint32_t lnL, uint32_t lnR){
 
 static int fdb__utxt_common(fsl_dibu * const b, fsl_dline const * pLine){
   //MARKER(("COMMON\n"));
-  ++b->lnLHS;
-  ++b->lnRHS;
-  const int rc = fdb__utxt_lineno(b, b->lnLHS, b->lnRHS);
+  int rc = fdb__utxt_flush_ins(b);
+  if(0==rc){
+    ++b->lnLHS;
+    ++b->lnRHS;
+    rc = fdb__utxt_lineno(b, b->lnLHS, b->lnRHS);
+  }
   return rc ? rc : fdb__outf(b, " %.*s\n", (int)pLine->n, pLine->z);
 }
+
 static int fdb__utxt_insertion(fsl_dibu * const b, fsl_dline const * pLine){
   //MARKER(("INSERT\n"));
+  int rc;
   ++b->lnRHS;
-  const int rc = fdb__utxt_lineno(b, 0, b->lnRHS);
-  return rc ? rc : fdb__outf(b, "%s+%.*s%s\n",
-                             b->opt->ansiColor.insertion,
-                             (int)pLine->n, pLine->z,
-                             b->opt->ansiColor.reset);
+  rc = fdb__utxt_lineno(b, 0, b->lnRHS);
+  if(0==rc){
+    UIMPL(p);
+    if(p->deleting){
+      rc = fsl_buffer_appendf(&p->bufIns, "%s+%.*s%s\n",
+                              b->opt->ansiColor.insertion,
+                              (int)pLine->n, pLine->z,
+                              b->opt->ansiColor.reset);
+    }else{
+      rc = fdb__outf(b, "%s+%.*s%s\n",
+                     b->opt->ansiColor.insertion,
+                     (int)pLine->n, pLine->z,
+                     b->opt->ansiColor.reset);
+    }
+  }
+  return rc;
 }
 static int fdb__utxt_deletion(fsl_dibu * const b, fsl_dline const * pLine){
   //MARKER(("DELETE\n"));
-  ++b->lnLHS;
-  const int rc = fdb__utxt_lineno(b, b->lnLHS, 0);
+  UIMPL(p);
+  int rc = p->deleting ? 0 : fdb__utxt_flush_ins(b);
+  if(0==rc){
+    p->deleting = true;
+    ++b->lnLHS;
+    rc = fdb__utxt_lineno(b, b->lnLHS, 0);
+  }
   return rc ? rc : fdb__outf(b, "%s-%.*s%s\n",
                              b->opt->ansiColor.deletion,
                              (int)pLine->n, pLine->z,
@@ -27539,13 +27675,28 @@ static int fdb__utxt_edit(fsl_dibu * const b,
   return rc;
 }
 
+static int fdb__utxt_finish(fsl_dibu * const b){
+  int rc = fdb__utxt_flush_ins(b);
+  UIMPL(p);
+  fsl_buffer_reuse(&p->bufIns);
+  return rc;
+}
+
 static void fdb__utxt_finalize(fsl_dibu * const b){
+  UIMPL(p);
+  fsl_buffer_clear(&p->bufIns);
   fsl_free(b);
 }
 
 static fsl_dibu * fsl__diff_builder_utxt(void){
-  fsl_dibu * rc = fsl_dibu_alloc(0);
+  const DiBuUnified DiBuUnified_empty = {
+  false, fsl_buffer_empty_m
+  };
+  fsl_dibu * rc = fsl_dibu_alloc(sizeof(DiBuUnified));
   if(!rc) return NULL;
+  assert(NULL!=rc->pimpl);
+  assert(NULL==rc->finally);
+  *((DiBuUnified*)rc->pimpl) = DiBuUnified_empty;
   rc->chunkHeader = fdb__utxt_chunkHeader;
   rc->start = fdb__utxt_start;
   rc->skip = fdb__utxt_skip;
@@ -27554,10 +27705,11 @@ static fsl_dibu * fsl__diff_builder_utxt(void){
   rc->deletion = fdb__utxt_deletion;
   rc->replacement = fdb__utxt_replacement;
   rc->edit = fdb__utxt_edit;
-  rc->finish = NULL;
+  rc->finish = fdb__utxt_finish;
   rc->finalize = fdb__utxt_finalize;
   return rc;
 }
+#undef UIMPL
 
 struct DiBuTcl {
   /** Buffer for TCL-format string conversion */
@@ -30514,9 +30666,12 @@ fsl_id_t fsl_leaves_computed_latest(fsl_cx * const f){
 }
 
 void fsl_leaves_computed_cleanup(fsl_cx * const f){
-  fsl_cx_exec(f, "DROP TABLE IF EXISTS temp.leaves");
-  /* Potential TODO: if we run into locking problems in
-     dropping this, switch to DELETE ... */
+  if(fsl_cx_exec(f, "DROP TABLE IF EXISTS temp.leaves")){
+    /**
+       Naively assume that locking is keeping us from dropping it,
+       and simply empty it instead. */
+    fsl_cx_exec(f, "DELETE FROM temp.leaves");
+  }
 }
 
 #undef MARKER
@@ -35840,6 +35995,12 @@ int fsl_cidiff(fsl_cx * const f, fsl_cidiff_opt const * const opt){
   fsl_deck_finalize(&d1);
   fsl_deck_finalize(&d2);
   return rc;
+}
+
+
+bool fsl_repo_forbids_delta_manifests(fsl_cx * const f){
+  return fsl_config_get_bool(f, FSL_CONFDB_REPO, false,
+                             "forbid-delta-manifests");
 }
 
 #undef MARKER

@@ -4157,17 +4157,6 @@ typedef struct fsl_dibu fsl_dibu;
    The internal APIs which drive each instance of this class guaranty
    that if any method of this class returns non-0 (an error code) then
    no futher methods will be called except for finalize().
-
-   Potential TODO: add a two-phase option to this interface. If
-   builder->passes is greater than 0, builder->currentPass gets set to
-   the current pass number (1 or 2) then it gets passed the diff once
-   for each pass the builder needs, updating the currentPass flag
-   between runs. The first phase is simply for it to analyze what
-   needs to be done and the second is to do it. That would allow,
-   e.g. the split-mode impl to avoid buffering all of the output
-   because the first pass would allow it to calculate the width it
-   needs for outputing the text columns. It would also allow for it to
-   dynamically resize the line number columns more easily.
 */
 struct fsl_dibu {
   /**
@@ -6759,7 +6748,9 @@ FSL_EXPORT fsl_lib_configurable_t fsl_lib_configurable;
 struct fsl_cx_config {
   /**
      If true, all SQL which goes through the fossil engine
-     will be traced to the fsl_output()-configured channel.
+     will be traced to stdout.
+
+     TODO: replace this with a FILE pointer.
   */
   bool traceSql;
   /**
@@ -7344,9 +7335,10 @@ FSL_EXPORT char fsl_repo_is_readonly(fsl_cx const * f);
 
 /**
    Tries to open a checked-out fossil repository db in the given
-   directory. The (dirName, checkParentDirs) parameters are passed on
-   as-is to fsl_ckout_db_search() to find a checkout db, so see that
-   routine for how it searches.
+   directory. This routine canonicalizes its dirName argument using
+   fsl_file_canonical_name(), then passes that and checkParentDirs on
+   to fsl_ckout_db_search() to find a checkout db, so see that routine
+   for how it searches.
 
    If this routine finds/opens a checkout, it also tries to open
    the repository database from which the checkout derives, and
@@ -7378,11 +7370,10 @@ FSL_EXPORT char fsl_repo_is_readonly(fsl_cx const * f);
    for some historical bits which "could" be refactored. It "might be
    interesting" to eventually provide a variant which opens a checkout
    db file directly. We have the infrastructure, just need some
-   refactoring. We would need to add the working directory path to the
-   checkout db's config (`vvar` table), but should otherwise require
-   no trickery or incompatibilities with fossil(1).
+   refactoring. It "shouldn't" require any trickery or
+   incompatibilities with fossil(1).
 */
-FSL_EXPORT int fsl_ckout_open_dir( fsl_cx * f, char const * dirName,
+FSL_EXPORT int fsl_ckout_open_dir( fsl_cx * const f, char const * dirName,
                                    bool checkParentDirs );
 
 
@@ -7404,7 +7395,7 @@ FSL_EXPORT int fsl_ckout_open_dir( fsl_cx * f, char const * dirName,
    Achtung: if dirName is relative, this routine might not find a
    checkout where it would find one if given an absolute path (because
    it traverses the path string given it instead of its canonical
-   form). Wether this is a bug or a feature is not yet clear. When in
+   form). Whether this is a bug or a feature is not yet clear. When in
    doubt, use fsl_file_canonical_name() to normalize the directory
    name before passing it in here. If it turns out that we always want
    that behaviour, this routine will be modified to canonicalize the
@@ -7419,6 +7410,11 @@ FSL_EXPORT int fsl_ckout_open_dir( fsl_cx * f, char const * dirName,
    interpret this as a NULL string, i.e. the current directory.)
 
    - FSL_RC_OOM if allocation of a filename buffer fails.
+
+   TODO?
+
+   - Why was the decision made not to canonicalize dirName from here?
+   We might want to change that.
 
 */
 FSL_EXPORT int fsl_ckout_db_search( char const * dirName,
@@ -7552,8 +7548,9 @@ FSL_EXPORT char const * fsl_cx_ckout_dir_name(fsl_cx const * f,
 /**
    Returns a handle to f's main db (which may or may not have any
    relationship to the repo/checkout/config databases - that's
-   unspecified!), or NULL if !f. The returned object is owned by f and
-   the client MUST NOT do any of the following:
+   unspecified!), or NULL if f has no opened repo or checkout db.  The
+   returned object is owned by f and the client MUST NOT do any of the
+   following:
 
    - Close the db handle.
 
@@ -7566,16 +7563,20 @@ FSL_EXPORT char const * fsl_cx_ckout_dir_name(fsl_cx const * f,
    Clients MAY add new user-defined functions, use the handle with
    fsl_db_prepare(), and other "mundane" db-related tasks.
 
+   Note that the global config db uses a separate db handle accessible
+   via fsl_cx_db_config().
+
    Design notes:
 
    The current architecture uses an in-memory db as the "main" db and
-   attaches the repo, checkout, and config dbs using well-defined
-   names. Even so, it uses separate fsl_db instances to track each one
-   so that we "could," if needed, switch back to a multi-db-instance
-   approach if needed.
+   attaches the repo and checkout dbs using well-defined names. Even
+   so, it uses separate fsl_db instances to track each one so that we
+   "could," if needed, switch back to a multi-db-instance approach if
+   needed.
 
    @see fsl_cx_db_repo()
    @see fsl_cx_db_ckout()
+   @see fsl_cx_db_config()
 */
 FSL_EXPORT fsl_db * fsl_cx_db( fsl_cx * const f );
 
@@ -7636,7 +7637,7 @@ FSL_EXPORT bool fsl_cx_has_ckout(fsl_cx const * const f );
    If f already has a config database opened then:
 
    1) If passed a NULL dbName or dbName is an empty string then this
-   function returns without side-effects.
+   function returns 0 without side-effects.
 
    2) If passed a non-NULL/non-empty dbName, any existing config db is
    closed before opening the named one. The database is created and
@@ -7650,15 +7651,6 @@ FSL_EXPORT bool fsl_cx_has_ckout(fsl_cx const * const f );
 
    Results are undefined if f is NULL or not properly initialized.
 
-   TODO(?): strongly consider supporting non-attached
-   (i.e. sqlite3_open()'d) use of the config db. Comments in fossil(1)
-   suggest that it is possible to lock the config db for other apps
-   when it is attached to a long-running op by a fossil process. That
-   change is easier said than done, as it affects many different
-   functions and rules out any SQL JOINs against the rest of the
-   repository state (whether any such joins are needed is as yet
-   unknown).
-
    @see fsl_cx_db_config()
    @see fsl_config_close()
    @see fsl_config_global_preferred_name()
@@ -7667,23 +7659,27 @@ FSL_EXPORT int fsl_config_open( fsl_cx * const f, char const * dbName );
 
 /**
    Closes/detaches the database connection opened by
-   fsl_config_open(). Returns 0 on success or if no config
-   db is opened. It may propagate an error from the db layer
-   if closing/detaching the db fails.
+   fsl_config_open(). If the config db is not opened, this
+   is a harmless no-op. Note that it does not propagate db-closing
+   errors because there is no sensible recovery strategy from
+   such cases.
 
-   ACHTUNG: the config handle cannot be closed if any active
-   (stepped-but-not-reset) statements are opened on any of f's db
-   handles because the attached config db will be locked for the
-   duration of such statements. In such cases, this routine WILL FAIL.
+   ACHTUNG: it is imperative that any prepared statements compiled
+   against the config db be finalized before closing the db. Any
+   statements prepared using fsl_db_prepare_cached() against the
+   config db will be automatically finalized by the closing process.
 
    @see fsl_cx_db_config()
    @see fsl_config_open()
 */
-FSL_EXPORT int fsl_config_close( fsl_cx * const f );
+FSL_EXPORT void fsl_config_close( fsl_cx * const f );
 
 /**
-   If f has an opened/attached configuration db then its handle is
-   returned, else 0 is returned.
+   If f has an opened configuration db then its handle is returned,
+   else 0 is returned.
+
+   For API consistency's sake, the db handle's "MAIN" name is aliased
+   to fsl_db_role_label(FSL_DBROLE_CONFIG).
 
    @see fsl_config_open()
    @see fsl_config_close()
@@ -8138,7 +8134,7 @@ FSL_EXPORT int fsl_cx_hash_filename( fsl_cx * f, bool useAlternate,
    appends the current directory's name to the given buffer. Returns 0
    on success.
 */
-FSL_EXPORT int fsl_cx_getcwd(fsl_cx * f, fsl_buffer * pOut);
+FSL_EXPORT int fsl_cx_getcwd(fsl_cx * const f, fsl_buffer * const pOut);
 
 /**
    Returns the same as passing fsl_cx_db() to
@@ -8450,7 +8446,7 @@ FSL_OPEN_F_RWC = FSL_OPEN_F_RW | FSL_OPEN_F_CREATE,
 FSL_OPEN_F_SCHEMA_VALIDATE = 0x20,
 
 /**
-   Used by fsl_db_open() to to tell 1the underlying db connection to
+   Used by fsl_db_open() to to tell the underlying db connection to
    trace all SQL to stdout. This is often useful for testing,
    debugging, and learning about what's going on behind the scenes.
 */
@@ -9896,7 +9892,8 @@ FSL_EXPORT int fsl_db_open( fsl_db * const db, char const * dbFile,
 
 /**
    Closes the given db handle and frees any resources owned by
-   db. This is a no-op if db is NULL.
+   db. Results are undefined if db is NULL. If db is not opened,
+   this is a harmless no-op.
 
    If db was allocated using fsl_db_malloc() (as determined by
    examining db->allocStamp) then this routine also fsl_free()s it,
@@ -14065,14 +14062,14 @@ FSL_EXPORT fsl_int_t fsl_leaves_computed_count(fsl_cx * const f);
    FSL_RC_OOM, f's error state will be updated with information about
    the error.
 */
-FSL_EXPORT fsl_id_t fsl_leaves_computed_latest(fsl_cx * f);
+FSL_EXPORT fsl_id_t fsl_leaves_computed_latest(fsl_cx * const f);
 
 /**
    Cleans up any db-side resources created by fsl_leaves_compute().
    e.g. drops the temporary table created by that routine. Any errors
    are silenty ignored.
 */
-FSL_EXPORT void fsl_leaves_computed_cleanup(fsl_cx * f);
+FSL_EXPORT void fsl_leaves_computed_cleanup(fsl_cx * const f);
 
 /**
    Returns true if f's current repository has the
@@ -14086,7 +14083,7 @@ FSL_EXPORT void fsl_leaves_computed_cleanup(fsl_cx * f);
 
    Results are undefined if f has no opened repository.
 */
-FSL_EXPORT bool fsl_repo_forbids_delta_manifests(fsl_cx * f);
+FSL_EXPORT bool fsl_repo_forbids_delta_manifests(fsl_cx * const f);
 
 /**
    This is a variant of fsl_ckout_manifest_write() which writes data
@@ -14842,11 +14839,11 @@ FSL_EXPORT void fsl_ckout_version_info(fsl_cx * const f, fsl_id_t * const rid,
                                        fsl_uuid_cstr * const uuid );
 
 /**
-   Given a fsl_cx with an opened checkout, and a filename, this
-   function canonicalizes zOrigName to a form suitable for use as
+   Given a fsl_cx with an opened checkout, and a file/directory name,
+   this function canonicalizes zOrigName to a form suitable for use as
    an in-repo filename, _appending_ the results to pOut. If pOut is
-   NULL, it performs its normal checking but does not write a
-   result, other than to return 0 for success.
+   NULL, it performs its normal checking but does not write a result,
+   other than to return 0 for success.
 
    As a special case, if zOrigName refers to the top-level checkout
    directory, it resolves to either "." or "./", depending on whether
@@ -15679,8 +15676,8 @@ FSL_EXPORT int fsl_checkin_enqueue(fsl_cx * f,
    @see fsl_checkin_discard()
    @see fsl_checkin_commit()
 */
-FSL_EXPORT int fsl_checkin_dequeue(fsl_cx * f,
-                                        fsl_checkin_queue_opt const * opt);
+FSL_EXPORT int fsl_checkin_dequeue(fsl_cx * const f,
+                                   fsl_checkin_queue_opt const * opt);
 
 /**
    Returns true if the file named by zName is in f's current file
@@ -15728,7 +15725,7 @@ FSL_EXPORT bool fsl_checkin_is_enqueued(fsl_cx * const f,
    @see fsl_checkin_commit()
    @see fsl_checkin_T_add()
 */
-FSL_EXPORT void fsl_checkin_discard(fsl_cx * f);
+FSL_EXPORT void fsl_checkin_discard(fsl_cx * const f);
 
 /**
    Parameters for fsl_checkin_commit().
@@ -17131,7 +17128,7 @@ FSL_EXPORT int fsl_vfile_unload_except(fsl_cx * const f, fsl_id_t vid);
    database, destroy it, and re-create it. fossil(1) is able, in some cases,
    to automatically recover from this situation.
 */
-FSL_EXPORT int fsl_ckout_fingerprint_check(fsl_cx * f);
+FSL_EXPORT int fsl_ckout_fingerprint_check(fsl_cx * const f);
 
 /**
    Looks for the given file in f's current checkout. If relativeToCwd
@@ -18502,7 +18499,8 @@ struct fsl__bccache {
   */
   fsl__bccache_line * list;
   /**
-     RIDs of all artifacts currently in the cache.
+     RIDs of all artifacts currently in the this->list
+     cache.
   */
   fsl_id_bag inCache;
   /**
@@ -18612,10 +18610,14 @@ struct fsl_cx {
 
      dbMain always points to &this->dbMem (a temp or ":memory:"
      (unspecified!) db opened by fsl_cx_init()), and the
-     repo/ckout/config DBs get ATTACHed to that one. Their separate
-     handles (this->{repo,ckout,config}.db) are used to store the name
+     repo/ckout DBs get ATTACHed to that one. Their separate
+     handles (this->{repo,ckout}.db) are used to store the name
      and file path to each one (even though they have no real db
      handle associated with them).
+
+     As of 20211230, f->config.db is its own handle, not ATTACHed with
+     the others. Its db gets renamed to
+     fsl_db_role_label(FSL_DBROLE_CONFIG).
 
      Internal code should rely as little as possible on the actual
      arrangement of internal DB handles, and should use
@@ -19082,14 +19084,6 @@ struct fsl_cx {
     } stmt;
 
     /**
-       A list of `blob.rid` values referring to
-       delta children. Managed by fsl_content_get().
-    */
-    struct {
-      fsl_id_t * list;
-      unsigned int capacity;
-    } deltaIds;
-    /**
        Holds a list of temp-dir names. Must be allocated using
        fsl_temp_dirs_get() and freed using fsl_temp_dirs_free().
     */
@@ -19229,9 +19223,6 @@ struct fsl_cx {
         fsl_stmt_empty_m/*contentSize*/,        \
         fsl_stmt_empty_m/*???*/ \
       },                                    \
-      {/*deltaIds*/                 \
-        NULL/*list*/, 0/*capacity*/ \
-      },                              \
       NULL/*tempDirs*/ \
     }/*cache*/,                         \
     {/*ticket*/                             \
@@ -19464,8 +19455,8 @@ int fsl__content_deltify(fsl_cx * const f, fsl_id_t rid,
     then the caller will have to find the record id himself by using
     the UUID (see fsl_uuid_to_rid()).
 */
-int fsl__content_new( fsl_cx * f, fsl_uuid_cstr uuid, bool isPrivate,
-                     fsl_id_t * newId );
+int fsl__content_new( fsl_cx * const f, fsl_uuid_cstr uuid,
+                      bool isPrivate, fsl_id_t * const newId );
 
 /** @internal
 
@@ -20634,6 +20625,21 @@ int fsl__call_xlink_listeners(fsl_deck * const d);
      it were a symlink.
 */
 int fsl__symlink_copy(char const *zFrom, char const *zTo, bool realLink);
+
+/** @internal
+   Clears the contents of f->cache.mcache.
+*/
+void fsl__cx_mcache_clear(fsl_cx * const f);
+
+/** @internal
+
+   Translates sqliteCode (or, if it's 0, sqlite3_errcode()) to an
+   approximate FSL_RC_xxx match but treats SQLITE_ROW and SQLITE_DONE
+   as non-errors (result code 0). If non-0 is returned db's error
+   state is updated with the current sqlite3_errmsg() string.
+*/
+int fsl__db_errcode(fsl_db * const db, int sqliteCode);
+
 
 /** @internal
 
