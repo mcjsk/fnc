@@ -1159,9 +1159,8 @@ main(int argc, const char **argv)
 #if DEBUG
 	fcli.clientFlags.verbose = 2;	/* Verbose error reporting. */
 #endif
-	fcli.cliFlags = fnc_init.cliflags_global;
-	fcli.appHelp = &fnc_init.fnc_help;
-	rc = fcli_setup(argc, argv);
+	rc = fcli_setup_v2(argc, argv, fnc_init.cliflags_global,
+			   &fnc_init.fnc_help);
 	if (rc)
 		goto end;
 
