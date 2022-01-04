@@ -5101,13 +5101,13 @@ fnc_diff_builder(fsl_dibu **ptr, fsl_uuid_cstr xminus, fsl_uuid_cstr xplus,
     fsl_buffer *buf)
 {
 	fsl_dibu			*diffbld = NULL;
-	fsl_diff_opt			*diffopt = NULL;
-	struct fsl_diff_opt_ansi	 ansiopt = {"", "", "", ""};
+	fsl_dibu_opt			*diffopt = NULL;
+	struct fsl_dibu_opt_ansi	 ansiopt = {"", "", "", ""};
 	int				 rc = FSL_RC_OK;
 
 	*ptr = NULL;
 
-	diffopt = fsl_malloc(sizeof(fsl_diff_opt));
+	diffopt = fsl_malloc(sizeof(fsl_dibu_opt));
 	if (diffopt == NULL)
 		return RC(FSL_RC_ERROR, "%s", "fsl_malloc");
 

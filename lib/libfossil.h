@@ -268,7 +268,7 @@ typedef int64_t fsl_time_t;
 
 */
 
-/** @file fossil-util.h
+/** @file util.h
 
     This file declares a number of utility classes and routines used by
     libfossil. All of them considered "public", suitable for direct use
@@ -1181,8 +1181,8 @@ FSL_EXPORT int fsl_str_is_date2(const char *z);
 FSL_EXPORT int fsl_buffer_reserve( fsl_buffer * const b, fsl_size_t n );
 
 /**
-   If b is a "managed" buffer, this is a no-op and returns 0,
-   else b is an "external" buffer and it...
+   If b is a "managed" buffer, this is a no-op and returns 0, else b
+   is an "external" buffer and it...
 
    - Allocates enough memory to store b->used bytes plus a NUL
      terminator.
@@ -1217,17 +1217,18 @@ FSL_EXPORT int fsl_buffer_materialize( fsl_buffer * const b );
 
    ACHTUNG: it is NEVER legal to pass a pointer which may get
    reallocated, as doing so may change its address, invaliding the
-   resulting `b->mem` pointer.
+   resulting `b->mem` pointer. Similarly, it is never legal to pass it
+   scope-local memory unless b's lifetime is limited to that scope.
+
+   If b->mem is not NULL, this function first passes the buffer to
+   fsl_buffer_clear() to ensure that this routine does not leak any
+   dynamic memory it may already own.
 
    Results are undefined if mem is NULL, but n may be 0.
 
-   Results are undefined if b is already an external buffer or has
-   managed memory. When re-initializing buffers with this function,
-   use fsl_buffer_clear() between calls to ensure that b's state is
-   correct. Likewise, results are undefined if passed a completely
-   uninitialized buffer object. _Always_ initialize new buffer objects
-   by copying fsl_buffer_empty or (when appropriate)
-   fsl_buffer_empty_m.
+   Results are undefined if passed a completely uninitialized buffer
+   object. _Always_ initialize new buffer objects by copying
+   fsl_buffer_empty or (when appropriate) fsl_buffer_empty_m.
 
    @see fsl_buffer_materialize()
 */
@@ -2364,7 +2365,8 @@ FSL_EXPORT int fsl_file_access(const char *zFilename, int flags);
 */
 FSL_EXPORT int fsl_file_canonical_name2(const char *zRoot,
                                         const char *zOrigName,
-                                        fsl_buffer *pOut, bool slash);
+                                        fsl_buffer * const pOut,
+                                        bool slash);
 
 /**
    Equivalent to fsl_file_canonical_name2(NULL, zOrigName, pOut, slash).
@@ -2373,7 +2375,7 @@ FSL_EXPORT int fsl_file_canonical_name2(const char *zRoot,
 */
 
 FSL_EXPORT int fsl_file_canonical_name(const char *zOrigName,
-                                       fsl_buffer *pOut, bool slash);
+                                       fsl_buffer * const pOut, bool slash);
 
 /**
    Calculates the "directory part" of zFilename and _appends_ it to
@@ -2400,7 +2402,7 @@ FSL_EXPORT int fsl_file_canonical_name(const char *zOrigName,
    given path - only string evaluation.
 */
 FSL_EXPORT int fsl_file_dirpart(char const * zFilename, fsl_int_t nLen,
-                                fsl_buffer * pOut, bool leaveSlash);
+                                fsl_buffer * const pOut, bool leaveSlash);
 
 
 /**
@@ -3646,128 +3648,6 @@ FSL_EXPORT char *fsl_htmlize_str(const char *zIn, fsl_int_t n);
 */
 FSL_EXPORT fsl_size_t fsl_htmlize_xlate(int c, char const ** xlate);
 
-/**
-   Flags for use with text-diff generation APIs,
-   e.g. fsl_diff_text().
-
-   Maintenance reminders:
-
-   - These values are holy and must not be changed without also
-     changing the corresponding code in diff.c.
-
-   - Where these entries semantically overlap with their fsl_diff2_flag_e
-     counterparts, they MUST have the same values because some internal APIs
-     are used by both of the diff APIs.
-
-   @deprecated Prefer fsl_diff2_flag_e and fsl_diff_v2() instead.
-*/
-enum fsl_diff_flag_e {
-/** Ignore end-of-line whitespace */
-FSL_DIFF_IGNORE_EOLWS = 0x01,
-/** Ignore end-of-line whitespace */
-FSL_DIFF_IGNORE_ALLWS = 0x03,
-/** Generate a side-by-side diff */
-FSL_DIFF_SIDEBYSIDE =   0x04,
-/** Missing shown as empty files */
-FSL_DIFF_VERBOSE =      0x08,
-/** Show filenames only. Not used in this impl! */
-FSL_DIFF_BRIEF =        0x10,
-/** Render HTML. */
-FSL_DIFF_HTML =         0x20,
-/** Show line numbers. */
-FSL_DIFF_LINENO =       0x40,
-/** Suppress optimizations (debug). */
-FSL_DIFF_NOOPT =        0x0100,
-/** Invert the diff (debug). */
-FSL_DIFF_INVERT =       0x0200,
-/* ACHTUNG: do not use 0x0400 because of semantic
-   collision with FSL_DIFF2_CONTEXT_ZERO */
-/** Only display if not "too big." */
-FSL_DIFF_NOTTOOBIG =    0x0800,
-/** Strip trailing CR */
-FSL_DIFF_STRIP_EOLCR =    0x1000,
-/**
-   This flag tells text-mode diff generation to add ANSI color
-   sequences to some output.  The colors are currently hard-coded
-   and non-configurable. This has no effect for HTML output, and
-   that flag trumps this one. It also currently only affects
-   unified diffs, not side-by-side.
-
-   Maintenance reminder: this one currently has no counterpart in
-   fossil(1), is not tracked in the same way, and need not map to an
-   internal flag value.
-*/
-FSL_DIFF_ANSI_COLOR =     0x2000
-};
-
-/**
-   Generates a textual diff from two text inputs and writes
-   it to the given output function.
-
-   pA and pB are the buffers to diff.
-
-   contextLines is the number of lines of context to output. This
-   parameter has a built-in limit of 2^16, and values larger than
-   that get truncated. A value of 0 is legal, in which case no
-   surrounding context is provided. A negative value translates to
-   some unspecified default value.
-
-   sbsWidth specifies the width (in characters) of the side-by-side
-   columns. If sbsWidth is not 0 then this function behaves as if
-   diffFlags contains the FSL_DIFF_SIDEBYSIDE flag. If sbsWidth is
-   negative, OR if diffFlags explicitly contains
-   FSL_DIFF_SIDEBYSIDE and sbsWidth is 0, then some default width
-   is used. This parameter has a built-in limit of 255, and values
-   larger than that get truncated to 255.
-
-   diffFlags is a mask of fsl_diff_flag_t values. Not all of the
-   fsl_diff_flag_t flags are yet [sup]ported.
-
-   The output is sent to out(outState,...). If out() returns non-0
-   during processing, processing stops and that result is returned
-   to the caller of this function.
-
-   Returns 0 on success, FSL_RC_OOM on allocation error,
-   FSL_RC_MISUSE if any arguments are invalid, FSL_RC_TYPE if any
-   of the content appears to be binary (contains embedded NUL
-   bytes), FSL_RC_RANGE if some range is exceeded (e.g. the maximum
-   number of input lines).
-
-   None of (pA, pB, out) may be NULL.
-
-   TODOs:
-
-   - Add a predicate function for outputing only matching
-   differences, analog to fossil(1)'s regex support (but more
-   flexible).
-
-   - Expose the raw diff-generation bits via the internal API
-   to facilitate/enable the creation of custom diff formats.
-
-   @see fsl_diff_v2()
-   @deprecated Prefer fsl_diff_v2() for new code.
-*/
-FSL_EXPORT int fsl_diff_text(fsl_buffer const *pA, fsl_buffer const *pB,
-                             fsl_output_f out, void * outState,
-                             short contextLines, short sbsWidth,
-                             int diffFlags );
-
-/**
-   Functionally equivalent to:
-
-   ```
-   fsl_diff_text(pA, pB, fsl_output_f_buffer, pOut,
-   contextLines, sbsWidth, diffFlags);
-   ```
-
-   Except that it returns FSL_RC_MISUSE if !pOut.
-
-   @see fsl_diff_v2()
-   @deprecated Prefer fsl_diff_v2() for new code.
-*/
-FSL_EXPORT int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
-                                       fsl_buffer *pOut, short contextLines,
-                                       short sbsWidth, int diffFlags );
 
 /** @enum fsl_diff2_flag_e
 
@@ -3780,9 +3660,18 @@ FSL_EXPORT int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *p
    - Some of these values are holy and must not be changed without
      also changing the corresponding code in diff2.c.
 
-   - Where these entries semantically overlap with their fsl_diff_flag_e
-     counterparts, they MUST have the same values because some internal APIs
-     are used by both of the diff APIs.
+   - Where these entries semantically overlap with their
+     older/deprecated fsl_diff_flag_e counterparts, they MUST (for the
+     sake of avoiding client-side Grief) have the same values because
+     some internal APIs are used by both of the diff APIs.
+
+  @see fsl_dibu_impl_flags_e
+
+   TODO?:
+
+   - Move the diff-builder-specific flags from here to, possibly, the
+     fsl_dibu::implFlags member or a new flag member dedicated to this
+     type of flag.
 */
 enum fsl_diff2_flag_e {
 /** Ignore end-of-line whitespace. Applies to
@@ -3831,12 +3720,6 @@ FSL_DIFF2_LINE_NUMBERS = 0x10000,
 FSL_DIFF2_NOINDEX = 0x20000,
 
 /**
-   Tells the TCL diff builder that the complete output and each line
-   should be wrapped in {...}.
-*/
-FSL_DIFF2_TCL_BRACES = 0x40000,
-
-/**
    Reserved for client-defined diff builder use.
 */
 FSL_DIFF2_CLIENT1 = 0x01000000,
@@ -3855,6 +3738,40 @@ FSL_DIFF2_CLIENT4 = 0x08000000
 };
 
 /**
+   Flags for use with various concrete fsl_dibu implementations.
+   Specifically, these are flags for fsl_dibu::implFlags (as opposed
+   to fsl_dibu::pimplFlags, which must not be modified by clients).
+
+   Note that it is perfectly legitimate for different entries to have
+   the same values, but different semantics, so long as the different
+   entries are specific to different fsl_dibu types.
+*/
+enum fsl_dibu_impl_flags_e {
+/**
+   Tells the TCL diff builder that the complete output and each line
+   should be wrapped in {...}.
+*/
+FSL_DIBU_TCL_BRACES = 0x01,
+/**
+   Tells the TCL diff builder that the squiggly braces embedded in any
+   output (as opposed to the braces added by FSL_DIBU_TCL_BRACES)
+   need to be backslash-escaped. Whether this is required depends on
+   how the output will be used.
+*/
+FSL_DIBU_TCL_BRACES_ESC = 0x02,
+/**
+   Tells the TCL diff builder to generate a complete TCL/TK app as output.
+   The resulting script can (if tcl and tk are installed) be run with
+   tclsh to get a graphical diff.
+
+   Note that this flag includes both FSL_DIBU_TCL_BRACES and
+   FSL_DIBU_TCL_BRACES_ESC.
+*/
+FSL_DIBU_TCL_TK = 0x07
+
+};
+
+/**
    An instance of this class is used to convey certain state to
    fsl_dibu objects. Some of this state is configuration
    provided by the client and some is volatile, used for communicating
@@ -3865,7 +3782,7 @@ FSL_DIFF2_CLIENT4 = 0x08000000
    ostensibly optional fields be filled out. Documenting that is TODO,
    as the builders get developed.
 */
-struct fsl_diff_opt {
+struct fsl_dibu_opt {
   /**
      Flags from the fsl_diff2_flag_e enum.
   */
@@ -3918,6 +3835,11 @@ struct fsl_diff_opt {
      Output destination. Any given builder might, depending on how it
      actually constructs the diff, buffer output and delay calling
      this until its finish() method is called.
+
+     Note that not all diff builders use this. e.g. a diff builder
+     which outputs to an ncurses widget cannot do so via this method
+     and instead has to use the drawing methods of that API. Thus is
+     is legal for this method to be NULL for some builders.
   */
   fsl_output_f out;
   /**
@@ -3927,7 +3849,6 @@ struct fsl_diff_opt {
      higher-level code.
   */
   void * outState;
-
   /**
      EXPERIMENTAL AND SUBJECT TO CHANGE.
 
@@ -3943,7 +3864,7 @@ struct fsl_diff_opt {
      empty strings to simplify diff builder color integration. The
      exception is the reset member - see its docs for details.
   */
-  struct fsl_diff_opt_ansi {
+  struct fsl_dibu_opt_ansi {
     /**
        Color escape sequence for inserted lines.
     */
@@ -3968,11 +3889,11 @@ struct fsl_diff_opt {
 };
 
 /** Convenience typedef. */
-typedef struct fsl_diff_opt fsl_diff_opt;
+typedef struct fsl_dibu_opt fsl_dibu_opt;
 
-/** Initialized-with-defaults fsl_diff_opt structure, intended for
+/** Initialized-with-defaults fsl_dibu_opt structure, intended for
     const-copy initialization. */
-#define fsl_diff_opt_empty_m {\
+#define fsl_dibu_opt_empty_m {\
   0/*diffFlags*/, 5/*contextLines*/, 0/*columnWidth*/,\
   NULL/*nameLHS*/,NULL/*hashLHS*/,                       \
   NULL/*nameRHS*/, NULL/*hashRHS*/,                      \
@@ -3981,9 +3902,9 @@ typedef struct fsl_diff_opt fsl_diff_opt;
     ""/*reset*/}                                                \
 }
 
-/** Initialized-with-defaults fsl_diff_opt structure, intended for
+/** Initialized-with-defaults fsl_dibu_opt structure, intended for
     non-const copy initialization. */
-extern const fsl_diff_opt fsl_diff_opt_empty;
+extern const fsl_dibu_opt fsl_dibu_opt_empty;
 
 /**
    Information about each line of a file being diffed.
@@ -4171,7 +4092,7 @@ struct fsl_dibu {
      order to implement diff inversion (swapping the LHS/RHS of a
      diff).)
   */
-  fsl_diff_opt * opt;
+  fsl_dibu_opt * opt;
   /**
      Can optionally be set by factory functions to some internal
      opaque value, so that non-member routines specific to that type can determine
@@ -4324,9 +4245,13 @@ struct fsl_dibu {
      This optional method is similar to this->finish() but it is not
      called by the library. It is intended to be called, if it's not
      NULL, by the client after they are done, e.g., looping over a
-     series of diffs with the same build. Some builders can use this
+     series of diffs with the same builder. Some builders can use this
      to flush any final state, e.g. dumping out change count totals or
      some such.
+
+     As an example, the TCL/TK-based builder, when the FSL_DIBU_TCL_TK
+     flag is set on this->implFlag, embeds a TK script in the output
+     from this method.
   */
   int (*finally)(fsl_dibu* const b);
   /**
@@ -4339,7 +4264,6 @@ struct fsl_dibu {
      process twice. See this->passNumber for details.
   */
   bool twoPass;
-
   /**
      Gets set to the "pass number" immediately before this->start() is
      called, starting with pass number 1. This value is only relevant
@@ -4347,7 +4271,7 @@ struct fsl_dibu {
      of operation, e.g. data collection in pass 1 and actual work in
      pass 2. Note that all of the diff-building API methods are called
      for both passes, including start() and finish().  Only finalize()
-     is not affected by this.
+     and finally() are not affected by this.
   */
   unsigned short passNumber;
   /**
@@ -4356,8 +4280,17 @@ struct fsl_dibu {
   */
   void * pimpl;
   /**
-     Impl-specific int for tracking basic output state, e.g.  of
-     opening/closing tags. This must not be modified by clients.
+     Space for private, implementation-specific flags, e.g. for
+     tracking basic output state, e.g. of opening/closing tags. This
+     must not be modified by clients.
+  */
+  unsigned int pimplFlags;
+  /**
+     Space for implementation-specific flags which clients may set to
+     modify the dibu's behaviour. This is different from
+     fsl_dibu_opt::diffFlags in that these flags are specific to a
+     given dibu type. See the fsl_dibu_impl_flags_e enum for the list
+     of flags for the library-provided diff builders.
   */
   unsigned int implFlags;
   /**
@@ -4365,6 +4298,13 @@ struct fsl_dibu {
      for builders which need to distinguish that somehow (e.g. adding
      a separator before each file after the first). Implementations
      which use this should increment it in their start() method.
+
+     Maintenance reminder/TODO: we can't increment this from the main
+     diff driver because... we possibly could, but we'd need to patch
+     the various diff builders which currently do this themselves.
+     The main diff driver doesn't have enough info to know when to set
+     it, though. That "could" be done in this->finally() but that
+     method is optional.
   */
   uint32_t fileCount;
   /**
@@ -4379,6 +4319,31 @@ struct fsl_dibu {
      sets this to 0 before calling this->start().
   */
   uint32_t lnRHS;
+
+  /**
+     Metrics maintained by the core diff algorithm. These are updated
+     during the first pass through a given fsl_diff_v2() run. They are
+     NEVER reset by the builder algo because it cannot know if the
+     user wants a running total or a per-file total. Clients running
+     diffs in a loop may want to reset them on each loop. The simplest
+     way is to cop fsl_dibu_empty.metrics over them. It is legal for a
+     given builder to reset these in their start(), finish(), or
+     finally() methods, depending on how the builder is used.
+
+     Note that all metrics apply to the RHS version, not the LHS.
+  */
+  struct {
+    /** Number of lines inserted performed so far. */
+    uint32_t insertions;
+    /** Number of lines deleted so far. */
+    uint32_t deletions;
+    /** Number of line-level edits performed so far. */
+    uint32_t edits;
+    /** Number of line replacements performed so far.
+        These are different from edits in that the whole line
+        differs in the LHS/RHS. */
+    uint32_t replacements;
+  } metrics;
 };
 
 /** Initialized-with-defaults fsl_dibu structure, intended for
@@ -4389,8 +4354,9 @@ struct fsl_dibu {
   NULL/*insertion()*/,NULL/*deletion()*/, NULL/*replacement()*/, \
   NULL/*edit()*/, NULL/*finish()*/, NULL/*finally()*/,NULL/*finalize()*/, \
   false/*twoPass*/,0U/*passNumber*/, \
-  NULL/*pimpl*/, 0U/*implFlags*/,0U/*fileCount*/,         \
-  0/*lnLHS*/,0/*lnRHS*/ \
+  NULL/*pimpl*/, 0U/*pimplFlags*/,0U/*implFlags*/,0U/*fileCount*/,         \
+  0/*lnLHS*/,0/*lnRHS*/,                                              \
+  {/*metric*/0,0,0} \
 }
 
 /** Initialized-with-defaults fsl_dibu structure, intended for
@@ -4457,7 +4423,7 @@ FSL_DIBU_JSON1,
    command. Its output is functionally identical to fossil(1)'s
    default diff output except that by default includes an Index line
    at the top of each file (use the FSL_DIFF2_NOINDEX flag in its
-   fsl_diff_opt::diffFlags to disable that).
+   fsl_dibu_opt::diffFlags to disable that).
 
    Supported flags:
 
@@ -4567,7 +4533,7 @@ FSL_EXPORT void fsl_dibu_finalizer(fsl_dibu * const b);
 
    @see fsl_dibu_factory()
    @see fsl_diff_text()
-   @see fsl_diff_raw_v2()
+   @see fsl_diff_v2_raw()
 */
 FSL_EXPORT int fsl_diff_v2(fsl_buffer const * pv1,
                            fsl_buffer const * pv2,
@@ -4588,6 +4554,8 @@ FSL_EXPORT int fsl_diff_v2(fsl_buffer const * pv1,
    See fsl_diff_v2() for the details, all of which apply except for
    the output:
 
+   - cfg may be NULL, in which case fsl_dibu_opt_empty is used.
+
    - cfg->out is ignored.
 
    - On success, *outRaw is assigned to the output array and ownership
@@ -4597,9 +4565,8 @@ FSL_EXPORT int fsl_diff_v2(fsl_buffer const * pv1,
 */
 FSL_EXPORT int fsl_diff_v2_raw(fsl_buffer const * pv1,
                                fsl_buffer const * pv2,
-                               fsl_diff_opt const * const cfg,
+                               fsl_dibu_opt const * const cfg,
                                int **outRaw );
-
 
 /**
    If zDate is an ISO8601-format string, optionally with a .NNN
@@ -5583,8 +5550,15 @@ FSL_EXPORT int fsl_buffer_merge3(fsl_buffer * const pPivot,
    Appends the first n bytes of string z to buffer b in the form of
    TCL-format string literal. If n<0 then fsl_strlen() is used to
    determine the length. Returns 0 on success, FSL_RC_OOM on error.
+
+   If the 2nd argument is true, squiggly braces within the string are
+   escaped, else they are not. Whether that's required or not depends
+   on how the resulting TCL will be used. If it will be eval'd directly,
+   it must be escaped. If it will be read as a file and tokenized, it
+   needn't be.
  */
 FSL_EXPORT int fsl_buffer_append_tcl_literal(fsl_buffer * const b,
+                                             bool escapeSquigglies,
                                              char const * z, fsl_int_t n);
 
 
@@ -6127,7 +6101,7 @@ FSL_EXPORT bool fsl_might_be_utf16(fsl_buffer const * const b, bool * isReversed
   Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
 */
 
-/** @file fossil-core.h
+/** @file core.h
 
   This file declares the core SCM-related public APIs.
 */
@@ -6230,8 +6204,7 @@ typedef struct fsl_stmt fsl_stmt;
    `fsl_cx_db_repo()` will return `NULL` if a repo database is not
    attached.
 
-   @see fsl_db_role_label()
-   @see fsl_cx_db_name_for_role()
+   @see fsl_db_role_name()
    @see fsl_cx_db_file_for_role()
 */
 enum fsl_dbrole_e {
@@ -6939,9 +6912,7 @@ FSL_EXPORT int fsl_cx_err_get( fsl_cx * const f, char const ** str, fsl_size_t *
 /**
    Returns f's error state object. This pointer is guaranteed by the
    API to be stable until f is finalized, but its contents are
-   modified my routines as part of the error reporting process.
-
-   Returns NULL if !f.
+   modified by many routines as part of the error reporting process.
 */
 FSL_EXPORT fsl_error const * fsl_cx_err_get_e(fsl_cx const * f);
 
@@ -7063,66 +7034,6 @@ FSL_EXPORT int fsl_outputf( fsl_cx * const f, char const * fmt, ... );
 FSL_EXPORT int fsl_outputfv( fsl_cx * const f, char const * fmt, va_list args );
 
 /**
-   Opens the given db file name as f's repository. Returns 0 on
-   success. On error it sets f's error state and returns that code
-   unless the error was FSL_RC_MISUSE (which indicates invalid
-   arguments and it does not set the error state).
-
-   Returns FSL_RC_ACCESS if f already has an opened repo db (use
-   fsl_repo_close() or fsl_ckout_close() to close it).
-
-   Returns FSL_RC_NOT_FOUND if repoDbFile is not found, as this
-   routine cannot create a new repository db.
-
-   Results are undefined if any argument is NULL.
-
-   When a repository is opened, the fossil-level user name
-   associated with f (if any) is overwritten with the default user
-   from the repo's login table (the one with uid=1). Thus
-   fsl_cx_user_get() may return a value even if the client has not
-   called fsl_cx_user_set().
-
-   It would be nice to have a parameter specifying that the repo
-   should be opened read-only. That's not as straightforward as it
-   sounds because of how the various dbs are internally managed
-   (via one db handle). Until then, the permissions of the
-   underlying repo file will determine how it is opened. i.e. a
-   read-only repo will be opened read-only.
-
-
-   Potentially interesting side-effects:
-
-   - On success this re-sets several bits of f's configuration to
-   match the repository-side settings.
-
-   @see fsl_repo_create()
-   @see fsl_repo_close()
-*/
-FSL_EXPORT int fsl_repo_open( fsl_cx * const f, char const * repoDbFile/*, char readOnlyCurrentlyIgnored*/ );
-
-/**
-   If fsl_repo_open_xxx() has been used to open a respository db, this
-   call closes that db.
-
-   Returns 0 on success or if no config db is opened. It may propagate
-   an error from the db layer if closing/detaching the db
-   fails. Returns FSL_RC_MISUSE if f has any transactions pending or
-   if f still has a checkout opened (a checkout db is only valid in
-   conjunction with its repository db).
-
-   If a repository is opened "indirectly" via fsl_ckout_open_dir()
-   then attempting to close it using this function will result in
-   FSL_RC_MISUSE and f's error state will hold a description of the
-   problem (the checkout must be closed before closing its
-   repository). Such a repository will be closed implicitly when the
-   checkout db is closed.
-
-   @see fsl_repo_open()
-   @see fsl_repo_create()
-*/
-FSL_EXPORT int fsl_repo_close( fsl_cx * const f );
-
-/**
    Sets or clears (if userName is NULL or empty) the default
    repository user name for operations which require one.
 
@@ -7165,279 +7076,10 @@ FSL_EXPORT char const * fsl_cx_user_guess(fsl_cx * const f);
 FSL_EXPORT char const * fsl_cx_user_get( fsl_cx const * const f );
 
 /**
-   Configuration parameters for fsl_repo_create().  Always
-   copy-construct these from fsl_repo_create_opt_empty
-   resp. fsl_repo_create_opt_empty_m in order to ensure proper
-   behaviour vis-a-vis default values.
+   Functionally equivalent to calling fsl_config_close() and
+   fsl_close_scm_dbs().
 
-   TODOs:
-
-   - Add project name/description, and possibly other
-   configuration bits.
-
-   - Allow client to set password for default user (currently set
-   randomly, as fossil(1) does).
-*/
-struct fsl_repo_create_opt {
-  /**
-     The file name for the new repository.
-  */
-  char const * filename;
-  /**
-     Fossil user name for the admin user in the new repo.  If NULL,
-     defaults to the Fossil context's user (see
-     fsl_cx_user_get()). If that is NULL, it defaults to
-     "root" for historical reasons.
-  */
-  char const * username;
-
-  /**
-     The comment text used for the initial commit. If NULL or empty
-     (starts with a NUL byte) then no initial check is
-     created. fossil(1) is largely untested with that scenario (but
-     it seems to work), so for compatibility it is not recommended
-     that this be set to NULL.
-
-     The default value (when copy-initialized) is "egg". There's a
-     story behind the use of "egg" as the initial checkin comment,
-     and it all started with a typo: "initial chicken"
-  */
-  char const * commitMessage;
-
-  /**
-     Mime type for the commit message (manifest N-card). Manifests
-     support this but fossil(1) has never (as of 2021-02) made use of
-     it. It is provided for completeness but should, for
-     compatibility's sake, probably not be set, as the fossil UI may
-     not honor it. The implied default is text/x-fossil-wiki. Other
-     ostensibly legal values include text/plain and text/x-markdown.
-     This API will accept any value, but results are technically
-     undefined with any values other than those listed above.
-  */
-  char const * commitMessageMimetype;
-
-  /**
-     If not NULL and not empty, fsl_repo_create() will use this
-     repository database to copy the configuration, copying over
-     the following settings:
-
-     - The reportfmt table, overwriting any existing entries.
-
-     - The user table fields (cap, info, mtime, photo) are copied
-     for the "system users".  The system users are: anonymous,
-     nobody, developer, reader.
-
-     - The vast majority of the config table is copied, arguably
-     more than it should (e.g. the 'manifest' setting).
-  */
-  char const * configRepo;
-
-  /**
-     If false, fsl_repo_create() will fail if this->filename
-     already exists.
-  */
-  bool allowOverwrite;
-  
-};
-typedef struct fsl_repo_create_opt fsl_repo_create_opt;
-
-/** Initialized-with-defaults fsl_repo_create_opt struct, intended
-    for in-struct initialization. */
-#define fsl_repo_create_opt_empty_m {           \
-    NULL/*filename*/,                           \
-    NULL/*username*/,                         \
-    "egg"/*commitMessage*/,                   \
-    NULL/*commitMessageMimetype*/,            \
-    NULL/*configRepo*/,                       \
-    false/*allowOverwrite*/                     \
-    }
-
-/** Initialized-with-defaults fsl_repo_create_opt struct, intended
-    for copy-initialization. */
-FSL_EXPORT const fsl_repo_create_opt fsl_repo_create_opt_empty;
-
-/**
-   Creates a new repository database using the options provided in the
-   second argument. If f is not NULL, it must be a valid context
-   instance, though it need not have an opened checkout/repository. If
-   f has an opened repo or checkout, this routine closes them but that
-   closing _will fail_ if a transaction is currently active!
-
-   If f is NULL, a temporary context is used for creating the
-   repository, in which case the caller will not have access to
-   detailed error information (only the result code) if this operation
-   fails. In that case, the resulting repository file will, on
-   success, be found at the location referred to by opt.filename.
-
-   The opt argument may not be NULL.
-
-   If opt->allowOverwrite is false (0) and the file exists, it fails
-   with FSL_RC_ALREADY_EXISTS, otherwise is creates/overwrites the
-   file. This is a destructive operation if opt->allowOverwrite is
-   true, so be careful: the existing database will be truncated and
-   re-created.
-
-   This operation installs the various "static" repository schemas
-   into the db, sets up some default settings, and installs a
-   default user.
-
-   This operation always closes any repository/checkout opened by f
-   because setting up the new db requires wiring it to f to set up
-   some of the db-side infrastructure. The one exception is if
-   argument validation fails, in which case f's repo/checkout-related
-   state are not modified. Note that closing will fail if a
-   transaction is currently active and that, in turn, will cause this
-   operation to fail.
-
-   See the fsl_repo_create_opt docs for more details regarding the
-   creation options.
-
-   On success, 0 is returned and f (if not NULL) is left with the
-   new repository opened and ready for use. On error, f's error
-   state is updated and any number of the FSL_RC_xxx codes may be
-   returned - there are no less than 30 different _potential_ error
-   conditions on the way to creating a new repository.
-
-   If initialization of the repository fails, this routine will
-   attempt to remove its partially-initialize corpse from the
-   filesystem but will ignore any errors encountered while doing so.
-
-   Example usage:
-
-   ```
-   fsl_repo_create_opt opt = fsl_repo_create_opt_empty;
-   int rc;
-   opt.filename = "my.fossil";
-   // ... any other opt.xxx you want to set, e.g.:
-   // opt.user = "fred";
-   // Assume fsl is a valid fsl_cx instance:
-   rc = fsl_repo_create(fsl, &opt);
-   if(rc) { ...error... }
-   else {
-     fsl_db * db = fsl_cx_db_repo(f);
-     assert(db); // == the new repo db
-   ...
-   }
-   ```
-
-   @see fsl_repo_open()
-   @see fsl_repo_close()
-*/
-FSL_EXPORT int fsl_repo_create(fsl_cx * f, fsl_repo_create_opt const * opt );
-
-/**
-   UNTESTED.
-
-   Returns true if f has an opened repository database which is
-   opened in read-only mode, else returns false.
-*/
-FSL_EXPORT char fsl_repo_is_readonly(fsl_cx const * f);
-
-/**
-   Tries to open a checked-out fossil repository db in the given
-   directory. This routine canonicalizes its dirName argument using
-   fsl_file_canonical_name(), then passes that and checkParentDirs on
-   to fsl_ckout_db_search() to find a checkout db, so see that routine
-   for how it searches.
-
-   If this routine finds/opens a checkout, it also tries to open
-   the repository database from which the checkout derives, and
-   fails if it cannot. The library never allows a checkout to be
-   opened without its corresponding repository partner because
-   a checkout has hard dependencies on the repo's state.
-
-   Returns 0 on success. If there is an error opening or validating
-   the checkout or its repository db, f's error state will be
-   updated. Error codes/conditions include:
-
-   - FSL_RC_MISUSE if f is NULL.
-
-   - FSL_RC_ACCESS if f already has and opened checkout.
-
-   - FSL_RC_OOM if an allocation fails.
-
-   - FSL_RC_NOT_FOUND if no checkout is foud or if a checkout's
-   repository is not found.
-
-   - FSL_RC_RANGE if dirname is not NULL but has a length of 0.
-
-   - Various codes from fsl_getcwd() (if dirName is NULL).
-
-   - Various codes if opening the associated repository DB fails.
-
-   TODO: there's really nothing in the architecture which restricts a
-   checkout db to being in the same directory as the checkout, except
-   for some historical bits which "could" be refactored. It "might be
-   interesting" to eventually provide a variant which opens a checkout
-   db file directly. We have the infrastructure, just need some
-   refactoring. It "shouldn't" require any trickery or
-   incompatibilities with fossil(1).
-*/
-FSL_EXPORT int fsl_ckout_open_dir( fsl_cx * const f, char const * dirName,
-                                   bool checkParentDirs );
-
-
-/**
-   Searches the given directory (or the current directory if dirName
-   is 0) for a fossil checkout database file named one of (_FOSSIL_,
-   .fslckout).  If it finds one, it returns 0 and appends the file's
-   path to pOut if pOut is not 0.  If neither is found AND if
-   checkParentDirs is true an then it moves up the path one directory
-   and tries again, until it hits the root of the dirPath (see below
-   for a note/caveat).
-
-   If dirName is NULL then it behaves as if it had been passed the
-   absolute path of the current directory (as determined by
-   fsl_getcwd()).
-
-   This function does no normalization of dirName. Because of that...
-
-   Achtung: if dirName is relative, this routine might not find a
-   checkout where it would find one if given an absolute path (because
-   it traverses the path string given it instead of its canonical
-   form). Whether this is a bug or a feature is not yet clear. When in
-   doubt, use fsl_file_canonical_name() to normalize the directory
-   name before passing it in here. If it turns out that we always want
-   that behaviour, this routine will be modified to canonicalize the
-   name.
-
-   This routine can return at least the following error codes:
-
-   - FSL_RC_NOT_FOUND: either no checkout db was found or the given
-   directory was not found.
-
-   - FSL_RC_RANGE if dirName is an empty string. (We could arguably
-   interpret this as a NULL string, i.e. the current directory.)
-
-   - FSL_RC_OOM if allocation of a filename buffer fails.
-
-   TODO?
-
-   - Why was the decision made not to canonicalize dirName from here?
-   We might want to change that.
-
-*/
-FSL_EXPORT int fsl_ckout_db_search( char const * dirName,
-                                    bool checkParentDirs,
-                                    fsl_buffer * const pOut );
-
-
-/**
-   If fsl_ckout_open_dir() (or similar) has been used to open a
-   checkout db, this call closes that db.
-
-   Returns 0 on success or if no config db is opened. It may propagate
-   an error from the db layer if closing/detaching the db
-   fails. Returns FSL_RC_MISUSE if f has any transactions pending.
-
-   This also closes the repository which was implicitly opened for the
-   checkout.
-*/
-FSL_EXPORT int fsl_ckout_close( fsl_cx * const f );
-
-/**
-   Attempts to close any opened databases (repo/checkout/config). This
-   will fail if any transactions are pending. Any databases which are
+   This will fail if any transactions are pending. Any databases which are
    already closed are silently skipped. This will fail if any cached
    statements are currently active for the being-closed
    db(s). "Active" means that fsl_db_prepare_cached() was used without
@@ -7494,36 +7136,6 @@ FSL_EXPORT char const * fsl_cx_db_file_config(fsl_cx const * f,
    Note that the role of FSL_DBROLE_TEMP is invalid here.
 */
 FSL_EXPORT char const * fsl_cx_db_file_for_role(fsl_cx const * f,
-                                                fsl_dbrole_e r,
-                                                fsl_size_t * len);
-
-/**
-   Similar to fsl_cx_db_file_ckout() and friends except that it
-   applies to DB name (as opposed to DB _file_ name) implied by the
-   specified role (2nd parameter). If no such role is opened, or the
-   role is invalid, NULL is returned.
-
-   If the 3rd argument is not NULL, it is set to the length, in bytes,
-   of the returned string. The returned strings are static and
-   NUL-terminated.
-
-   This is the "easiest" way to figure out the DB name of the given
-   role, independent of what order f's databases were opened
-   (because the first-opened DB is always called "main").
-
-   The Fossil-standard names of its primary databases are: "localdb"
-   (checkout), "repository", and "configdb" (global config DB), but
-   libfossil uses "ckout", "repo", and "cfg", respective. So long as
-   queries use table names which unambiguously refer to a given
-   database, the DB name is normally not needed. It is needed when
-   creating new non-TEMP db tables and views. By default such
-   tables/views would go into the "main" DB, which is actually a
-   transient DB in this API, so it's important to use the correct DB
-   name when creating such constructs.
-
-   Note that the role of FSL_DBROLE_TEMP is invalid here.
-*/
-FSL_EXPORT char const * fsl_cx_db_name_for_role(fsl_cx const * f,
                                                 fsl_dbrole_e r,
                                                 fsl_size_t * len);
 
@@ -7664,22 +7276,30 @@ FSL_EXPORT int fsl_config_open( fsl_cx * const f, char const * dbName );
    errors because there is no sensible recovery strategy from
    such cases.
 
+   This operation only fails if the config db is opened and has
+   an active transaction, in which case f's error state is updated
+   to reflect that cause of the error.
+
    ACHTUNG: it is imperative that any prepared statements compiled
    against the config db be finalized before closing the db. Any
    statements prepared using fsl_db_prepare_cached() against the
    config db will be automatically finalized by the closing process.
 
+   Potential TODO: if a transaction is pending, force a rollback and
+   close the db anyway. If we do that, this function will change to
+   return void.
+
    @see fsl_cx_db_config()
    @see fsl_config_open()
 */
-FSL_EXPORT void fsl_config_close( fsl_cx * const f );
+FSL_EXPORT int fsl_config_close( fsl_cx * const f );
 
 /**
    If f has an opened configuration db then its handle is returned,
    else 0 is returned.
 
    For API consistency's sake, the db handle's "MAIN" name is aliased
-   to fsl_db_role_label(FSL_DBROLE_CONFIG).
+   to fsl_db_role_name(FSL_DBROLE_CONFIG).
 
    @see fsl_config_open()
    @see fsl_config_close()
@@ -8297,6 +7917,16 @@ FSL_EXPORT int fsl_cx_interrupted(fsl_cx const * const f);
 */
 FSL_EXPORT bool fsl_cx_allows_symlinks(fsl_cx * const f, bool forceRecheck);
 
+/**
+   Closes any opened repository and/or checkout database(s) opened by
+   f. Returns 0 on success or if no dbs are opened (noting that this
+   does NOT close the separate global configuration db: see
+   fsl_config_close()). Returns FSL_RC_MISUSE if the opened SCM
+   db(s) have an opened transaction, but that behaviour may
+   change in the future to force a rollback and close the database(s).
+*/
+FSL_EXPORT int fsl_close_scm_dbs(fsl_cx * const f);
+
 #if 0
 /**
    DO NOT USE - not yet tested and ready.
@@ -8336,8 +7966,7 @@ FSL_EXPORT time_t fsl_cx_time_adj(fsl_cx const * f, time_t clock);
 #if defined(__cplusplus)
 } /*extern "C"*/
 #endif
-#endif
-/* ORG_FOSSIL_SCM_FSL_CORE_H_INCLUDED */
+#endif /* ORG_FOSSIL_SCM_FSL_CORE_H_INCLUDED */
 /* end of file ./include/fossil-scm/core.h */
 /* start of file ./include/fossil-scm/db.h */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
@@ -8432,6 +8061,19 @@ FSL_OPEN_F_RW = 0x02,
 /**
    Flag for fsl_db_open() specifying that the db should be opened in
    read-write mode, creating the db if it does not already exist.
+
+   ACHTUNG: this flag propagates from an OPEN'd db handle to the
+   ATTACH SQL command run via that handle, such that ATTACHing a
+   non-existing db file will fail if the FSL_OPEN_F_CREATE flag is
+   _not_ used. Historically (prior to 2022-01-01), fsl_db_open() would
+   automatically apply this flag to DBs named ":memory:" or ""
+   (unnamed temp dbs), but that ended up causing a full day of
+   confusion, hair-pulling, and bug-hunting when lib-level code was
+   migrated from an anonymous temp db to a "real" db and ATTACH
+   suddenly failed. As of 2022-01-01, fsl_db_open() always takes the
+   open-mode flags as provided by the client, regardless of the DB
+   name, and never automatically rewrites them to include
+   FSL_OPEN_F_CREATE.
 */
 FSL_OPEN_F_CREATE = 0x04,
 /**
@@ -8844,9 +8486,8 @@ FSL_EXPORT fsl_stmt * fsl_stmt_malloc();
 
 
 /**
-   If db is not NULL this behaves like fsl_error_get(), using the
-   db's underlying error state. If !db then it returns
-   FSL_RC_MISUSE.
+   Behaves like fsl_error_get(), using the db's underlying error
+   state. Results are undefined if !db.
 */
 FSL_EXPORT int fsl_db_err_get( fsl_db const * const db,
                                char const ** msg, fsl_size_t * len );
@@ -9062,9 +8703,9 @@ FSL_EXPORT int fsl_stmt_finalize( fsl_stmt * const stmt );
 /**
    "Steps" the given SQL cursor one time. The return values
    FSL_RC_STEP_ROW and FSL_RC_STEP_DONE are both success cases, the
-   former indicating that one row has been fetches and the later
+   former indicating that one row has been fetched and the latter
    indicating that either no rows are left to fetch or the statement
-   is a non-fetching query.  On error some other non-zero code will be
+   is a non-fetching query. On error some other non-zero code will be
    returned.  On a db error this will update the underlying db's error
    state.  This function increments stmt->rowCount by 1 if it returns
    FSL_RC_STEP_ROW.
@@ -9074,9 +8715,12 @@ FSL_EXPORT int fsl_stmt_finalize( fsl_stmt * const stmt );
    It is only legal to call the fsl_stmt_g_xxx() and
    fsl_stmt_get_xxx() functions if this functon returns
    FSL_RC_STEP_ROW. FSL_RC_STEP_DONE is returned upon successfully
-   ending iteration or if there is no iteration to perform (e.g. a
-   UPDATE or INSERT).
+   ending iteration or if there is no iteration to perform
+   (e.g. typically an UPDATE or INSERT, but see the next paragraph).
 
+   Though the historical definition of non-fetching query was pretty
+   clear, the addition of the RETURNING keyword to sqlite3's dialect
+   means that even an INSERT or DELETE can return data.
 
    @see fsl_stmt_reset()
    @see fsl_stmt_reset2()
@@ -9149,16 +8793,16 @@ FSL_EXPORT int fsl_stmt_reset( fsl_stmt * const stmt );
 
 /**
    Returns the db handle which prepared the given statement, or
-   NULL if !stmt or stmt has not been prepared.
+   NULL if stmt has not been prepared.
 */
 FSL_EXPORT fsl_db * fsl_stmt_db( fsl_stmt * const stmt );
 
 /**
-   Returns the SQL string used to prepare the given statement, or
-   NULL if !stmt or stmt has not been prepared. If len is not NULL
-   then *len is set to the length of the returned string (which is
-   NUL-terminated). The returned bytes are owned by stmt and are
-   invalidated when it is finalized.
+   Returns the SQL string used to prepare the given statement, or NULL
+   if stmt has not been prepared. If len is not NULL then *len is set
+   to the length of the returned string (which is NUL-terminated). The
+   returned bytes are owned by stmt and are invalidated when it is
+   finalized.
 */
 FSL_EXPORT char const * fsl_stmt_sql( fsl_stmt * const stmt,
                                       fsl_size_t * const len );
@@ -9484,15 +9128,19 @@ FSL_EXPORT int fsl_db_transaction_commit(fsl_db * const db);
 FSL_EXPORT int fsl_db_transaction_rollback(fsl_db * const db);
 
 /**
-   Forces a rollback of any pending transaction in db, regardless
-   of the internal transaction begin/end counter. Returns
-   FSL_RC_MISUSE if !db or db is not opened, else returns the value
-   of the underlying ROLLBACK call. This also re-sets/frees any
-   transaction-related state held by db (e.g. db->beforeCommit).
-   Use with care, as this mucks about with db state in a way which
-   is not all that pretty and it may confuse downstream code.
+   Forces a rollback of any pending transaction in db, regardless of
+   the internal transaction begin/end counter. Returns FSL_RC_MISUSE
+   if db is not opened, else returns the value of the underlying
+   ROLLBACK call. This also re-sets/frees any transaction-related
+   state held by db (e.g. db->beforeCommit).  Use with care, as this
+   mucks about with db state in a way which is not all that pretty and
+   it may confuse downstream code.
 
    Returns 0 on success.
+
+   Never, ever use this. In 8+ years it has never proven necessary to
+   use this function, and doing so can easily lead to a mismatch in
+   transaction-using code and the transaction stack level.
 */
 FSL_EXPORT int fsl_db_rollback_force(fsl_db * const db);
 
@@ -9512,15 +9160,28 @@ FSL_EXPORT int fsl_db_rollback_force(fsl_db * const db);
    function within the same transaction will behave like a rollback
    even if they pass 0 for the second argument.
 
-   Returns FSL_RC_MISUSE if !db or the db is not opened, 0 if
-   the transaction counter is above 0, else the result of the
-   (potentially many) underlying database operations.
+   Returns FSL_RC_MISUSE if db is not opened, 0 if the transaction
+   counter is above 0, else the result of the (potentially many)
+   underlying database operations.
 
-   Unfortunate low-level co-dependency: if db->f is not NULL and
-   (db->role & FSL_DBROLE_REPO) then this function may perform
-   extra repository-related post-processing on any commit, and
-   checking the result code is particularly important for those
-   cases.
+   Unfortunate low-level co-dependency: if db->f is not NULL then this
+   function may perform extra repository-related post-processing on
+   any commit, and checking the result code is particularly important
+   for those cases.
+
+   Sidebar: this APIs pseudo-nested transaction support was initially
+   a direct port of that from fossil(1). sqlite3 added SAVEPOINT
+   support, which is essentially named, nested transaction, much later
+   on. That support may have been a better basis for this API, but it
+   didn't exist at the time and an overhaul would be both time-consuming
+   and risk all sorts of new bugs.
+
+   SAVEPOINTS: https://sqlite.org/lang_savepoint.html
+
+   Though this API does not prohibit the use of savepoints (like it
+   does direct use of BEGIN/COMMIT/ROLLBACK from SQL code), it is
+   untested with them and undesired side effects vis a vis this API's
+   transaction support cannot be entirely ruled out.
 */
 FSL_EXPORT int fsl_db_transaction_end(fsl_db * const db, bool doRollback);
 
@@ -9759,7 +9420,7 @@ FSL_EXPORT int fsl_db_get_bufferv( fsl_db * const db, fsl_buffer * const tgt,
    add a counter to their callbackState and increment it from the
    callback.
 
-   Returns FSL_RC_MISUSE if !db, db is not opened, !callback,
+   Returns FSL_RC_MISUSE if db is not opened, !callback,
    !sql. Returns FSL_RC_RANGE if !*sql.
 */
 FSL_EXPORT int fsl_db_each( fsl_db * const db, fsl_stmt_each_f callback,
@@ -9919,7 +9580,16 @@ FSL_EXPORT void fsl_db_close( fsl_db * const db );
    if the SQL tracing option is enabled for that fsl_cx instance
    before the db is opened.
 
-   This is a no-op if !db or db is not opened.
+   This is a no-op if db is not opened.
+
+   TODOs:
+
+   - Expand this API to take a client-side callback and state
+   object, rather than a FILE pointer.
+
+   - Provide a toggle for the tracing level: with and without
+   "expanded" SQL. Expanding the SQL to include its bound values is
+   far more expensive (but also far more informative).
 */
 FSL_EXPORT void fsl_db_sqltrace_enable( fsl_db * const db, FILE * outStream );
 
@@ -9951,11 +9621,10 @@ FSL_EXPORT char const * fsl_db_name(fsl_db const * const db);
 /**
    Returns a db name string for the given fsl_db_role value. The
    string is static, guaranteed to live as long as the app.  It
-   returns NULL (or asserts in debug builds) if passed
-   FSL_DBROLE_NONE or some value out of range for the enum.
+   returns NULL if passed FSL_DBROLE_NONE or some value out of range
+   for the enum.
 */
-FSL_EXPORT const char * fsl_db_role_label(enum fsl_dbrole_e r);
-
+FSL_EXPORT const char * fsl_db_role_name(enum fsl_dbrole_e r);
 
 /**
    Allocates a new fsl_db instance(). Returns NULL on allocation
@@ -10003,7 +9672,7 @@ FSL_EXPORT int fsl_db_detach(fsl_db * const db, const char *zLabel);
    query, the first column is fetched as a string and appended to
    the tgt list.
 
-   Returns 0 on success, FSL_RC_MISUSE if !db, !tgt, or !fmt, any
+   Returns 0 on success, FSL_RC_MISUSE if !fmt or fmt is empty, or any
    number of potential FSL_RC_OOM or db-related errors.
 
    Results rows with a NULL value (resulting from an SQL NULL) are
@@ -10039,28 +9708,27 @@ FSL_EXPORT int fsl_db_detach(fsl_db * const db, const char *zLabel);
    well, as long as the visitor expects (char [const]*) list
    elements.
 */
-FSL_EXPORT int fsl_db_select_slist( fsl_db * const db, fsl_list * tgt,
+FSL_EXPORT int fsl_db_select_slist( fsl_db * const db, fsl_list * const tgt,
                                     char const * fmt, ... );
 
 /**
    The va_list counterpart of fsl_db_select_slist().
 */
-FSL_EXPORT int fsl_db_select_slistv( fsl_db * const db, fsl_list * tgt,
+FSL_EXPORT int fsl_db_select_slistv( fsl_db * const db, fsl_list * const tgt,
                                      char const * fmt, va_list args );
 
 /**
    Returns n bytes of random lower-case hexidecimal characters
    using the given db as its data source, plus a terminating NUL
    byte. The returned memory must eventually be freed using
-   fsl_free(). Returns NULL if !db, !n, or on a db-level error.
+   fsl_free(). Returns NULL if !n, db is not opened, or on a db-level error.
 */
 FSL_EXPORT char * fsl_db_random_hex(fsl_db * const db, fsl_size_t n);
 
 /**
-   Returns the "number of database rows that were changed or
-   inserted or deleted by the most recently completed SQL statement"
-   (to quote the underlying APIs). Returns 0 if !db or if db is not
-   opened.
+   Returns the "number of database rows that were changed or inserted
+   or deleted by the most recently completed SQL statement" (to quote
+   the underlying APIs). Returns 0 if db is not opened.
 
 
    See: https://sqlite.org/c3ref/changes.html
@@ -10070,8 +9738,7 @@ FSL_EXPORT int fsl_db_changes_recent(fsl_db * const db);
 /**
    Returns "the number of row changes caused by INSERT, UPDATE or
    DELETE statements since the database connection was opened" (to
-   quote the underlying APIs). Returns 0 if !db or if db is not
-   opened.
+   quote the underlying APIs). Returns 0 if db is not opened.
 
    See; https://sqlite.org/c3ref/total_changes.html
 */
@@ -10759,7 +10426,7 @@ FSL_EXPORT const char * fsl_hash_type_name(fsl_hash_types_e h, const char *zUnkn
   Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
 */
 
-/** @file fossil-repo.h
+/** @file repo.h
 
     fossil-repo.h declares APIs specifically dealing with
     repository-db-side state, as opposed to specifically checkout-side
@@ -10777,6 +10444,46 @@ typedef struct fsl_card_Q fsl_card_Q;
 typedef struct fsl_card_T fsl_card_T;
 typedef struct fsl_checkin_opt fsl_checkin_opt;
 typedef struct fsl_deck fsl_deck;
+
+
+/**
+   Opens the given db file name as f's repository. Returns 0 on
+   success. On error it sets f's error state and returns that code
+   unless the error was FSL_RC_MISUSE (which indicates invalid
+   arguments and it does not set the error state).
+
+   Returns FSL_RC_ACCESS if f already has an opened repo db (use
+   fsl_repo_close() or fsl_ckout_close() to close it).
+
+   Returns FSL_RC_NOT_FOUND if repoDbFile is not found, as this
+   routine cannot create a new repository db.
+
+   Results are undefined if any argument is NULL.
+
+   When a repository is opened, the fossil-level user name
+   associated with f (if any) is overwritten with the default user
+   from the repo's login table (the one with uid=1). Thus
+   fsl_cx_user_get() may return a value even if the client has not
+   called fsl_cx_user_set().
+
+   It would be nice to have a parameter specifying that the repo
+   should be opened read-only. That's not as straightforward as it
+   sounds because of how the various dbs are internally managed
+   (via one db handle). Until then, the permissions of the
+   underlying repo file will determine how it is opened. i.e. a
+   read-only repo will be opened read-only.
+
+
+   Potentially interesting side-effects:
+
+   - On success this re-sets several bits of f's configuration to
+   match the repository-side settings.
+
+   @see fsl_repo_create()
+   @see fsl_repo_close()
+   @see fsl_close_scm_dbs()
+*/
+FSL_EXPORT int fsl_repo_open( fsl_cx * const f, char const * repoDbFile/*, char readOnlyCurrentlyIgnored*/ );
 
 /**
    This function is a programmatic interpretation of
@@ -13326,7 +13033,7 @@ typedef struct fsl_repo_extract_opt fsl_repo_extract_opt;
 FSL_EXPORT const fsl_repo_extract_opt fsl_repo_extract_opt_empty;
 
 /**
-   Extracts the contents of a single checkin from a repository,
+   Iterates over the file content of a single checkin in a repository,
    sending the appropriate version of each file's contents to a
    client-specified callback.
 
@@ -13343,18 +13050,14 @@ FSL_EXPORT const fsl_repo_extract_opt fsl_repo_extract_opt_empty;
    that value. FSL_RC_BREAK causes looping to stop but 0 is
    returned.
 
-   Files deleted by the given version are NOT reported to the callback
-   (because getting sane semantics has proven to be tricker and more
-   costly than it's worth).
-
    See fsl_repo_extract_f() for more details about the semantics of
    the callback. See fsl_repo_extract_opt for the documentation of the
    various options.
 
-   Fossil's internal metadata format guarantees that files will passed
-   be passed to the callback in "lexical order" (as defined by
-   fossil's manifest format definition). i.e. the files will be passed
-   in case-sensitive, alphabetical order. Note that upper-case letters
+   Fossil's internal metadata format guarantees that files will be
+   passed to the callback in "lexical order" (as defined by fossil's
+   manifest format definition). i.e. the files will be passed in
+   case-sensitive, alphabetical order. Note that upper-case letters
    sort before lower-case ones.
 
    Sidebar: this function makes a bitwise copy of the 2nd argument
@@ -14780,6 +14483,176 @@ FSL_EXPORT const fsl_cidiff_state fsl_cidiff_state_empty;
 */
 FSL_EXPORT int fsl_cidiff(fsl_cx * const f, fsl_cidiff_opt const * const opt);
 
+
+/**
+   Configuration parameters for fsl_repo_create().  Always
+   copy-construct these from fsl_repo_create_opt_empty
+   resp. fsl_repo_create_opt_empty_m in order to ensure proper
+   behaviour vis-a-vis default values.
+
+   TODOs:
+
+   - Add project name/description, and possibly other
+   configuration bits.
+
+   - Allow client to set password for default user (currently set
+   randomly, as fossil(1) does).
+*/
+struct fsl_repo_create_opt {
+  /**
+     The file name for the new repository.
+  */
+  char const * filename;
+  /**
+     Fossil user name for the admin user in the new repo.  If NULL,
+     defaults to the Fossil context's user (see
+     fsl_cx_user_get()). If that is NULL, it defaults to
+     "root" for historical reasons.
+  */
+  char const * username;
+
+  /**
+     The comment text used for the initial commit. If NULL or empty
+     (starts with a NUL byte) then no initial check is
+     created. fossil(1) is largely untested with that scenario (but
+     it seems to work), so for compatibility it is not recommended
+     that this be set to NULL.
+
+     The default value (when copy-initialized) is "egg". There's a
+     story behind the use of "egg" as the initial checkin comment,
+     and it all started with a typo: "initial chicken"
+  */
+  char const * commitMessage;
+
+  /**
+     Mime type for the commit message (manifest N-card). Manifests
+     support this but fossil(1) has never (as of 2021-02) made use of
+     it. It is provided for completeness but should, for
+     compatibility's sake, probably not be set, as the fossil UI may
+     not honor it. The implied default is text/x-fossil-wiki. Other
+     ostensibly legal values include text/plain and text/x-markdown.
+     This API will accept any value, but results are technically
+     undefined with any values other than those listed above.
+  */
+  char const * commitMessageMimetype;
+
+  /**
+     If not NULL and not empty, fsl_repo_create() will use this
+     repository database to copy the configuration, copying over
+     the following settings:
+
+     - The reportfmt table, overwriting any existing entries.
+
+     - The user table fields (cap, info, mtime, photo) are copied
+     for the "system users".  The system users are: anonymous,
+     nobody, developer, reader.
+
+     - The vast majority of the config table is copied, arguably
+     more than it should (e.g. the 'manifest' setting).
+  */
+  char const * configRepo;
+
+  /**
+     If false, fsl_repo_create() will fail if this->filename
+     already exists.
+  */
+  bool allowOverwrite;
+  
+};
+typedef struct fsl_repo_create_opt fsl_repo_create_opt;
+
+/** Initialized-with-defaults fsl_repo_create_opt struct, intended
+    for in-struct initialization. */
+#define fsl_repo_create_opt_empty_m {           \
+    NULL/*filename*/,                           \
+    NULL/*username*/,                         \
+    "egg"/*commitMessage*/,                   \
+    NULL/*commitMessageMimetype*/,            \
+    NULL/*configRepo*/,                       \
+    false/*allowOverwrite*/                     \
+    }
+
+/** Initialized-with-defaults fsl_repo_create_opt struct, intended
+    for copy-initialization. */
+FSL_EXPORT const fsl_repo_create_opt fsl_repo_create_opt_empty;
+
+/**
+   Creates a new repository database using the options provided in the
+   second argument. If f is not NULL, it must be a valid context
+   instance, though it need not have an opened checkout/repository. If
+   f has an opened repo or checkout, this routine closes them but that
+   closing _will fail_ if a transaction is currently active!
+
+   If f is NULL, a temporary context is used for creating the
+   repository, in which case the caller will not have access to
+   detailed error information (only the result code) if this operation
+   fails. In that case, the resulting repository file will, on
+   success, be found at the location referred to by opt.filename.
+
+   The opt argument may not be NULL.
+
+   If opt->allowOverwrite is false (0) and the file exists, it fails
+   with FSL_RC_ALREADY_EXISTS, otherwise is creates/overwrites the
+   file. This is a destructive operation if opt->allowOverwrite is
+   true, so be careful: the existing database will be truncated and
+   re-created.
+
+   This operation installs the various "static" repository schemas
+   into the db, sets up some default settings, and installs a
+   default user.
+
+   This operation always closes any repository/checkout opened by f
+   because setting up the new db requires wiring it to f to set up
+   some of the db-side infrastructure. The one exception is if
+   argument validation fails, in which case f's repo/checkout-related
+   state are not modified. Note that closing will fail if a
+   transaction is currently active and that, in turn, will cause this
+   operation to fail.
+
+   See the fsl_repo_create_opt docs for more details regarding the
+   creation options.
+
+   On success, 0 is returned and f (if not NULL) is left with the
+   new repository opened and ready for use. On error, f's error
+   state is updated and any number of the FSL_RC_xxx codes may be
+   returned - there are no less than 30 different _potential_ error
+   conditions on the way to creating a new repository.
+
+   If initialization of the repository fails, this routine will
+   attempt to remove its partially-initialize corpse from the
+   filesystem but will ignore any errors encountered while doing so.
+
+   Example usage:
+
+   ```
+   fsl_repo_create_opt opt = fsl_repo_create_opt_empty;
+   int rc;
+   opt.filename = "my.fossil";
+   // ... any other opt.xxx you want to set, e.g.:
+   // opt.user = "fred";
+   // Assume fsl is a valid fsl_cx instance:
+   rc = fsl_repo_create(fsl, &opt);
+   if(rc) { ...error... }
+   else {
+     fsl_db * db = fsl_cx_db_repo(f);
+     assert(db); // == the new repo db
+   ...
+   }
+   ```
+
+   @see fsl_repo_open()
+   @see fsl_repo_close()
+*/
+FSL_EXPORT int fsl_repo_create(fsl_cx * f, fsl_repo_create_opt const * opt );
+
+/**
+   UNTESTED.
+
+   Returns true if f has an opened repository database which is
+   opened in read-only mode, else returns false.
+*/
+FSL_EXPORT char fsl_repo_is_readonly(fsl_cx const * f);
+
 #if defined(__cplusplus)
 } /*extern "C"*/
 #endif
@@ -14802,7 +14675,7 @@ FSL_EXPORT int fsl_cidiff(fsl_cx * const f, fsl_cidiff_opt const * const opt);
   Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
 */
 
-/** @file fossil-checkout.h
+/** @file checkout.h
 
     fossil-checkout.h declares APIs specifically dealing with
     checkout-side state, as opposed to purely repository-db-side state
@@ -14814,6 +14687,94 @@ FSL_EXPORT int fsl_cidiff(fsl_cx * const f, fsl_cidiff_opt const * const opt);
 extern "C" {
 #endif
 
+
+/**
+   Tries to open a checked-out fossil repository db in the given
+   directory (or "." if dirName is NULL). This routine canonicalizes
+   its dirName argument using fsl_file_canonical_name(), then passes
+   that and checkParentDirs on to fsl_ckout_db_search() to find a
+   checkout db, so see that routine for how it searches.
+
+   If this routine finds/opens a checkout, it also tries to open
+   the repository database from which the checkout derives, and
+   fails if it cannot. The library never allows a checkout to be
+   opened without its corresponding repository partner because
+   a checkout has hard dependencies on the repo's state.
+
+   Returns 0 on success. If there is an error opening or validating
+   the checkout or its repository db, f's error state will be
+   updated. Error codes/conditions include:
+
+   - FSL_RC_MISUSE if f is NULL.
+
+   - FSL_RC_ACCESS if f already has and opened checkout.
+
+   - FSL_RC_OOM if an allocation fails.
+
+   - FSL_RC_NOT_FOUND if no checkout is foud or if a checkout's
+   repository is not found.
+
+   - FSL_RC_RANGE if dirname is not NULL but has a length of 0.
+
+   - Various codes from fsl_getcwd() (if dirName is NULL).
+
+   - Various codes if opening the associated repository DB fails.
+
+   TODO: there's really nothing in the architecture which restricts a
+   checkout db to being in the same directory as the checkout, except
+   for some historical bits which "could" be refactored. It "might be
+   interesting" to eventually provide a variant which opens a checkout
+   db file directly. We have the infrastructure, just need some
+   refactoring. It "shouldn't" require any trickery or
+   incompatibilities with fossil(1).
+*/
+FSL_EXPORT int fsl_ckout_open_dir( fsl_cx * const f, char const * dirName,
+                                   bool checkParentDirs );
+
+
+/**
+   Searches the given directory (or the current directory if dirName
+   is 0) for a fossil checkout database file named one of (_FOSSIL_,
+   .fslckout).  If it finds one, it returns 0 and appends the file's
+   path to pOut if pOut is not 0.  If neither is found AND if
+   checkParentDirs is true an then it moves up the path one directory
+   and tries again, until it hits the root of the dirPath (see below
+   for a note/caveat).
+
+   If dirName is NULL then it behaves as if it had been passed the
+   absolute path of the current directory (as determined by
+   fsl_getcwd()).
+
+   This function does no normalization of dirName. Because of that...
+
+   Achtung: if dirName is relative, this routine might not find a
+   checkout where it would find one if given an absolute path (because
+   it traverses the path string given it instead of its canonical
+   form). Whether this is a bug or a feature is not yet clear. When in
+   doubt, use fsl_file_canonical_name() to normalize the directory
+   name before passing it in here. If it turns out that we always want
+   that behaviour, this routine will be modified to canonicalize the
+   name.
+
+   This routine can return at least the following error codes:
+
+   - FSL_RC_NOT_FOUND: either no checkout db was found or the given
+   directory was not found.
+
+   - FSL_RC_RANGE if dirName is an empty string. (We could arguably
+   interpret this as a NULL string, i.e. the current directory.)
+
+   - FSL_RC_OOM if allocation of a filename buffer fails.
+
+   TODO?
+
+   - Why was the decision made not to canonicalize dirName from here?
+   We might want to change that.
+
+*/
+FSL_EXPORT int fsl_ckout_db_search( char const * dirName,
+                                    bool checkParentDirs,
+                                    fsl_buffer * const pOut );
 
 /**
    Returns version information for the current checkout.
@@ -16213,11 +16174,10 @@ typedef struct fsl_repo_open_ckout_opt fsl_repo_open_ckout_opt;
 FSL_EXPORT const fsl_repo_open_ckout_opt fsl_repo_open_ckout_opt_empty;
 
 /**
-   Work in progress...
-
    Opens a checkout db for use with the currently-connected repository
-   or creates a new one. If opening an existing one, it gets "stolen"
-   from any repository it might have been previously mapped to.
+   or creates a new checkout db. If opening an existing one, it gets
+   "stolen" from any repository it might have been previously mapped
+   to.
 
    - Requires that f have an opened repository db and no opened
      checkout. Returns FSL_RC_NOT_A_REPO if no repo is opened and
@@ -16239,7 +16199,8 @@ FSL_EXPORT const fsl_repo_open_ckout_opt fsl_repo_open_ckout_opt_empty;
    delete the STASH and UNDO entries, as they're not valid for a
    different repo.
 */
-FSL_EXPORT int fsl_repo_open_ckout( fsl_cx * f, fsl_repo_open_ckout_opt const * opt );
+FSL_EXPORT int fsl_repo_open_ckout( fsl_cx * const f,
+                                    fsl_repo_open_ckout_opt const * opt );
 
 typedef struct fsl_ckup_state fsl_ckup_state;
 /**
@@ -16618,7 +16579,7 @@ FSL_EXPORT const fsl_ckup_opt fsl_ckup_opt_empty;
    changes or sets the current transaction stack into a rollback
    state.
 
-   @see fsl_repo_ckout_open()
+   @see fsl_repo_open_ckout()
 */
 FSL_EXPORT int fsl_repo_ckout(fsl_cx * f, fsl_ckup_opt const * cOpt);
 
@@ -17011,13 +16972,19 @@ FSL_EXPORT int fsl_filename_to_vfile_ids( fsl_cx * const f, fsl_id_t vid,
    by fsl_ckout_filename_check() to canonicalize the name and ensure
    that it points to someplace within f's current checkout.
 
-   2) Because of (1), zName may not be NULL or empty. To fetch all of
+   2) Directory names passed to it may optionally end in an trailing
+   slash.
+
+   3) Because of (1), zName may not be NULL or empty. To fetch all of
    the vfile IDs for the current checkout, pass a zName of "."  and
    relativeToCwd=false.
 
-   Returns 0 on success, FSL_RC_MISUSE if zName is NULL or empty,
-   FSL_RC_OOM on allocation error, FSL_RC_NOT_A_CKOUT if f has no
-   opened checkout.
+   Returns 0 on success, else:
+
+   - FSL_RC_MISUSE if zName is NULL or empty.
+   - FSL_RC_OOM on allocation error.
+   - FSL_RC_NOT_A_CKOUT if f has no opened checkout.
+   - FSL_RC_RANGE if the given name points outside of the checkout.
 */
 FSL_EXPORT int fsl_ckout_vfile_ids( fsl_cx * const f, fsl_id_t vid,
                                     fsl_id_bag * const dest, char const * zName,
@@ -17610,7 +17577,7 @@ FSL_EXPORT char const ** fsl_ckout_dbnames(void);
 
   Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
 */
-/** @file fossil-confdb.h
+/** @file confdb.h
 
     fossil-confdb.h declares APIs dealing with fossil's various
     configuration option storage backends.
@@ -18605,35 +18572,46 @@ struct fsl_cx {
      A pointer to the "main" db handle. Exactly which db IS the
      main db is, because we have three DBs, not generally knowble.
 
-     As of this writing (20141027, updated 20211018) the following
-     applies:
+     The internal management of fsl_cx's db handles has changed
+     a couple of times. As of 2022-01-01 the following applies:
 
-     dbMain always points to &this->dbMem (a temp or ":memory:"
-     (unspecified!) db opened by fsl_cx_init()), and the
-     repo/ckout DBs get ATTACHed to that one. Their separate
-     handles (this->{repo,ckout}.db) are used to store the name
-     and file path to each one (even though they have no real db
-     handle associated with them).
+     dbMain starts out NULL. When a repo or checkout is opened,
+     dbMain is pointed at the first of those which is opened.
+     When its parter is opened, it is ATTACHed to dbMain.
+     dbMain->role holds a bitmask of fsl_dbrole_e values reflecing
+     which roles are opened/attached to it.
+
+     The db-specific separate handles (this->{repo,ckout}.db) are used
+     to store the name and file path to each db. ONE of those will
+     have a db->dbh value of non-NULL, and that one is the instance
+     which dbMain points to.
+
+     Whichever db is opened first gets aliased to the corresponding
+     fsl_db_role_name() for is role so that SQL code need not care
+     which db is "main" and which is "repo" or "ckout". (Sidebar: when
+     this library was started, the ability to alias a db with another
+     name did not exist, and thus we required a middle-man "main" db
+     to which we ATTACHed the repo and checkout dbs.)
 
      As of 20211230, f->config.db is its own handle, not ATTACHed with
-     the others. Its db gets renamed to
-     fsl_db_role_label(FSL_DBROLE_CONFIG).
+     the others. Its db gets aliased to
+     fsl_db_role_name(FSL_DBROLE_CONFIG).
 
      Internal code should rely as little as possible on the actual
      arrangement of internal DB handles, and should use
      fsl_cx_db_repo(), fsl_cx_db_ckout(), and fsl_cx_db_config() to
-     get a handle to the specific db they want. Currently they will
-     always return NULL or the same handle, but that design decision
-     might change at some point, so the public API treats them as
-     separate entities. _That said_: at this point (2021-10-18),
-     treating them as separate handles often proves to be annoying in
-     their usage, and newer code will sometimes use (e.g.)
-     fsl_cx_prepare() in lieu of explicitely using fsl_db_prepare()
-     with the ostensibly db-specific handle when it knows that the
-     required db is indeed attached. In other words: the internals, in
-     some places, are starting to rely on this long-established
-     convention of having a single sqlite3 object and multiple
-     attached databases, _and that's okay_.
+     get a handle to the specific db they want. Whether or not they
+     return the same handle or 3 different ones may change at some
+     point, so the public API treats them as separate entities. That
+     is especially important for the global config db, as that one
+     is (for locking reason) almost certain to remain in its own
+     db handle, independent of the repo/checkout dbs.
+
+     In any case, the internals very much rely on the repo and
+     checkout dbs being accessible via a single db handle because the
+     checkout-related SQL requires both dbs for most queries. The
+     internals are less picky about the genuine layout of those
+     handles (e.g. which one, if either, is the MAIN db).
   */
   fsl_db * dbMain;
 
@@ -18644,54 +18622,16 @@ struct fsl_cx {
   void const * allocStamp;
 
   /**
-     A ":memory:" (or "") db to work around
-     open-vs-attach-vs-main-vs-real-name problems wrt to the
-     repo/ckout/config dbs. This db handle gets opened automatically
-     at startup and all others which a fsl_cx manages get ATTACHed to
-     it. Thus the other internal fsl_db objects, e.g. this->repo.db,
-     may hold state, such as the path to the current repo db, but they
-     do NOT hold an sqlite3 db handle. Assigning them the handle of
-     this->dbMain would indeed simplify certain work but it would
-     require special care to ensure that we never sqlite3_close()
-     those out from under this->dbMain.
-
-     Reminder to self 2021-12-03: sqlite has since added an option
-     to give the MAIN db a name of one's choice:
-
-     ```
-     sqlite3_db_config(db, SQLITE_DBCONFIG_MAINDBNAME,...)
-     ```
-
-     that could be used to solve our connection-juggling problems by
-     OPEN()'ing the first (repo/checkout/config) db and ATTACHing the others
-     to that. Prior to the above API addition, that was not feasible because
-     it meant that juggling the db names was a true pain in the butt.
-
-     However, the global config throws a wrench in that: we need to be
-     able to open and close that particular db on demand because it's
-     used by an arbitrary number of applications and we need to avoid
-     locking it. If an app (like `f-config`) were to open that db
-     first, it would become the main db and we could no longer close
-     it once a repo and/or checkout had been attached. That said, we
-     could get away with using a completely separate sqlite3 instance
-     for that particular db if we really wanted to. There's no
-     pressing need to keep that db on the same connection as the
-     checkout/repo.
-  */
-  fsl_db dbMem;
-
-  /**
      Holds info directly related to a checkout database.
   */
   struct {
     /**
        Holds the filename of the current checkout db and possibly
-       related state. Historically (very historically) it could also
-       be the `main` db, but that is no longer the case.
+       related state.
     */
     fsl_db db;
     /**
-       The directory part of an opened checkout db.  This is currently
+       The directory part of an opened checkout db. This is currently
        only set by fsl_ckout_open_dir(). It contains a trailing slash,
        largely because that simplifies porting fossil(1) code and
        appending filenames to this directory name to create absolute
@@ -18703,7 +18643,7 @@ struct fsl_cx {
     char * dir;
     /**
        Optimization: fsl_strlen() of dir. Guaranteed to be set to
-       dir's length if dir is not NULL.
+       dir's length if dir is not NULL, else it will be 0.
     */
     fsl_size_t dirLen;
     /**
@@ -18729,8 +18669,7 @@ struct fsl_cx {
   struct {
     /**
        Holds the filename of the current repo db and possibly related
-       state. Historically (very historically) it could also be the
-       `main` db, but that is no longer the case.
+       state.
     */
     fsl_db db;
     /**
@@ -18746,14 +18685,17 @@ struct fsl_cx {
   struct {
     /**
        Holds the filename of the current global config db and possibly
-       related state. Historically (very historically) it could also
-       be the `main` db, but that is no longer the case.
+       related state. This handle is managed separately from the
+       repo/ckout handles because this db is shared by all fossil
+       instances are we have to ensure that we don't lock it for
+       longer than necessary, thus this db may get opened and closed
+       multiple times within even within a short-lived application.
     */
     fsl_db db;
   } config;
 
   /**
-     State for incrementally proparing a checkin operation.
+     State for incrementally preparing a checkin operation.
   */
   struct {
     /**
@@ -18781,6 +18723,13 @@ struct fsl_cx {
      This was added primarily so that fossil client apps can share a
      single output channel which the user can swap out, e.g. to direct
      all output to a UI widget or a file.
+
+     Though the library has adamantly avoided adding a "warning"
+     output channel, features like:
+
+     https://fossil-scm.org/home/info/52a389d3dbd4b6cc
+
+     arguably argue for one.
   */
   fsl_outputer output;
 
@@ -18809,7 +18758,7 @@ struct fsl_cx {
      Reuseable scratchpads for low-level file canonicalization
      buffering and whatnot. Not intended for huge content: use
      this->fileContent for that. This list should stay relatively
-     short.
+     short, as should the buffers (a few kb each, at most).
 
      @see fsl__cx_scratchpad()
      @see fsl__cx_scratchpad_yield()
@@ -18829,7 +18778,7 @@ struct fsl_cx {
        They should only be increased if we find code paths which
        require it. As of this writing (2021-03-17), the peak
        concurrently used was 5. In any case fsl__cx_scratchpad() fails
-       fatally if it needs more than it has, so we won't fail to
+       fatally if it needs more than it has, so we won't/can't fail to
        overlook such a case.
     */
     fsl_buffer buf[8];
@@ -18861,7 +18810,9 @@ struct fsl_cx {
   /**
      Error flag which is intended to be set via signal handlers or a
      UI thread to tell this context to cancel any currently
-     long-running operation. Not all operations honor this check.
+     long-running operation. Not all operations honor this check, but
+     the ones which are prone to "exceedingly long" operation (at
+     least a few seconds) do.
   */
   volatile int interrupted;
 
@@ -18884,8 +18835,8 @@ struct fsl_cx {
 
     /**
        Whether or not a running commit process should be marked as
-       private. This flag is used for communicating this flag through
-       multiple levels of API.
+       private. This member is used for communicating this flag
+       through multiple levels of API.
     */
     bool markPrivate;
 
@@ -18907,10 +18858,11 @@ struct fsl_cx {
        verification" (a.k.a. verify-before-commit) is underway.
     */
     bool inFinalVerify;
+
     /**
-       Specifies whether SOME repository-level file-name comparisons/searches
-       will work case-insensitively. <0 means not-yet-determined,
-       0 = no, >0 = yes.
+       Specifies whether SOME repository-level file-name
+       comparisons/searches will work case-insensitively. <0 means
+       not-yet-determined, 0 = no, >0 = yes.
     */
     short caseInsensitive;
 
@@ -18940,7 +18892,7 @@ struct fsl_cx {
        prefer to use baseline (non-delta) manifests. Once a delta is
        seen in the repository, the checkin algorithm is free to choose
        deltas later on unless its otherwise prohibited, e.g. by the
-       forbid-delta-manifests config db setting.
+       `forbid-delta-manifests` config db setting.
 
        This article provides an overview to the topic delta manifests
        and essentially debunks their ostensible benefits:
@@ -18960,13 +18912,13 @@ struct fsl_cx {
     short searchIndexExists;
 
     /**
-       Cache for the "manifest" config setting, as used by
+       Cache for the `manifest` config setting, as used by
        fsl_ckout_manifest_setting(), with the caveat that
        if the setting changes after it is cached, we won't necessarily
        see that here!
     */
     short manifestSetting;
-    
+
     /**
        Record ID of rcvfrom entry during commits. This is likely to
        remain unused in libf until/unless the sync protocol is
@@ -19018,7 +18970,7 @@ struct fsl_cx {
     */
     fsl_id_t mtimeManifest;
     /**
-       The "project-code" config option. We do not currently (2021-03)
+       The "project-code" config option. We do not currently (2022-01)
        use this but it will be important if/when the sync protocol is
        implemented or we want to create hashes, e.g. for user
        passwords, which depend in part on the project code.
@@ -19026,8 +18978,8 @@ struct fsl_cx {
     char * projectCode;
 
     /**
-       Internal optimization to avoid duplicate stat() calls across
-       two functions in some cases.
+       Internal optimization to avoid duplicate fsl_stat() calls
+       across two functions in some cases.
     */
     fsl_fstat fstat;
 
@@ -19076,10 +19028,18 @@ struct fsl_cx {
        to figure out if they corresponded to a cached query or not.
     */
     struct {
+      /** Query fetching [delta].[srcid] for a given [delta].[rid]. */
       fsl_stmt deltaSrcId;
+      /** Query fetching a [blob].[rid] for an exact-match
+          [blob].[uuid]. */
       fsl_stmt uuidToRid;
+      /** Query fetching [blob].[rid] for a [blob].[uuid] prefix. */
       fsl_stmt uuidToRidGlob;
+      /** Query fetching [blob].[size] for a [blob].[rid] */
       fsl_stmt contentSize;
+      /** Query fetching [blob].[content,size] for a [blob].[rid] */
+      fsl_stmt contentBlob;
+      /** Placeholder. */
       fsl_stmt nextEntry;
     } stmt;
 
@@ -19160,7 +19120,6 @@ struct fsl_cx {
 #define fsl_cx_empty_m {                                \
     NULL /*dbMain*/,                                    \
     NULL/*allocStamp*/,                               \
-    fsl_db_empty_m /* dbMem */,                       \
     {/*ckout*/                                        \
       fsl_db_empty_m /*db*/,                          \
       NULL /*dir*/, 0/*dirLen*/,                    \
@@ -19221,6 +19180,7 @@ struct fsl_cx {
         fsl_stmt_empty_m/*uuidToRid*/,        \
         fsl_stmt_empty_m/*uuidToRidGlob*/,        \
         fsl_stmt_empty_m/*contentSize*/,        \
+        fsl_stmt_empty_m/*contentBlob*/, \
         fsl_stmt_empty_m/*???*/ \
       },                                    \
       NULL/*tempDirs*/ \
@@ -20012,27 +19972,8 @@ int fsl__search_doc_touch(fsl_cx * const f, fsl_satype_e saType,
 
 /** @internal
 
-   Performs the same job as fsl_diff_text() but produces the results
-   in the low-level form of an array of "copy/delete/insert triples."
-   This is primarily intended for internal use in other
-   library-internal algorithms, not for client code. Note all
-   FSL_DIFF_xxx flags apply to this form.
-
-   Returns 0 on success, any number of non-0 codes on error. On
-   success *outRaw will contain the resulting array, which must
-   eventually be fsl_free()'d by the caller. On error *outRaw is not
-   modified.
-
-   @deprecated Use fsl_diff_v2_raw() instead.
-*/
-int fsl__diff_text_raw(fsl_buffer const *p1, fsl_buffer const *p2,
-                      int diffFlags, int ** outRaw);
-
-/** @internal
-
-   If the given file name is a reserved filename (case-insensitive) on
-   Windows platforms, a pointer to the reserved part of the name, else
-   NULL is returned.
+   Returns true if the given file name is a reserved filename
+   (case-insensitive) on Windows platforms, else returns false.
 
    zPath must be a canonical path with forward-slash directory
    separators. nameLen is the length of zPath. If negative, fsl_strlen()
@@ -20052,7 +19993,6 @@ bool fsl__is_reserved_fn_windows(const char *zPath, fsl_int_t nameLen);
 */
 int fsl__ckout_clear_merge_state( fsl_cx * const f, bool fullWipe );
 
-
 /** @internal
 
    Installs or reinstalls the checkout database schema into f's open
@@ -20065,7 +20005,7 @@ int fsl__ckout_clear_merge_state( fsl_cx * const f, bool fullWipe );
    If dropIfExists is false and the schema appears to already exists
    (without actually validating its validity), 0 is returned.
 */
-int fsl_ckout_install_schema(fsl_cx * const f, bool dropIfExists);
+int fsl__ckout_install_schema(fsl_cx * const f, bool dropIfExists);
 
 /** @internal
 
@@ -20087,7 +20027,8 @@ int fsl_ckout_install_schema(fsl_cx * const f, bool dropIfExists);
    There are any number of valid reasons removal of a directory might
    fail, and this routine stops at the first one which does.
 */
-unsigned int fsl_ckout_rm_empty_dirs(fsl_cx * const f, fsl_buffer * const tgtDir);
+unsigned int fsl__ckout_rm_empty_dirs(fsl_cx * const f,
+                                      fsl_buffer const * const tgtDir);
 
 /** @internal
 
@@ -20096,7 +20037,7 @@ unsigned int fsl_ckout_rm_empty_dirs(fsl_cx * const f, fsl_buffer * const tgtDir
    _must_ an absolute path based in f's current checkout. This routine
    uses fsl_file_dirpart() to strip path components from the string
    and remove directories until either removing one fails or the top
-   of the checkout is reach. Since removal of a directory can fail for
+   of the checkout is reached. Since removal of a directory can fail for
    any given reason, this routine ignores such errors. It returns 0 on
    success, FSL_RC_OOM if allocation of the working buffer for the
    filename hackery fails, and FSL_RC_MISUSE if zFilename is not
@@ -20106,7 +20047,7 @@ unsigned int fsl_ckout_rm_empty_dirs(fsl_cx * const f, fsl_buffer * const tgtDir
    @see fsl_is_rooted_in_ckout()
    @see fsl_rm_empty_dirs()
 */
-int fsl_ckout_rm_empty_dirs_for_file(fsl_cx * const f, char const *zAbsPath);
+int fsl__ckout_rm_empty_dirs_for_file(fsl_cx * const f, char const *zAbsPath);
 
 /** @internal
 
@@ -20245,7 +20186,7 @@ int fsl__ckout_safe_file_check(fsl_cx * const f, char const * zFilename);
    do not support symlinks.
 */
 int fsl__ckout_symlink_create(fsl_cx * const f, char const *zTgtFile,
-                             char const * zLinkFile);
+                              char const * zLinkFile);
 
 
 /**
@@ -20347,7 +20288,7 @@ typedef enum fsl__localmod_e fsl__localmod_e;
    Noting that:
 
    - Combined values of (FSL__LOCALMOD_PERM | FSL__LOCALMOD_CONTENT) are
-   possible, but FSL__LOCALMOD_NOFOUND will never be combined with one
+   possible, but FSL__LOCALMOD_NOTFOUND will never be combined with one
    of the other values.
 
    If stat() fails for any reason other than file-not-found
@@ -20482,27 +20423,37 @@ int fsl__repo_fingerprint_search(fsl_cx * const f, fsl_id_t rcvid,
                                 char ** zOut);
 
 /**
-   A context for running a raw diff.
-  
-   The aEdit[] array describes the raw diff.  Each triple of integers in
-   aEdit[] means:
+   State for running a raw diff.
+
+   @see fsl__diff_all()
+*/
+struct fsl__diff_cx {
+  /**
+     aEdit describes the raw diff. Each triple of integers in aEdit[]
+     means:
   
      (1) COPY:   Number of lines aFrom and aTo have in common
      (2) DELETE: Number of lines found only in aFrom
      (3) INSERT: Number of lines found only in aTo
-  
-   The triples repeat until all lines of both aFrom and aTo are accounted
-   for.
-*/
-struct fsl__diff_cx {
-  /*TODO unsigned*/ int *aEdit;        /* Array of copy/delete/insert triples */
-  /*TODO unsigned*/ int nEdit;         /* Number of integers (3x num of triples) in aEdit[] */
-  /*TODO unsigned*/ int nEditAlloc;    /* Space allocated for aEdit[] */
-  fsl_dline *aFrom;      /* File on left side of the diff */
-  /*TODO unsigned*/ int nFrom;         /* Number of lines in aFrom[] */
-  fsl_dline *aTo;        /* File on right side of the diff */
-  /*TODO unsigned*/ int nTo;           /* Number of lines in aTo[] */
-  int (*cmpLine)(const fsl_dline * const, const fsl_dline *const); /* Function to be used for comparing */
+
+     The triples repeat until all lines of both aFrom and aTo are
+     accounted for. The array is terminated with a triple of (0,0,0).
+  */
+  int *aEdit /*TODO unsigned*/;
+  /** Number of integers (3x num of triples) in aEdit[]. */
+  int nEdit /*TODO unsigned*/;
+  /** Number of elements allocated for aEdit[]. */
+  int nEditAlloc /*TODO unsigned*/;
+  /** File content for the left side of the diff. */
+  fsl_dline *aFrom;
+  /** Number of lines in aFrom[]. */
+  int nFrom /*TODO unsigned*/;
+  /** File content for the right side of the diff. */
+  fsl_dline *aTo;
+  /** Number of lines in aTo[]. */
+  int nTo /*TODO unsigned*/;
+  /** Predicate for comparing LHS/RHS lines for equivalence. */
+  int (*cmpLine)(const fsl_dline * const, const fsl_dline *const);
 };
 /**
    Convenience typeef.
@@ -20516,8 +20467,6 @@ typedef struct fsl__diff_cx fsl__diff_cx;
 /** Initialized-with-defaults fsl__diff_cx structure, intended for
     non-const copy initialization. */
 extern const fsl__diff_cx fsl__diff_cx_empty;
-
-
 
 /** @internal
 
@@ -20539,18 +20488,16 @@ extern const fsl__diff_cx fsl__diff_cx_empty;
 */
 int fsl__diff_all(fsl__diff_cx * const p);
 
-/** @internal
- */
+/** @internal */
 void fsl__diff_optimize(fsl__diff_cx * const p);
 
-/** @internal
- */
+/** @internal */
 void fsl__diff_cx_clean(fsl__diff_cx * const cx);
 
 /** @internal
 
     Undocumented. For internal debugging only.
- */
+*/
 void fsl__dump_triples(fsl__diff_cx const * const p,
                        char const * zFile, int ln );
 
@@ -20558,10 +20505,11 @@ void fsl__dump_triples(fsl__diff_cx const * const p,
 
     Removes from the BLOB table all artifacts that are in the SHUN
     table. Returns 0 on success. Requires (asserts) that a repo is
-    opened.
+    opened. Note that this is not a simple DELETE operation, as it
+    requires ensuring that all removed blobs have been undeltified
+    first so that no stale delta records are left behind.
 */
 int fsl__shunned_remove(fsl_cx * const f);
-
 
 
 /** @internal
@@ -20640,6 +20588,66 @@ void fsl__cx_mcache_clear(fsl_cx * const f);
 */
 int fsl__db_errcode(fsl_db * const db, int sqliteCode);
 
+/** @internal
+
+    Clears various internal caches and resets various
+    internally-cached values related to a repository db, but the data
+    cleared here are not associated directly with a db handle. This is
+    intended primarily to be used when a db transaction is rolled back
+    which might have introduced state into those caches which would be
+    stale after a rollback.
+*/
+void fsl__cx_clear_repo_caches(fsl_cx * const f);
+
+/** @internal
+
+   Plug in fsl_cx-specific db functionality into the given db handle.
+   This must only be passed the MAIN db handle for the context,
+   immediately after opening that handle, before f->dbMain is
+   assigned.
+
+   This function has very limited applicability and various
+   preconditions which are assert()ed.
+*/
+int fsl__cx_init_db(fsl_cx * const f, fsl_db * const db);
+
+/** @internal
+
+    Attaches the given db file to f with the given role. This function "should"
+    be static but we need it in repo.c when creating a new repository.
+
+    This function has tightly-controlled preconditions which will assert
+    if not met. r must be one of FSL_DBROLE_CKOUT or FSL_DBROLE_REPO.
+
+    If createIfNotExists is true and zDbName does not exist in the
+    filesystem, it is created before/as part of the OPEN or ATTACH. This is
+    almost never desired, but is required for operations which create a
+    repo (e.g. the aptly-named fsl_repo_create()) or a checkout db
+    (e.g. fsl_repo_open_ckout()).
+*/
+int fsl__cx_attach_role(fsl_cx * const f, const char *zDbName,
+                        fsl_dbrole_e r, bool createIfNotExists);
+
+/** @internal
+
+    Returns one of f->{repo,ckout}.db or NULL.
+
+    ACHTUNG and REMINDER TO SELF: the current (2021-03) design means
+    that none of these handles except for FSL_DBROLE_MAIN actually has
+    an sqlite3 db handle assigned to it. This returns a handle to the
+    "level of abstraction" we need to keep track of each db's name and
+    db-specific other state.
+
+    e.g. passing a role of FSL_DBROLE_CKOUT this does NOT return
+    the same thing as fsl_cx_db_ckout().
+*/
+fsl_db * fsl__cx_db_for_role(fsl_cx * const f, fsl_dbrole_e r);
+
+/** @internal
+
+    Frees/clears the non-db state of f->ckout.
+*/
+void fsl__cx_ckout_clear(fsl_cx * const f);
 
 /** @internal
 
@@ -20708,7 +20716,7 @@ extern "C" {
 
    TODO? Does fossil still use SHA1 for this?
 */
-FSL_EXPORT char * fsl_sha1_shared_secret( fsl_cx * f, char const * zLoginName, char const * zPw );
+FSL_EXPORT char * fsl_sha1_shared_secret( fsl_cx * const f, char const * zLoginName, char const * zPw );
 
 /**
    Fetches the login group name (if any) for the given context's
@@ -20720,7 +20728,7 @@ FSL_EXPORT char * fsl_sha1_shared_secret( fsl_cx * f, char const * zLoginName, c
    value (unlike in fossil(1)) is not cached because it may change
    via modification of the login group.
 */
-FSL_EXPORT char * fsl_repo_login_group_name(fsl_cx * f);
+FSL_EXPORT char * fsl_repo_login_group_name(fsl_cx * const f);
 
 /**
    Fetches the login cookie name associated with the current repository
@@ -20735,7 +20743,7 @@ FSL_EXPORT char * fsl_repo_login_group_name(fsl_cx * f);
    XXX is the first 16 hex digits of either the repo's
    'login-group-code' or 'project-code' config values (in that order).
 */
-FSL_EXPORT char * fsl_repo_login_cookie_name(fsl_cx * f);
+FSL_EXPORT char * fsl_repo_login_cookie_name(fsl_cx * const f);
 
 /**
    Searches for a user ID (from the repo.user.uid DB field) for a given
@@ -20750,7 +20758,7 @@ FSL_EXPORT char * fsl_repo_login_cookie_name(fsl_cx * f);
    have an opened repo, else FSL_RC_NOT_A_REPO is returned.
 
 */
-FSL_EXPORT int fsl_repo_login_search_uid(fsl_cx * f, char const * zUsername,
+FSL_EXPORT int fsl_repo_login_search_uid(fsl_cx * const f, char const * zUsername,
                                          char const * zPasswd, fsl_id_t * pId);
 
 /**
@@ -20765,7 +20773,7 @@ FSL_EXPORT int fsl_repo_login_search_uid(fsl_cx * f, char const * zUsername,
    TODO: there are currently no APIs for _setting_ the state this
    function clears!
 */
-FSL_EXPORT int fsl_repo_login_clear( fsl_cx * f, fsl_id_t userId );
+FSL_EXPORT int fsl_repo_login_clear( fsl_cx * const f, fsl_id_t userId );
 
 
 #if defined(__cplusplus)
@@ -21585,13 +21593,8 @@ int fsl_repo_install_schema_forum(fsl_cx *f);
   fossil-using apps, with the intent of simplifying their creation.
 */
 
-/* Force assert() to always work... */
-#if defined(NDEBUG)
-#undef NDEBUG
-#define DEBUG 1
-#endif
-#include <assert.h> /* for the benefit of test apps */
 #include <stdlib.h> /* EXIT_SUCCESS and friends */
+#include <assert.h>
 
 /** @page page_fcli fcli (formerly FossilApp)
 
@@ -22092,16 +22095,6 @@ typedef struct fcli_t fcli_t;
     succeeds.
 */
 FSL_EXPORT fcli_t fcli;
-
-/**
-   Equivalent to `fcli_setup_v2(argc,argv,fcli.cliFlags,fcli.appHelp)`.
-
-   @see fcli_pre_setup()
-   @see fcli_setup_v2()
-   @see fcli_end_of_main()
-   @deprecated Its signature will change to fcli_setup_v2()'s at some point.
-*/
-FSL_EXPORT int fcli_setup(int argc, char const * const * argv );
 
 /**
    Initializes fcli's state and CLI flags processing.
@@ -22624,13 +22617,14 @@ FSL_EXPORT fsl_db * fcli_needs_repo(void);
    of non-0 codes from the underlying operations.
 
    Sidebar: fsl_filename_to_vfile_ids() requires that directory names
-   passed to it have no trailing slashes, and routine strips trailing
-   slashes from its arguments before passing them on to that routine,
-   so they may be entered with slashes without ill effect.
+   passed to it have no trailing slashes, and this routine strips
+   trailing slashes from its arguments before passing them on to that
+   routine, so they may be entered with slashes without ill effect.
 
    @see fsl_filename_to_vfile_ids()
 */
-FSL_EXPORT int fcli_args_to_vfile_ids(fsl_id_bag *tgt, fsl_id_t vid,
+FSL_EXPORT int fcli_args_to_vfile_ids(fsl_id_bag * const tgt,
+                                      fsl_id_t vid,
                                       bool relativeToCwd,
                                       bool changedFilesOnly);
 
@@ -22673,10 +22667,10 @@ FCLI_DIFF_COLORS_DEFAULT = FCLI_DIFF_COLORS_RG
 typedef enum fcli_diff_colors_e fcli_diff_colors_e;
 
 /**
-   Populates the given fsl_diff_opt::ansiColors state with values
+   Populates the given fsl_dibu_opt::ansiColors state with values
    dependend on the second argument.
 */
-FSL_EXPORT void fcli_diff_colors(fsl_diff_opt * const tgt,
+FSL_EXPORT void fcli_diff_colors(fsl_dibu_opt * const tgt,
                                  fcli_diff_colors_e theme);
 
 /** @internal
@@ -22709,3 +22703,256 @@ FSL_EXPORT void fcli_dump_cache_metrics(void);
 #endif
 /* _ORG_FOSSIL_SCM_FCLI_H_INCLUDED_ */
 /* end of file ./include/fossil-scm/cli.h */
+/* start of file ./include/fossil-scm/deprecated.h */
+/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
+/* vim: set ts=2 et sw=2 tw=80: */
+#if !defined(FSL_OMIT_DEPRECATED)
+#if !defined(ORG_FOSSIL_SCM_LIBFOSSIL_DEPRECATED_H_INCLUDED)
+#define ORG_FOSSIL_SCM_LIBFOSSIL_DEPRECATED_H_INCLUDED
+/*
+  Copyright 2013-2021 The Libfossil Authors, see LICENSES/BSD-2-Clause.txt
+
+  SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+  SPDX-FileCopyrightText: 2021 The Libfossil Authors
+  SPDX-ArtifactOfProjectName: Libfossil
+  SPDX-FileType: Code
+
+  Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
+*/
+
+/** @file deprecated.h
+
+  This file holds APIs which are deprecated or otherwise "on the chopping
+  block." The libfossil public API has gathered a good deal of cruft
+  over the years.
+*/
+
+/**
+   @deprecated fsl_db_role_name() is easier to deal with.
+
+   Similar to fsl_cx_db_file_ckout() and friends except that it
+   applies to DB name (as opposed to DB _file_ name) implied by the
+   specified role (2nd parameter). If no such role is opened, or the
+   role is invalid, NULL is returned.
+
+   If the 3rd argument is not NULL, it is set to the length, in bytes,
+   of the returned string. The returned strings are NUL-terminated and
+   are either static or owned by the db handle they correspond to.
+
+   If the client does not care whether the db in question is
+   actually opened, the name for the corresponding role can be
+   fetched via fsl_db_role_name().
+
+   This is the "easiest" way to figure out the DB name of the given
+   role, independent of what order f's databases were opened
+   (because the first-opened DB is always called "main").
+
+   The Fossil-standard names of its primary databases are: "localdb"
+   (checkout), "repository", and "configdb" (global config DB), but
+   libfossil uses "ckout", "repo", and "cfg", respective. So long as
+   queries use table names which unambiguously refer to a given
+   database, the DB name is normally not needed. It is needed when
+   creating new non-TEMP db tables and views. By default such
+   tables/views would go into the "main" DB, and which one is the
+   "main" db is dependent on the order the DBs are opened, so it's
+   important to use the correct DB name when creating such constructs.
+
+   Note that the role of FSL_DBROLE_TEMP is invalid here.
+*/
+char const * fsl_cx_db_name_for_role(fsl_cx const * const f,
+                                     fsl_dbrole_e r,
+                                     fsl_size_t * len);
+
+/**
+   Flags for use with text-diff generation APIs,
+   e.g. fsl_diff_text().
+
+   Maintenance reminders:
+
+   - These values are holy and must not be changed without also
+     changing the corresponding code in diff.c.
+
+   - Where these entries semantically overlap with their fsl_diff2_flag_e
+     counterparts, they MUST have the same values because some internal APIs
+     are used by both of the diff APIs.
+
+   @deprecated Prefer fsl_diff2_flag_e and fsl_diff_v2() instead.
+*/
+enum fsl_diff_flag_e {
+/** Ignore end-of-line whitespace */
+FSL_DIFF_IGNORE_EOLWS = 0x01,
+/** Ignore end-of-line whitespace */
+FSL_DIFF_IGNORE_ALLWS = 0x03,
+/** Generate a side-by-side diff */
+FSL_DIFF_SIDEBYSIDE =   0x04,
+/** Missing shown as empty files */
+FSL_DIFF_VERBOSE =      0x08,
+/** Show filenames only. Not used in this impl! */
+FSL_DIFF_BRIEF =        0x10,
+/** Render HTML. */
+FSL_DIFF_HTML =         0x20,
+/** Show line numbers. */
+FSL_DIFF_LINENO =       0x40,
+/** Suppress optimizations (debug). */
+FSL_DIFF_NOOPT =        0x0100,
+/** Invert the diff (debug). */
+FSL_DIFF_INVERT =       0x0200,
+/* ACHTUNG: do not use 0x0400 because of semantic
+   collision with FSL_DIFF2_CONTEXT_ZERO */
+/** Only display if not "too big." */
+FSL_DIFF_NOTTOOBIG =    0x0800,
+/** Strip trailing CR */
+FSL_DIFF_STRIP_EOLCR =    0x1000,
+/**
+   This flag tells text-mode diff generation to add ANSI color
+   sequences to some output.  The colors are currently hard-coded
+   and non-configurable. This has no effect for HTML output, and
+   that flag trumps this one. It also currently only affects
+   unified diffs, not side-by-side.
+
+   Maintenance reminder: this one currently has no counterpart in
+   fossil(1), is not tracked in the same way, and need not map to an
+   internal flag value.
+*/
+FSL_DIFF_ANSI_COLOR =     0x2000
+};
+
+/**
+   Generates a textual diff from two text inputs and writes
+   it to the given output function.
+
+   pA and pB are the buffers to diff.
+
+   contextLines is the number of lines of context to output. This
+   parameter has a built-in limit of 2^16, and values larger than
+   that get truncated. A value of 0 is legal, in which case no
+   surrounding context is provided. A negative value translates to
+   some unspecified default value.
+
+   sbsWidth specifies the width (in characters) of the side-by-side
+   columns. If sbsWidth is not 0 then this function behaves as if
+   diffFlags contains the FSL_DIFF_SIDEBYSIDE flag. If sbsWidth is
+   negative, OR if diffFlags explicitly contains
+   FSL_DIFF_SIDEBYSIDE and sbsWidth is 0, then some default width
+   is used. This parameter has a built-in limit of 255, and values
+   larger than that get truncated to 255.
+
+   diffFlags is a mask of fsl_diff_flag_t values. Not all of the
+   fsl_diff_flag_t flags are yet [sup]ported.
+
+   The output is sent to out(outState,...). If out() returns non-0
+   during processing, processing stops and that result is returned
+   to the caller of this function.
+
+   Returns 0 on success, FSL_RC_OOM on allocation error,
+   FSL_RC_MISUSE if any arguments are invalid, FSL_RC_TYPE if any
+   of the content appears to be binary (contains embedded NUL
+   bytes), FSL_RC_RANGE if some range is exceeded (e.g. the maximum
+   number of input lines).
+
+   None of (pA, pB, out) may be NULL.
+
+   TODOs:
+
+   - Add a predicate function for outputing only matching
+   differences, analog to fossil(1)'s regex support (but more
+   flexible).
+
+   - Expose the raw diff-generation bits via the internal API
+   to facilitate/enable the creation of custom diff formats.
+
+   @see fsl_diff_v2()
+   @deprecated Prefer fsl_diff_v2() for new code.
+*/
+int fsl_diff_text(fsl_buffer const *pA, fsl_buffer const *pB,
+                  fsl_output_f out, void * outState,
+                  short contextLines, short sbsWidth,
+                  int diffFlags );
+
+/**
+   Functionally equivalent to:
+
+   ```
+   fsl_diff_text(pA, pB, fsl_output_f_buffer, pOut,
+   contextLines, sbsWidth, diffFlags);
+   ```
+
+   Except that it returns FSL_RC_MISUSE if !pOut.
+
+   @see fsl_diff_v2()
+   @deprecated Prefer fsl_diff_v2() for new code.
+*/
+int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
+                            fsl_buffer *pOut, short contextLines,
+                            short sbsWidth, int diffFlags );
+
+
+/**
+   Equivalent to `fcli_setup_v2(argc,argv,fcli.cliFlags,fcli.appHelp)`.
+
+   @see fcli_pre_setup()
+   @see fcli_setup_v2()
+   @see fcli_end_of_main()
+   @deprecated Its signature will change to fcli_setup_v2()'s at some point.
+*/
+int fcli_setup(int argc, char const * const * argv );
+
+/** @internal
+
+   Performs the same job as fsl_diff_text() but produces the results
+   in the low-level form of an array of "copy/delete/insert triples."
+   This is primarily intended for internal use in other
+   library-internal algorithms, not for client code. Note all
+   FSL_DIFF_xxx flags apply to this form.
+
+   Returns 0 on success, any number of non-0 codes on error. On
+   success *outRaw will contain the resulting array, which must
+   eventually be fsl_free()'d by the caller. On error *outRaw is not
+   modified.
+
+   @deprecated Use fsl_diff_v2_raw() instead.
+*/
+int fsl__diff_text_raw(fsl_buffer const *p1, fsl_buffer const *p2,
+                       int diffFlags, int ** outRaw);
+
+
+/** @deprecated fsl_close_scm_dbs()
+
+   As of 2021-01-01, this functions identically to
+   fsl_close_scm_dbs(). Prior to that...
+
+   If fsl_repo_open_xxx() has been used to open a respository db,
+   perhaps indirectly via opening of a checkout, this call closes that
+   db and any corresponding checkout db.
+
+   Returns 0 on success or if no repo/checkout db is opened. It may
+   propagate an error from the db layer if closing/detaching the db
+   fails.
+
+   @see fsl_repo_open()
+   @see fsl_repo_create()
+*/
+int fsl_repo_close( fsl_cx * const f );
+
+
+/** @deprecated use fsl_close_scm_dbs() instead
+
+   As of 2021-01-01, this functions identically to
+   fsl_close_scm_dbs(). Prior to that...
+
+   If fsl_ckout_open_dir() (or similar) has been used to open a
+   checkout db, this call closes that db, as well as any
+   corresponding repository db.
+
+   Returns 0 on success or if no checkout db is opened. It may
+   propagate an error from the db layer if closing/detaching the db
+   fails. Returns FSL_RC_MISUSE if f has any transactions pending.
+
+   This also closes the repository which was implicitly opened for the
+   checkout.
+*/
+int fsl_ckout_close( fsl_cx * const f );
+
+#endif /* ORG_FOSSIL_SCM_LIBFOSSIL_DEPRECATED_H_INCLUDED */
+#endif /* FSL_OMIT_DEPRECATED */
+/* end of file ./include/fossil-scm/deprecated.h */

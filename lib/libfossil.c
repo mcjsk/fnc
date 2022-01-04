@@ -3249,7 +3249,8 @@ int fsl_snprintf( char * dest, fsl_size_t n, char const * fmt, ... ){
 */
 
 
-FSL_EXPORT char * fsl_sha1_shared_secret( fsl_cx * f, char const * zLoginName,
+FSL_EXPORT char * fsl_sha1_shared_secret( fsl_cx * const f,
+                                          char const * zLoginName,
                                           char const * zPw ){
     if(!f || !zPw || !zLoginName) return 0;
     else{
@@ -3280,14 +3281,14 @@ FSL_EXPORT char * fsl_sha1_shared_secret( fsl_cx * f, char const * zLoginName,
     }
 }
 
-FSL_EXPORT char * fsl_repo_login_group_name(fsl_cx * f){
+FSL_EXPORT char * fsl_repo_login_group_name(fsl_cx * const f){
   return f
     ? fsl_config_get_text(f, FSL_CONFDB_REPO,
                           "login-group-name", 0)
     : 0;
 }
 
-FSL_EXPORT char * fsl_repo_login_cookie_name(fsl_cx * f){
+FSL_EXPORT char * fsl_repo_login_cookie_name(fsl_cx * const f){
   fsl_db * db;
   if(!f || !(db = fsl_cx_db_repo(f))) return 0;
   else{
@@ -3300,7 +3301,7 @@ FSL_EXPORT char * fsl_repo_login_cookie_name(fsl_cx * f){
   }
 }
 
-FSL_EXPORT int fsl_repo_login_search_uid(fsl_cx * f, char const * zUsername,
+FSL_EXPORT int fsl_repo_login_search_uid(fsl_cx * const f, char const * zUsername,
                                          char const * zPasswd,
                                          fsl_id_t * userId){
   int rc;
@@ -3328,7 +3329,7 @@ FSL_EXPORT int fsl_repo_login_search_uid(fsl_cx * f, char const * zUsername,
   return rc;
 }
 
-FSL_EXPORT int fsl_repo_login_clear( fsl_cx * f, fsl_id_t userId ){
+FSL_EXPORT int fsl_repo_login_clear( fsl_cx * const f, fsl_id_t userId ){
   fsl_db * db;
   if(!f) return FSL_RC_MISUSE;
   else if(!(db = fsl_needs_repo(f))) return FSL_RC_NOT_A_REPO;
@@ -3606,7 +3607,7 @@ int fsl_buffer_materialize( fsl_buffer * const b ){
 #define buffer_materialize(B,N) (buffer_is_external(B) ? fsl__buffer_materialize((B),(N)) : 0)
 
 void fsl_buffer_external( fsl_buffer * const b, void const * mem, fsl_int_t n ){
-  assert(!b->capacity);
+  if(b->mem) fsl_buffer_clear(b);
   if(n<0) n =(fsl_int_t)fsl_strlen((char const *)mem);
   b->used = n;
   b->cursor = 0;
@@ -4409,20 +4410,25 @@ int fsl_id_bag_to_buffer(fsl_id_bag const * bag, fsl_buffer * b,
 }
 
 int fsl_buffer_append_tcl_literal(fsl_buffer * const b,
+                                  bool escapeSquigglies,
                                   char const * z, fsl_int_t n){
   int rc;
   if(n<0) n = fsl_strlen(z);
   rc = fsl_buffer_append(b, "\"", 1);
   for(fsl_int_t i=0; 0==rc && i<n; ++i){
     char c = z[i];
+    bool skipSlash = false;
     switch( c ){
-      case '\r':  c = 'r';
+      case '\r':  c = 'r'; goto slash;
+      case '}': case '{': skipSlash = !escapeSquigglies;
+        /* fall through */
       case '[':
       case ']':
       case '$':
       case '"':
       case '\\':
-        if((rc = fsl_buffer_append(b, "\\", 1))) break;
+      slash:
+        if(!skipSlash && (rc = fsl_buffer_append(b, "\\", 1))) break;
         /* fall through */
       default:
         rc = fsl_buffer_append(b, &c, 1);
@@ -6545,7 +6551,7 @@ int fsl_ckout_changes_scan(fsl_cx * const f){
   return fsl_vfile_changes_scan(f, -1, 0);
 }
 
-int fsl_ckout_install_schema(fsl_cx * const f, bool dropIfExists){
+int fsl__ckout_install_schema(fsl_cx * const f, bool dropIfExists){
   char const * tNames[] = {
   "vvar", "vfile", "vmerge", 0
   };
@@ -6555,7 +6561,7 @@ int fsl_ckout_install_schema(fsl_cx * const f, bool dropIfExists){
   if(dropIfExists){
     char const * t;
     int i;
-    char const * dbName = fsl_db_role_label(FSL_DBROLE_CKOUT);
+    char const * dbName = fsl_db_role_name(FSL_DBROLE_CKOUT);
     for(i=0; 0!=(t = tNames[i]); ++i){
       rc = fsl_db_exec(db, "DROP TABLE IF EXISTS %s.%s /*%s()*/",
                        dbName, t, __func__);
@@ -6618,9 +6624,6 @@ int fsl_ckout_clear_db(fsl_cx *f){
                            "/*%s()*/", __func__);
 }
 
-fsl_db * fsl_cx_db_for_role(fsl_cx *, fsl_dbrole_e)
-  /* defined in cx.c */;
-
 /**
    Updates f->ckout.dir and dirLen based on the current state of
    f->ckout.db. Returns 0 on success, FSL_RC_OOM on allocation error,
@@ -6630,7 +6633,7 @@ fsl_db * fsl_cx_db_for_role(fsl_cx *, fsl_dbrole_e)
 static int fsl_update_ckout_dir(fsl_cx *f){
   int rc;
   fsl_buffer ckDir = fsl_buffer_empty;
-  fsl_db * dbC = fsl_cx_db_for_role(f, FSL_DBROLE_CKOUT);
+  fsl_db * dbC = fsl__cx_db_for_role(f, FSL_DBROLE_CKOUT);
   assert(dbC->filename);
   assert(*dbC->filename);
   rc = fsl_file_canonical_name(dbC->filename, &ckDir, false);
@@ -6654,24 +6657,17 @@ static int fsl_update_ckout_dir(fsl_cx *f){
 }
 
 
-int fsl_repo_open_ckout(fsl_cx *f, const fsl_repo_open_ckout_opt *opt){
+int fsl_repo_open_ckout(fsl_cx * const f, const fsl_repo_open_ckout_opt *opt){
   fsl_db *dbC = 0;
   fsl_buffer *cwd = 0;
   int rc = 0;
-
+  bool didChdir = false;
   if(!opt) return FSL_RC_MISUSE;
   else if(!fsl_needs_repo(f)){
     return f->error.code;
   }else if(fsl_cx_db_ckout(f)){
     return fsl_cx_err_set(f, FSL_RC_MISUSE,
                           "A checkout is already attached.");
-  }
-  if(opt->targetDir && *opt->targetDir){
-    if(fsl_chdir(opt->targetDir)){
-      return fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
-                            "Directory not found or inaccessible: %s",
-                            opt->targetDir);
-    }
   }
   cwd = fsl__cx_scratchpad(f);
   assert(!cwd->used);
@@ -6681,6 +6677,15 @@ int fsl_repo_open_ckout(fsl_cx *f, const fsl_repo_open_ckout_opt *opt){
     return fsl_cx_err_set(f, rc, "Error %d [%s]: unable to "
                           "determine current directory.",
                           rc, fsl_rc_cstr(rc));
+  }
+  if(opt->targetDir && *opt->targetDir){
+    if(fsl_chdir(opt->targetDir)){
+      fsl__cx_scratchpad_yield(f, cwd);
+      return fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
+                            "Directory not found or inaccessible: %s",
+                            opt->targetDir);
+    }
+    didChdir = true;
   }
   /**
      AS OF HERE: do not use 'return'. Use goto end so that we can
@@ -6723,18 +6728,13 @@ int fsl_repo_open_ckout(fsl_cx *f, const fsl_repo_open_ckout_opt *opt){
   const char * dbName = opt->ckoutDbFile
     ? opt->ckoutDbFile : fsl_preferred_ckout_db_name();
   fsl_cx_err_reset(f);
-  int fsl_cx_attach_role(fsl_cx * const , const char *, fsl_dbrole_e)
-    /* defined in cx.c */;
-  rc = fsl_cx_attach_role(f, dbName, FSL_DBROLE_CKOUT);
+  rc = fsl__cx_attach_role(f, dbName, FSL_DBROLE_CKOUT, true);
   if(rc) goto end;
   fsl_db * const theDbC = fsl_cx_db_ckout(f);
-  dbC = fsl_cx_db_for_role(f, FSL_DBROLE_CKOUT);
-  assert(theDbC != dbC && "Not anymore.");
-  assert(theDbC == f->dbMain);
-  assert(!f->error.code);
+  dbC = fsl__cx_db_for_role(f, FSL_DBROLE_CKOUT);
   assert(dbC->name);
   assert(dbC->filename);
-  rc = fsl_ckout_install_schema(f, opt->dbOverwritePolicy);
+  rc = fsl__ckout_install_schema(f, opt->dbOverwritePolicy);
   if(!rc){
     rc = fsl_db_exec(theDbC,"INSERT OR IGNORE INTO "
                      "%s.vvar (name,value) "
@@ -6744,20 +6744,21 @@ int fsl_repo_open_ckout(fsl_cx *f, const fsl_repo_open_ckout_opt *opt){
   }
   if(rc) rc = fsl_cx_uplift_db_error(f, theDbC);
   end:
-  if(opt->targetDir && *opt->targetDir && cwd->used){
+  if(didChdir){
+    assert(opt->targetDir && *opt->targetDir);
+    assert(cwd->used /* is this true in the root dir? */);
     fsl_chdir(fsl_buffer_cstr(cwd))
       /* Ignoring error because we have no recovery strategy! */;
   }
   fsl__cx_scratchpad_yield(f, cwd);
   if(!rc){
-    fsl_db * const dbR = fsl_cx_db_for_role(f, FSL_DBROLE_REPO);
+    fsl_db * const dbR = fsl__cx_db_for_role(f, FSL_DBROLE_REPO);
     assert(dbR);
     assert(dbR->filename && *dbR->filename);
     rc = fsl_config_set_text(f, FSL_CONFDB_CKOUT, "repository",
                              dbR->filename);
   }
   if(!rc) rc = fsl_update_ckout_dir(f);
-  fsl_buffer_clear(cwd);
   return rc;
 }
 
@@ -7342,7 +7343,7 @@ static int fsl_repo_ckout_rm_list_fini(fsl_cx * f,
       absPath->used = ckdirLen;
       rc = fsl_buffer_append(absPath, fn, nFn);
       if(rc) break;
-      fsl_ckout_rm_empty_dirs(f, absPath)
+      fsl__ckout_rm_empty_dirs(f, absPath)
         /* To see this in action, use (f-co tip) to check out the tip of
            a repo, then use (f-co rid:1) to back up to the initial empty
            checkin. It "should" leave you with a directory devoid of
@@ -8458,7 +8459,7 @@ static int fsl_revert_rmdir_fini(fsl_cx * const f){
     char const * zDir = fsl_stmt_g_text(&st, 0, &nDir);
     fsl_buffer_reuse(b);
     rc = fsl_buffer_append(b, zDir, (fsl_int_t)nDir);
-    if(0==rc) fsl_ckout_rm_empty_dirs(f, b);
+    if(0==rc) fsl__ckout_rm_empty_dirs(f, b);
   }
   fsl__cx_scratchpad_yield(f, b);
   fsl_stmt_finalize(&st);
@@ -8549,12 +8550,6 @@ int fsl_ckout_revert( fsl_cx * const f,
   fsl__cx_scratchpad_yield(f, sql);
   sql = 0;
   if(rc) goto end;
-#if 0
-  if((!zNorm || !*zNorm) && !opt->vfileIds){
-    rc = fsl__ckout_clear_merge_state(f, false);
-    if(rc) goto end;
-  }
-#endif
   while((FSL_RC_STEP_ROW==fsl_stmt_step(&q))){
     fsl_id_t const id = fsl_stmt_g_id(&q, 0);
     fsl_id_t const rid = fsl_stmt_g_id(&q, 1);
@@ -8792,6 +8787,14 @@ char const * fsl_is_top_of_ckout(char const *zDirName){
   Heavily indebted to the Fossil SCM project (https://fossil-scm.org).
 */
 #include <string.h> /* for strchr() */
+#if !defined(ORG_FOSSIL_SCM_FSL_CORE_H_INCLUDED)
+/* When not in the amalgamation build, force assert() to always work... */
+#  if defined(NDEBUG)
+#    undef NDEBUG
+#    define DEBUG 1
+#  endif
+#endif
+#include <assert.h> /* for the benefit of test apps */
 
 /* Only for debugging */
 #include <stdio.h>
@@ -8936,7 +8939,7 @@ fsl_list_empty_m
 };
 
 static void fcli_shutdown(void){
-  fsl_cx * f = fcli.f;
+  fsl_cx * const f = fcli.f;
   int rc = 0;
  
   fsl_error_clear(&fcli.err);
@@ -8953,7 +8956,7 @@ static void fcli_shutdown(void){
       /* For testing/demo only: this is implicit
          when we call fsl_cx_finalize().
       */
-      rc = fsl_ckout_close(f);
+      rc = fsl_close_scm_dbs(f);
       FCLI_V3(("Closed checkout/repo db(s). rc=%s\n", fsl_rc_cstr(rc)));
       //assert(0==rc);
     }
@@ -10036,7 +10039,8 @@ fsl_db * fcli_needs_repo(void){
   return NULL;
 }
 
-int fcli_args_to_vfile_ids(fsl_id_bag *tgt, fsl_id_t vid,
+int fcli_args_to_vfile_ids(fsl_id_bag * const tgt,
+                           fsl_id_t vid,
                            bool relativeToCwd,
                            bool changedFilesOnly){
   if(!fcli.argc){
@@ -10079,7 +10083,7 @@ char const * fcli_progname(){
   return zEnd;
 }
 
-void fcli_diff_colors(fsl_diff_opt * const tgt, fcli_diff_colors_e theme){
+void fcli_diff_colors(fsl_dibu_opt * const tgt, fcli_diff_colors_e theme){
   char const * zIns = 0;
   char const * zEdit = 0;
   char const * zDel = 0;
@@ -10215,62 +10219,61 @@ static bool fsl_content_is_available(fsl_cx * const f, fsl_id_t rid){
 }
 
 
-
 int fsl_content_blob( fsl_cx * const f, fsl_id_t blobRid, fsl_buffer * const tgt ){
   fsl_db * const dbR = fsl_needs_repo(f);
   if(!dbR) return FSL_RC_NOT_A_REPO;
   else if(blobRid<=0){
     return fsl_cx_err_set(f, FSL_RC_RANGE,
                           "Invalid RID for %s().", __func__);
-  }else{
-    int rc;
-    fsl_stmt * q = NULL;
-    rc = fsl_db_prepare_cached( dbR, &q,
-                                "SELECT content, size FROM blob "
-                                "WHERE rid=?1"
-                                "/*%s()*/",__func__);
-    if(!rc){
-      rc = fsl_stmt_bind_id(q, 1, blobRid);
-      if(!rc && (FSL_RC_STEP_ROW==(rc=fsl_stmt_step(q)))){
-        void const * mem = NULL;
-        fsl_size_t memLen = 0;
-        int64_t const sz = fsl_stmt_g_int64(q, 1);
-        if(sz<0){
-          rc = fsl_cx_err_set(f, FSL_RC_PHANTOM,
-                              "Cannot fetch content for phantom "
-                              "blob #%"FSL_ID_T_PFMT".",
-                              blobRid);
-        }
-        else if(sz){
-          fsl_stmt_get_blob(q, 0, &mem, &memLen);
-          if(!mem){
-            rc = fsl_cx_err_set(f, FSL_RC_OOM,
-                                "Error (presumably OOM) fetching blob "
-                                "content for blob #%"FSL_ID_T_PFMT".",
-                                blobRid);
-          }else{
-            fsl_buffer bb = fsl_buffer_empty;
-            assert(memLen>0);
-            fsl_buffer_external(&bb, mem, memLen);
-            rc = fsl_buffer_uncompress(&bb, tgt);
-          }
-        }else{
-          rc = 0;
-          fsl_buffer_reuse(tgt);
-        }
-      }
-      else if(FSL_RC_STEP_DONE==rc){
-        rc = fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
-                            "No blob found for rid %"FSL_ID_T_PFMT".",
-                            blobRid);
-      }
-      fsl_stmt_cached_yield(q);
-    }
-    if(rc && !f->error.code && dbR->error.code){
-      fsl_cx_uplift_db_error(f, dbR);
-    }
-    return rc;
   }
+  int rc = 0;
+  fsl_stmt * const q = &f->cache.stmt.contentBlob;
+  if(!q->stmt){
+    rc = fsl_db_prepare( dbR, q,
+                         "SELECT content, size FROM blob "
+                         "WHERE rid=?1"
+                         "/*%s()*/",__func__);
+    if(rc) goto end;
+  }
+  rc = fsl_stmt_bind_id(q, 1, blobRid);
+  if(!rc && (FSL_RC_STEP_ROW==(rc=fsl_stmt_step(q)))){
+    void const * mem = NULL;
+    fsl_size_t memLen = 0;
+    int64_t const sz = fsl_stmt_g_int64(q, 1);
+    if(sz<0){
+      rc = fsl_cx_err_set(f, FSL_RC_PHANTOM,
+                          "Cannot fetch content for phantom "
+                          "blob #%"FSL_ID_T_PFMT".",
+                          blobRid);
+    }
+    else if(sz){
+      rc = fsl_stmt_get_blob(q, 0, &mem, &memLen);
+      if(rc){
+        rc = fsl_cx_err_set(f, rc,
+                            "Error fetching blob content for "
+                            "blob #%"FSL_ID_T_PFMT".", blobRid);
+      }else{
+        fsl_buffer bb = fsl_buffer_empty;
+        assert(memLen>0);
+        fsl_buffer_external(&bb, mem, memLen);
+        rc = fsl_buffer_uncompress(&bb, tgt);
+      }
+    }else{
+      rc = 0;
+      fsl_buffer_reuse(tgt);
+    }
+  }
+  else if(FSL_RC_STEP_DONE==rc){
+    rc = fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
+                        "No blob found for rid %"FSL_ID_T_PFMT".",
+                        blobRid);
+  }
+  end:
+  fsl_stmt_reset(q);
+  if(rc && !f->error.code && dbR->error.code){
+    rc = fsl_cx_uplift_db_error2(f, dbR, rc);
+  }
+  return rc;
 }
 
 
@@ -10405,18 +10408,6 @@ int fsl_content_get( fsl_cx * const f, fsl_id_t rid,
         if(rc) goto end_delta;
 #if 1
         /*
-           In my (very simple) tests this cache costs us more than it
-           saves. TODO: re-test this once we can do a 'rebuild', or
-           something more intensive than processing a single
-           manifest's R-card. At that point we can set a f->flags bit
-           to enable or disable this block for per-use-case
-           optimization purposes.
-
-           We also probably want to cache fsl_deck instances instead
-           of Manifest blobs (fsl_buffer) like fossil(1) does,
-           otherwise this cache really doesn't save us much
-           work/memory.
-
            2021-03-24: in a debug build, running:
 
            f-parseparty -t c -c -q
@@ -12774,9 +12765,10 @@ int fsl_configs_get_buffer(fsl_cx * const f, char const * zCfg, char const * key
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h> /* FILE class */
+#include <errno.h>
 
 /* Only for debugging */
-#include <stdio.h>
 #define MARKER(pfexp)                                               \
   do{ printf("MARKER: %s:%d:%s():\t",__FILE__,__LINE__,__func__);   \
     printf pfexp;                                                   \
@@ -12888,12 +12880,6 @@ int fsl_cx_init( fsl_cx ** tgt, fsl_cx_init_opt const * param ){
 #if defined(SQLITE_THREADSAFE) && SQLITE_THREADSAFE>0
   sqlite3_mutex_leave(sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER));
 #endif
-  f->dbMem.f = f;
-  rc = fsl_db_open( &f->dbMem, "", 0 );
-  if(!rc){
-    extern int fsl__cx_init_db(fsl_cx * const, fsl_db * const);
-    rc = fsl__cx_init_db(f, &f->dbMem);
-  }
   if(!rc) rc = fsl__cx_install_timeline_crosslinkers(f);
   if(!rc){
     f->cache.tempDirs = fsl_temp_dirs_get();
@@ -12912,16 +12898,31 @@ void fsl__cx_mcache_clear(fsl_cx * const f){
   f->cache.mcache = fsl__mcache_empty;
 }
 
-static void fsl__cx_reset(fsl_cx * const f, bool closeDatabases){
-  fsl_checkin_discard(f);
-#define SFREE(X) fsl_free(X); X = NULL
+void fsl__cx_clear_repo_caches(fsl_cx * const f){
+  fsl__bccache_reset(&f->cache.blobContent);
+  fsl__cx_mcache_clear(f);
+  fsl__cx_clear_mf_seen(f, false);
+  f->cache.allowSymlinks =
+    f->cache.caseInsensitive =
+    f->cache.seenDeltaManifest =
+    f->cache.manifestSetting = -1;
+}
+
+static void fsl__cx_finalize_cached_stmt(fsl_cx * const f){
 #define STMT(X) fsl_stmt_finalize(&f->cache.stmt.X)
   STMT(deltaSrcId);
   STMT(uuidToRid);
   STMT(uuidToRidGlob);
   STMT(contentSize);
+  STMT(contentBlob);
   STMT(nextEntry);
 #undef STMT
+}
+
+static void fsl__cx_reset(fsl_cx * const f, bool closeDatabases){
+  fsl_checkin_discard(f);
+  fsl__cx_finalize_cached_stmt(f);
+#define SFREE(X) fsl_free(X); X = NULL
   if(closeDatabases){
     fsl_cx_close_dbs(f);
     /*
@@ -12932,14 +12933,14 @@ static void fsl__cx_reset(fsl_cx * const f, bool closeDatabases){
 
       2021-11-09: it turns out we've had an error case all along
       here: if any cached statements are opened for one of the dbs,
-      that can prohibit its detachement.
+      that can prohibit its detachment.
     */
     SFREE(f->ckout.dir);
     f->ckout.dirLen = 0;
     /* assert(NULL==f->dbMain); */
   }
   SFREE(f->repo.user);
-  SFREE(f->ckout.uuid);
+  fsl__cx_ckout_clear(f);
   SFREE(f->cache.projectCode);
   SFREE(f->ticket.titleColumn);
   SFREE(f->ticket.statusColumn);
@@ -12953,11 +12954,11 @@ static void fsl__cx_reset(fsl_cx * const f, bool closeDatabases){
     fsl_buffer_clear(&f->scratchpads.buf[i]);
     f->scratchpads.used[i] = false;
   }
+  fsl__cx_clear_repo_caches(f);
   fsl__bccache_clear(&f->cache.blobContent);
-  fsl__cx_mcache_clear(f);
+  fsl__cx_clear_mf_seen(f, true);
   fsl_id_bag_clear(&f->cache.leafCheck);
   fsl_id_bag_clear(&f->cache.toVerify);
-  fsl__cx_clear_mf_seen(f, true);
   assert(NULL==f->cache.mfSeen.list);
   if(f->xlinkers.list){
     fsl_free(f->xlinkers.list);
@@ -12989,7 +12990,6 @@ void fsl_cx_finalize( fsl_cx * const f ){
   f->output = fsl_outputer_empty;
   fsl_temp_dirs_free(f->cache.tempDirs);
   fsl__cx_reset(f, true);
-  fsl_db_close(&f->dbMem);
   *f = fsl_cx_empty;
   if(&fsl_cx_empty == allocStamp){
     fsl_free(f);
@@ -13016,7 +13016,6 @@ void fsl_cx_finalize( fsl_cx * const f ){
 void fsl_cx_err_reset(fsl_cx * const f){
   //f->interrupted = 0; // No! ONLY modify this via fsl_cx_interrupt()
   fsl_error_reset(&f->error);
-  fsl_db_err_reset(&f->dbMem);
   fsl_db_err_reset(&f->repo.db);
   fsl_db_err_reset(&f->config.db);
   fsl_db_err_reset(&f->ckout.db);
@@ -13153,21 +13152,8 @@ fsl_db * fsl_cx_db_ckout( fsl_cx * const f ){
 fsl_db * fsl_cx_db( fsl_cx * const f ){
   return f->dbMain;
 }
-/** @internal
 
-    Returns one of f->db{Config,Repo,Ckout,Mem}
-    or NULL.
-
-    ACHTUNG and REMINDER TO SELF: the current (2021-03) design means
-    that none of these handles except for FSL_DBROLE_MAIN actually has
-    an sqlite3 db handle assigned to it. This returns a handle to the
-    "level of abstraction" we need to keep track of each db's name and
-    db-specific other state.
-
-    e.g. passing a role of FSL_DBROLE_CKOUT this does NOT return
-    the same thing as fsl_cx_db_ckout().
-*/
-fsl_db * fsl_cx_db_for_role(fsl_cx * const f, fsl_dbrole_e r){
+fsl_db * fsl__cx_db_for_role(fsl_cx * const f, fsl_dbrole_e r){
   switch(r){
     case FSL_DBROLE_CONFIG:
       return &f->config.db;
@@ -13176,7 +13162,7 @@ fsl_db * fsl_cx_db_for_role(fsl_cx * const f, fsl_dbrole_e r){
     case FSL_DBROLE_CKOUT:
       return &f->ckout.db;
     case FSL_DBROLE_MAIN:
-      return &f->dbMem;
+      return f->dbMain;
     case FSL_DBROLE_NONE:
     default:
       return NULL;
@@ -13184,32 +13170,78 @@ fsl_db * fsl_cx_db_for_role(fsl_cx * const f, fsl_dbrole_e r){
 }
 
 /**
-    Detaches the given db role from f->dbMain and removes the role
-    from f->dbMain->role.
+   Returns the "counterpart" role for the given db role.
 */
-static int fsl_cx_detach_role(fsl_cx * const f, fsl_dbrole_e r){
-  assert(FSL_DBROLE_CONFIG!=r && "Config db now has its own handle.");
-  if(NULL==f->dbMain) return FSL_RC_MISUSE;
-  else if(!(r & f->dbMain->role)){
-    assert(!"Misuse: cannot detach unattached role.");
-    return FSL_RC_NOT_FOUND;
+static fsl_dbrole_e fsl__dbrole_counterpart(fsl_dbrole_e r){
+  switch(r){
+    case FSL_DBROLE_REPO: return FSL_DBROLE_CKOUT;
+    case FSL_DBROLE_CKOUT: return FSL_DBROLE_REPO;
+    default:
+      fsl__fatal(FSL_RC_MISUSE,
+                 "Serious internal API misuse uncovered by %s().",
+                 __func__);
+      return FSL_DBROLE_NONE;
   }
-  else{
-    fsl_db * const db = fsl_cx_db_for_role(f,r);
-    int rc;
-    assert(db && "Internal API misuse.");
-    assert(f->dbMain != db);
-    rc = fsl__db_cached_clear_role(f->dbMain, r)
+}
+
+/**
+    Detaches/closes the given db role from f->dbMain and removes the
+    role from f->dbMain->role. If r reflects the current primary db
+    and a secondary db is attached, the secondary gets detached.  If r
+    corresponds to the secondary db, only that db is detached. If
+    f->dbMain is the given role then f->dbMain is set to NULL.
+*/
+static int fsl__cx_detach_role(fsl_cx * const f, fsl_dbrole_e r){
+  assert(FSL_DBROLE_CONFIG!=r && "Config db now has its own handle.");
+  assert(FSL_DBROLE_REPO==r || FSL_DBROLE_CKOUT==r);
+  if(NULL==f->dbMain){
+    assert(!"Internal API misuse: don't try to detach when dbMain is NULL.");
+    return fsl_cx_err_set(f, FSL_RC_MISUSE,
+                          "Cannot close/detach db: none opened.");
+  }else if(!(r & f->dbMain->role)){
+    assert(!"Misuse: cannot detach unattached role.");
+    return fsl_cx_err_set(f, FSL_DBROLE_CKOUT==r
+                          ? FSL_RC_NOT_A_CKOUT
+                          : FSL_RC_NOT_A_REPO,
+                          "Cannot close/detach unattached role: %s",
+                          fsl_db_role_name(r));
+  }else{
+    fsl_db * const db = fsl__cx_db_for_role(f,r);
+    int rc = 0;
+    switch(r){
+      case FSL_DBROLE_REPO:
+        fsl__cx_clear_repo_caches(f);
+        break;
+      case FSL_DBROLE_CKOUT:
+        fsl__cx_ckout_clear(f);
+        break;
+      default:
+        fsl__fatal(FSL_RC_ERROR, "Cannot happen. Really.");
+    }
+    fsl__cx_finalize_cached_stmt(f);
+    fsl__db_cached_clear_role(f->dbMain, r)
       /* Make sure that we destroy any cached statements which are
-         known to be tied to this db role. This is primarily a kludge
-         for the global config db to avoid that closing it fails due
-         to a lock held by those statements. This is a special case
-         for the global db (as opposed to the repo/ckout dbs) because
-         exactly when that db is opened and close is not as tightly
-         controlled/funneled as the other dbs. */;    
-    if(0==rc){
-      rc = fsl_db_detach( f->dbMain, fsl_db_role_label(r) );
-      //MARKER(("rc=%s %s %s\n", fsl_rc_cstr(rc), fsl_db_role_label(r),
+         known to be tied to this db role. */;    
+    if(db->dbh){
+      /* This is our MAIN db. CLOSE it. If we still have a
+         secondary/counterpart db open, we'll detach it first. */
+      fsl_dbrole_e const counterpart = fsl__dbrole_counterpart(r);
+      assert(f->dbMain == db);
+      if(db->role & counterpart){
+        /* When closing the main db, detach the counterpart db first
+           (if it's attached). We'll ignore any result code here, for
+           sanity's sake. */
+        assert(fsl__cx_db_for_role(f,counterpart)->filename &&
+               "Inconsistent internal db handle state.");
+        fsl__cx_detach_role(f, counterpart);
+      }
+      fsl_db_close(db);
+      f->dbMain = NULL;
+    }else{
+      /* This is our secondary db. DETACH it. */
+      assert(f->dbMain != db);
+      rc = fsl_db_detach( f->dbMain, fsl_db_role_name(r) );
+      //MARKER(("rc=%s %s %s\n", fsl_rc_cstr(rc), fsl_db_role_name(r),
       //        fsl_buffer_cstr(&f->dbMain->error.msg)));
       if(rc){
         fsl_cx_uplift_db_error(f, f->dbMain);
@@ -13222,146 +13254,141 @@ static int fsl_cx_detach_role(fsl_cx * const f, fsl_dbrole_e r){
   }
 }
 
-
-/** @internal
-
-    Attaches the given db file to f with the given role. This function "should"
-    be static but we need it in fsl_repo.c when creating a new repository.
-*/
-int fsl_cx_attach_role(fsl_cx * const f, const char *zDbName,
-                       fsl_dbrole_e r){
-  char const * label = fsl_db_role_label(r);
-  fsl_db * const db = fsl_cx_db_for_role(f, r);
-  char ** nameDest = NULL;
+int fsl__cx_attach_role(fsl_cx * const f, const char *zDbName,
+                         fsl_dbrole_e r, bool createIfNotExists){
+  char const * dbName = fsl_db_role_name(r);
+  fsl_db * const db = fsl__cx_db_for_role(f, r);
   int rc;
-  assert(FSL_DBROLE_CONFIG!=r && "Config db now has its own handle.");
-  if(!f->dbMain){
-    fsl__fatal(FSL_RC_MISUSE,"Internal API misuse: f->dbMain has "
-              "not been set, so cannot attach role.");
-    return FSL_RC_MISUSE;
-  }
-  else if(r & f->dbMain->role){
-    assert(!"Misuse: role is already attached.");
-    return fsl_cx_err_set(f, FSL_RC_MISUSE,
-                          "Db role %s is already attached.",
-                          label);                          
-  }
-#if 0
-  MARKER(("r=%s db=%p, ckout.db=%p\n", label,
-          (void*)db, (void*)&f->ckout.db));
-  MARKER(("r=%s db=%p, repo.db=%p\n", label,
-          (void*)db, (void*)&f->repo.db));
-  MARKER(("r=%s db=%p, dbMain=%p\n", label,
-          (void*)db, (void*)f->dbMain));
-#endif
   assert(db);
-  assert(label);
-  assert(f->dbMain != db);
-  assert(!db->filename);
-  assert(!db->name);
-  nameDest = &db->filename;
+  assert(!db->dbh && "Internal API misuse: don't call this when db is connected.");
+  assert(!db->filename && "Don't re-attach!");
+  assert(!db->name && "Don't re-attach!");
+  assert(dbName);
+  assert(f->dbMain != db && "Don't re-attach the main db!");
   switch(r){
-    case FSL_DBROLE_CONFIG:
     case FSL_DBROLE_REPO:
     case FSL_DBROLE_CKOUT:
       break;
+    case FSL_DBROLE_CONFIG:
     case FSL_DBROLE_MAIN:
     case FSL_DBROLE_NONE:
     default:
       assert(!"cannot happen/not legal");
+      fsl__fatal(FSL_RC_RANGE, "Serious internal API misuse via %s().",
+                 __func__);
       return FSL_RC_RANGE;
   }
-  *nameDest = fsl_strdup(zDbName);
-  db->name = *nameDest ? fsl_strdup(label) : NULL;
+  db->f = f;
+  db->name = fsl_strdup(dbName);
   if(!db->name){
     rc = FSL_RC_OOM;
-    /* Design note: we do the strdup() before the ATTACH because if
-       the attach succeeds and strdup fails, detaching the db will
-       almost certainly fail because it must allocate for its prepared
-       statement and other internals. We would end up having to leave
-       the db attached and returning a failure, which could lead to a
-       memory leak (or worse) downstream.
-    */
-  }else{
-    /*MARKER(("Attached %p role %d %s %s\n",
-      (void const *)db, r, db->name, db->filename));*/
-    rc = fsl_db_attach(f->dbMain, zDbName, label);
+    goto end;
+  }
+  if(!f->dbMain){
+    // This is our first/main db. OPEN it.
+    rc = fsl_db_open( db, zDbName, createIfNotExists
+                      ? FSL_OPEN_F_RWC
+                      : FSL_OPEN_F_RW );
     if(rc){
-      fsl_cx_uplift_db_error(f, f->dbMain);
+      rc = fsl_cx_uplift_db_error2(f, db, rc);
+      fsl_db_close(db);
+      goto end;
+    }
+    int const sqrc = sqlite3_db_config(db->dbh,
+                                       SQLITE_DBCONFIG_MAINDBNAME,
+                                       dbName);
+    if(sqrc){
+      rc = fsl__db_errcode(&f->config.db, sqrc);
+      fsl_cx_uplift_db_error2(f, db, rc);
+      fsl_db_close(db);
     }else{
-      //MARKER(("Attached db %p %s from %s\n",
-      //  (void*)db, label, db->filename));
-      f->dbMain->role |= r;
+      rc = fsl__cx_init_db(f, db);
+      db->role |= r;
+      assert(db == f->dbMain)/*even on failure*/;
+      /* Should we fsl__cx_detach_role() here? */
+    }
+  }else{
+    // This is our secondary db. ATTACH it.
+    assert(db != f->dbMain);
+    db->filename = fsl_strdup(zDbName);
+    if(!db->filename){
+      rc = FSL_RC_OOM;
+    }else{
+      bool createdIt = false;
+      if(createIfNotExists
+         && 0!=fsl_file_access( zDbName, F_OK )){
+        FILE * const cf = fsl_fopen(zDbName, "w");
+        if(!cf){
+          rc = fsl_cx_err_set(f, fsl_errno_to_rc(errno, FSL_RC_IO),
+                              "Error creating new db file [%s].",
+                              zDbName);
+          goto end;
+        }
+        fsl_fclose(cf);
+        createdIt = true;
+      }
+      rc = fsl_db_attach(f->dbMain, zDbName, dbName);
+      if(rc){
+        fsl_cx_uplift_db_error(f, f->dbMain);
+        fsl_db_close(db)/*cleans up strings*/;
+        db->f = NULL;
+        if(createdIt) fsl_file_unlink(zDbName);
+      }else{
+        /*MARKER(("Attached %p role %d %s %s\n",
+          (void const *)db, r, db->name, db->filename));*/
+        f->dbMain->role |= r;
+      }
     }
   }
+  end:
   return rc;
 }
 
-void fsl_config_close( fsl_cx * const f ){
+int fsl_config_close( fsl_cx * const f ){
+  if(fsl_db_transaction_level(&f->config.db)){
+    return fsl_cx_err_set(f, FSL_RC_MISUSE,
+                          "Cannot close config db with an "
+                          "opened transaction.");
+  }
   fsl_db_close(&f->config.db);
+  return 0;
+}
+
+int fsl_close_scm_dbs(fsl_cx * const f){
+  if(fsl_cx_transaction_level(f)){
+    /* TODO???: force a full rollback and close it */
+    //if(f->repo.db.dbh) fsl_db_rollback_force(&f->repo.db);
+    //if(f->ckout.db.dbh) fsl_db_rollback_force(&f->ckout.db);
+    return fsl_cx_err_set(f, FSL_RC_MISUSE,
+                          "Cannot close repo or checkout with an "
+                          "opened transaction.");
+  }else if(!f->dbMain){
+    // Make sure that all string resources are cleaned up...
+    fsl_db_close(&f->repo.db);
+    fsl_db_close(&f->ckout.db);
+    return 0;
+  }else{
+    fsl_db * const dbR = &f->repo.db;
+    return fsl__cx_detach_role(f, f->dbMain == dbR
+                               ? FSL_DBROLE_REPO
+                               : FSL_DBROLE_CKOUT)
+      /* Will also close the counterpart db. */;
+  }    
 }
 
 int fsl_repo_close( fsl_cx * const f ){
-  if(fsl_cx_transaction_level(f)){
-    return fsl_cx_err_set(f, FSL_RC_MISUSE,
-                          "Cannot close repo with an opened transaction.");
-  }else{
-    int rc = 0;
-    fsl_db * const db = &f->repo.db;
-    if(f->dbMain && (FSL_DBROLE_REPO & f->dbMain->role)){
-      /* Repo db is ATTACHed. */
-      if(FSL_DBROLE_CKOUT & f->dbMain->role){
-        rc = fsl_cx_err_set(f, FSL_RC_MISUSE,
-                            "Cannot close repo while checkout is "
-                            "opened.");
-      }else{
-        assert(f->dbMain!=db);
-        rc = fsl_cx_detach_role(f, FSL_DBROLE_REPO);
-      }
-    }else{
-      fsl_db_close(db);
-    }
-    assert(!db->dbh);
-    f->cache.allowSymlinks =
-      f->cache.caseInsensitive =
-      f->cache.seenDeltaManifest = -1;
-    return rc;
-  }
+  return fsl_close_scm_dbs(f);
 }
 
 int fsl_ckout_close( fsl_cx * const f ){
-  if(fsl_cx_transaction_level(f)){
-    return fsl_cx_err_set(f, FSL_RC_MISUSE,
-                          "Cannot close checkout with opened transaction.");
-  }else{
-    int rc = 0;
-    fsl_db * const db = &f->ckout.db;
-    if(f->dbMain && (FSL_DBROLE_CKOUT & f->dbMain->role)){
-      /* Checkout db is ATTACHed. */
-      rc = fsl_cx_detach_role(f, FSL_DBROLE_CKOUT);
-      fsl_repo_close(f)
-        /* Because the repo is implicitly opened, we "should"
-           implicitly close it. This is debatable but "probably almost
-           always" desired. i can't currently envisage a reasonable
-           use-case which requires closing the checkout but keeping
-           the repo opened.  The repo can always be re-opened by
-           itself. */;
-    }else{
-      fsl_db_close(db);
-    }
-    fsl_free(f->ckout.uuid);
-    f->ckout.uuid = NULL;
-    f->ckout.rid = 0;
-    assert(!db->dbh);
-    return rc;
-  }
+  return fsl_close_scm_dbs(f);
 }
 
 /**
    If zDbName is a valid checkout database file, open it and return 0.
    If it is not a valid local database file, return a non-0 code.
 */
-static int fsl_cx_ckout_open_db(fsl_cx * f, const char *zDbName){
+static int fsl__cx_ckout_open_db(fsl_cx * f, const char *zDbName){
   /* char *zVFileDef; */
   int rc;
   fsl_int_t const lsize = fsl_file_size(zDbName);
@@ -13374,7 +13401,7 @@ static int fsl_cx_ckout_open_db(fsl_cx * f, const char *zDbName){
                           "checkout db: %s",
                           zDbName);
   }
-  rc = fsl_cx_attach_role(f, zDbName, FSL_DBROLE_CKOUT);
+  rc = fsl__cx_attach_role(f, zDbName, FSL_DBROLE_CKOUT, false);
   return rc;
 }
 
@@ -13461,7 +13488,7 @@ static int fsl_config_file_reset(fsl_cx * const f, char const * dbName){
   fsl_db * db = &DB;
   int rc = 0;
   bool isAttached = false;
-  const char * zPrefix = fsl_db_role_label(FSL_DBROLE_CONFIG);
+  const char * zPrefix = fsl_db_role_name(FSL_DBROLE_CONFIG);
   if(-1 != fsl_file_size(dbName)){
     rc = fsl_file_unlink(dbName);
     if(rc){
@@ -13474,7 +13501,7 @@ static int fsl_config_file_reset(fsl_cx * const f, char const * dbName){
      Hoop-jumping: because the schema file has a cfg. prefix for the
      table(s), and we cannot assign an arbitrary name to an open()'d
      db, we first open the db (making the the "main" db), then
-     ATTACH it to itself to provide the fsl_db_role_label() alias.
+     ATTACH it to itself to provide the fsl_db_role_name() alias.
   */
   rc = fsl_db_open(db, dbName, FSL_OPEN_F_RWC);
   if(rc) goto end;
@@ -13595,7 +13622,7 @@ int fsl_config_open( fsl_cx * const f, char const * openDbName ){
   if(0==rc){
     int const sqrc = sqlite3_db_config(f->config.db.dbh,
                                        SQLITE_DBCONFIG_MAINDBNAME,
-                                       fsl_db_role_label(FSL_DBROLE_CONFIG));
+                                       fsl_db_role_name(FSL_DBROLE_CONFIG));
     if(sqrc) rc = fsl__db_errcode(&f->config.db, sqrc);
   }
   if(rc){
@@ -13749,7 +13776,7 @@ int fsl_repo_open( fsl_cx * const f, char const * repoDbFile
                           "Repository db [%s] not found or cannot be read.",
                           repoDbFile);
     }else{
-      rc = fsl_cx_attach_role(f, repoDbFile, FSL_DBROLE_REPO);
+      rc = fsl__cx_attach_role(f, repoDbFile, FSL_DBROLE_REPO, false);
       if(!rc && !(FSL_CX_F_IS_OPENING_CKOUT & f->flags)){
         rc = fsl_cx_after_open(f);
       }
@@ -13830,16 +13857,20 @@ static void fsl_ckout_mtime_set(fsl_cx * const f){
     : 0.0;
 }
 
+void fsl__cx_ckout_clear( fsl_cx * const f ){
+  fsl_free(f->ckout.uuid);
+  f->ckout.rid = -1;
+  f->ckout.uuid = NULL;
+  f->ckout.mtime = 0.0;
+}
+
 int fsl__ckout_version_fetch( fsl_cx * const f ){
   fsl_id_t rid = 0;
   int rc = 0;
   fsl_db * dbC = fsl_cx_db_ckout(f);
   fsl_db * dbR = dbC ? fsl_needs_repo(f) : NULL;
   assert(!dbC || (dbC && dbR));
-  fsl_free(f->ckout.uuid);
-  f->ckout.rid = -1;
-  f->ckout.uuid = NULL;
-  f->ckout.mtime = 0.0;
+  fsl__cx_ckout_clear(f);
   if(!dbC){
     return 0;
   }
@@ -14063,7 +14094,9 @@ int fsl_ckout_open_dir( fsl_cx * const f, char const * dirName,
     rc = fsl_cx_err_set( f, FSL_RC_ACCESS,
                          "A checkout is already opened. "
                          "Close it before opening another.");
-    goto end;
+    goto end; 
+  }else if(!dirName){
+    dirName = ".";
   }
   rc = fsl_file_canonical_name( dirName, bufD, false );
   if(rc) goto end;
@@ -14079,7 +14112,7 @@ int fsl_ckout_open_dir( fsl_cx * const f, char const * dirName,
   }
   assert(buf->used>1 /* "/<FILENAME>" */);
   zName = fsl_buffer_cstr(buf);
-  rc = fsl_cx_ckout_open_db(f, zName);
+  rc = fsl__cx_ckout_open_db(f, zName);
   if(0==rc){
     /* Checkout db is now opened. Fiddle some internal
        bits...
@@ -14116,7 +14149,7 @@ int fsl_ckout_open_dir( fsl_cx * const f, char const * dirName,
 char const * fsl_cx_db_file_for_role(fsl_cx const * f,
                                      fsl_dbrole_e r,
                                      fsl_size_t * len){
-  fsl_db const * db = fsl_cx_db_for_role((fsl_cx*)f, r);
+  fsl_db const * db = fsl__cx_db_for_role((fsl_cx*)f, r);
   char const * rc = db ? db->filename : NULL;
   if(len) *len = fsl_strlen(rc);
   return rc;
@@ -14126,12 +14159,14 @@ char const * fsl_cx_db_name_for_role(fsl_cx const * f,
                                      fsl_dbrole_e r,
                                      fsl_size_t * len){
   if(FSL_DBROLE_MAIN == r){
-    /* special case to be removed when f->dbMem bits are
-       finished. */
-    if(len) *len=4;
-    return "main";
+    if(f->dbMain){
+      if(len) *len=4;
+      return "main";
+    }else{
+      return NULL;
+    }
   }else{
-    fsl_db const * db = fsl_cx_db_for_role((fsl_cx*)f, r);
+    fsl_db const * db = fsl__cx_db_for_role((fsl_cx*)f, r);
     char const * rc = db ? db->name : NULL;
     if(len) *len = rc ? fsl_strlen(rc) : 0;
     return rc;
@@ -14385,38 +14420,20 @@ void fsl__cx_content_buffer_yield(fsl_cx * const f){
 }
 
 fsl_error const * fsl_cx_err_get_e(fsl_cx const * f){
-  return f ? &f->error : NULL;
+  return &f->error;
 }
 
 int fsl_cx_close_dbs( fsl_cx * const f ){
-  if(fsl_cx_transaction_level(f)){
-    /* Is this really necessary? */
+  if(fsl_cx_transaction_level(f)
+     || (f->config.db.dbh && fsl_db_transaction_level(&f->config.db))){
+    /* Is this really necessary? Should we instead
+       force rollback(s) and close the dbs? */
     return fsl_cx_err_set(f, FSL_RC_MISUSE,
                           "Cannot close the databases when a "
                           "transaction is pending.");
   }
-  if(NULL==f->dbMain) return 0;
-  int rc = 0, rc1;
-  rc = fsl__db_cached_clear_role(f->dbMain, 0);
-  if(rc) return fsl_cx_uplift_db_error(f, f->dbMain);
-  rc1 = fsl_ckout_close(f);
-  if(rc1) rc = rc1;
-  rc1 = fsl_repo_close(f);
-  if(rc1) rc = rc1;
   fsl_config_close(f);
-  /* Forcibly reset the role and db strings for this case, even
-     if closing ostensibly fails. */
-  f->dbMain->role = FSL_DBROLE_MAIN;
-  fsl__db_clear_strings(&f->repo.db, true);
-  fsl__db_clear_strings(&f->ckout.db, true);
-  fsl__db_clear_strings(&f->config.db, true);
-  assert(!f->repo.db.dbh);
-  assert(!f->ckout.db.dbh);
-  assert(!f->config.db.dbh);
-  assert(!f->repo.db.filename);
-  assert(!f->ckout.db.filename);
-  assert(!f->config.db.filename);
-  return rc;
+  return fsl_close_scm_dbs(f);
 }
 
 char const * fsl_cx_glob_matches( fsl_cx * const f, int gtype,
@@ -14713,7 +14730,7 @@ void fsl__cx_scratchpad_yield(fsl_cx * const f, fsl_buffer * const b){
 
 /** @internal
 
-   Don't use this. Use fsl_cx_rm_empty_dirs() instead.
+   Don't use this. Use fsl__ckout_rm_empty_dirs() instead.
 
    Attempts to remove empty directories from under a checkout,
    starting with tgtDir and working upwards until it either cannot
@@ -14736,16 +14753,17 @@ void fsl__cx_scratchpad_yield(fsl_cx * const f, fsl_buffer * const b){
    There are any number of valid reasons removal of a directory might
    fail, and this routine stops at the first one which does.
 */
-static unsigned fsl_rm_empty_dirs(char const *coRoot, fsl_int_t rootLen,
-                                  fsl_buffer * tgtDir){
-  if(rootLen<0) rootLen = fsl_strlen(coRoot);
+static unsigned fsl__rm_empty_dirs(char const * const coRoot,
+                                   fsl_int_t rootLen,
+                                  fsl_buffer const * const tgtDir){
+  if(rootLen<0) rootLen = (fsl_int_t)fsl_strlen(coRoot);
   char const * zAbs = fsl_buffer_cstr(tgtDir);
   char const * zCoDirPart = zAbs + rootLen;
   char * zEnd = fsl_buffer_str(tgtDir) + tgtDir->used - 1;
   unsigned rc = 0;
   assert(coRoot);
   if(0!=memcmp(coRoot, zAbs, (size_t)rootLen)){
-    assert(!"Misuse of fsl_rm_empty_dirs()");
+    assert(!"Misuse of fsl__rm_empty_dirs()");
     return 0;
   }
   if(fsl_rmdir(zAbs)) return rc;
@@ -14765,15 +14783,16 @@ static unsigned fsl_rm_empty_dirs(char const *coRoot, fsl_int_t rootLen,
   return rc;
 }
 
-unsigned int fsl_ckout_rm_empty_dirs(fsl_cx * const f, fsl_buffer * const tgtDir){
+unsigned int fsl__ckout_rm_empty_dirs(fsl_cx * const f,
+                                      fsl_buffer const * const tgtDir){
   int rc = f->ckout.dir ? 0 : FSL_RC_NOT_A_CKOUT;
   if(!rc){
-    rc = fsl_rm_empty_dirs(f->ckout.dir, f->ckout.dirLen, tgtDir);
+    rc = fsl__rm_empty_dirs(f->ckout.dir, f->ckout.dirLen, tgtDir);
   }
   return rc;
 }
 
-int fsl_ckout_rm_empty_dirs_for_file(fsl_cx * const f, char const *zAbsPath){
+int fsl__ckout_rm_empty_dirs_for_file(fsl_cx * const f, char const *zAbsPath){
   if(!fsl_is_rooted_in_ckout(f, zAbsPath)){
     assert(!"Internal API misuse!");
     return FSL_RC_MISUSE;
@@ -14781,7 +14800,7 @@ int fsl_ckout_rm_empty_dirs_for_file(fsl_cx * const f, char const *zAbsPath){
     fsl_buffer * const p = fsl__cx_scratchpad(f);
     fsl_int_t const nAbs = (fsl_int_t)fsl_strlen(zAbsPath);
     int const rc = fsl_file_dirpart(zAbsPath, nAbs, p, false);
-    if(!rc) fsl_rm_empty_dirs(f->ckout.dir, f->ckout.dirLen, p);
+    if(!rc) fsl__rm_empty_dirs(f->ckout.dir, f->ckout.dirLen, p);
     fsl__cx_scratchpad_yield(f,p);
     return rc;
   }
@@ -14926,8 +14945,9 @@ static int fsl_list_v_fsl_stmt_finalize(void * obj, void * visitorState ){
 
 
 int fsl__db_errcode(fsl_db * const db, int sqliteCode){
-  int rc = sqliteCode ? sqliteCode : sqlite3_errcode(db->dbh);
-  switch(sqliteCode){
+  int rc = 0;
+  if(!sqliteCode) sqliteCode = sqlite3_errcode(db->dbh);
+  switch(sqliteCode & 0xff){
     case SQLITE_ROW:
     case SQLITE_DONE:
     case SQLITE_OK: rc = 0; break;
@@ -14943,20 +14963,17 @@ int fsl__db_errcode(fsl_db * const db, int sqliteCode){
     case SQLITE_LOCKED:
     case SQLITE_READONLY: rc = FSL_RC_ACCESS; break;
     case SQLITE_CORRUPT: rc = FSL_RC_CONSISTENCY; break;
-    case SQLITE_IOERR: rc = FSL_RC_IO; break;
+    case SQLITE_CANTOPEN:
+    case SQLITE_IOERR:
+      rc = FSL_RC_IO; break;
     default:
-      //MARKER(("sqlite3_errcode()=%d\n", rc));
+      //MARKER(("sqlite3_errcode()=0x%04x\n", rc));
       rc = FSL_RC_DB; break;
   }
   return rc
-    ? fsl_error_set(&db->error, rc, "sqlite3 error: %s",
-                    sqlite3_errmsg(db->dbh))
-    /* ^^^ potential TODO: use fsl_buffer_external() on db->error.msg,
-       pointing it directly to the sqlite3_errmsg() result, instead of
-       allocating a copy with a prefix. That has the advantage of not
-       allocating (so an OOM message can be reported with a message)
-       but the disadvantage of exposing the 3rd-party error string
-       without any indication that it's coming from a 3rd party. */
+    ? fsl_error_set(&db->error, rc,
+                    "sqlite3 error #%d: %s",
+                    sqliteCode, sqlite3_errmsg(db->dbh))
     : (fsl_error_reset(&db->error), 0);
 }
 
@@ -14969,19 +14986,15 @@ void fsl__db_clear_strings(fsl_db * const db, bool alsoErrorState ){
 }
 
 int fsl_db_err_get( fsl_db const * const db, char const ** msg, fsl_size_t * len ){
-  return db
-    ? fsl_error_get(&db->error, msg, len)
-    : FSL_RC_MISUSE;
+  return fsl_error_get(&db->error, msg, len);
 }
 
 fsl_db * fsl_stmt_db( fsl_stmt * const stmt ){
-  return stmt ? stmt->db : NULL;
+  return stmt->db;
 }
 
 char const * fsl_stmt_sql( fsl_stmt * const stmt, fsl_size_t * const len ){
-  return stmt
-    ? fsl_buffer_cstr2(&stmt->sql, len)
-    : NULL;
+  return fsl_buffer_cstr2(&stmt->sql, len);
 }
 
 char const * fsl_db_filename(fsl_db const * db, fsl_size_t * len){
@@ -15094,7 +15107,7 @@ char const * fsl_db_name(fsl_db const * const db){
 /**
     Returns the db name for the given role.
  */
-const char * fsl_db_role_label(fsl_dbrole_e r){
+const char * fsl_db_role_name(fsl_dbrole_e r){
   switch(r){
     case FSL_DBROLE_CONFIG:
       return "cfg";
@@ -15108,7 +15121,6 @@ const char * fsl_db_role_label(fsl_dbrole_e r){
       return "temp";
     case FSL_DBROLE_NONE:
     default:
-      assert(!"cannot happen/not legal");
       return NULL;
   }
 }
@@ -15474,7 +15486,7 @@ int fsl__db_cached_clear_role(fsl_db * const db, int role){
 }
 
 int fsl_stmt_step( fsl_stmt * const stmt ){
-  if(!stmt || !stmt->stmt) return FSL_RC_MISUSE;
+  if(!stmt->stmt) return FSL_RC_MISUSE;
   else{
     int const rc = sqlite3_step(stmt->stmt);
     assert(stmt->db);
@@ -15492,7 +15504,7 @@ int fsl_stmt_step( fsl_stmt * const stmt ){
 
 int fsl_db_eachv( fsl_db * const db, fsl_stmt_each_f callback,
                   void * callbackState, char const * sql, va_list args ){
-  if(!db || !db->dbh || !callback || !sql) return FSL_RC_MISUSE;
+  if(!db->dbh || !callback || !sql) return FSL_RC_MISUSE;
   else if(!*sql) return FSL_RC_RANGE;
   else{
     fsl_stmt st = fsl_stmt_empty;
@@ -15516,9 +15528,9 @@ int fsl_db_each( fsl_db * const db, fsl_stmt_each_f callback,
   return rc;
 }
 
-int fsl_stmt_each( fsl_stmt * stmt, fsl_stmt_each_f callback,
+int fsl_stmt_each( fsl_stmt * const stmt, fsl_stmt_each_f callback,
                    void * callbackState ){
-  if(!stmt || !callback) return FSL_RC_MISUSE;
+  if(!callback) return FSL_RC_MISUSE;
   else{
     int strc;
     int rc = 0;
@@ -15928,17 +15940,30 @@ char const * fsl_stmt_g_text( fsl_stmt * const stmt, int index,
 
 
 /**
-   This function outputs tracing info using fsl_fprintf((FILE*)zFILE,...).
-   Defaults to stdout if zFILE is 0.
- */
-static void fsl_db_sql_trace(void *zFILE, const char *zSql){
-  int const n = fsl_strlen(zSql);
-  static int counter = 0;
-  /* FIXME: in v1 this uses fossil_trace(), but don't have
-     that functionality here yet. */
-  fsl_fprintf(zFILE ? (FILE*)zFILE : stdout,
-              "SQL TRACE #%d: %s%s\n", ++counter,
-              zSql, (n>0 && zSql[n-1]==';') ? "" : ";");
+   This sqlite3_trace_v2() callback outputs tracing info using
+   fsl_fprintf((FILE*)c,...).  Defaults to stdout if c is NULL.
+*/
+static int fsl__db_sq3TraceV2(unsigned t,void*c,void*p,void*x){
+  static unsigned int counter = 0;
+  if(c ||p){/*unused*/}
+  switch(t){
+    case SQLITE_TRACE_STMT:{
+      char const * zSql = (char const *)x;
+      char * zExp = zSql
+        ? sqlite3_expanded_sql((sqlite3_stmt*)p)
+        : NULL;
+      fsl_fprintf(c ? (FILE*)c : stdout,
+                  "SQL TRACE #%u: %s\n",
+                  ++counter,
+                  zExp ? zExp :
+                  (zSql ? zSql : "(NO SQL?)"));
+      sqlite3_free(zExp);
+      break;
+    }
+    default:
+      break;
+  }
+  return 0;
 }
 
 fsl_db * fsl_db_malloc(){
@@ -15995,20 +16020,16 @@ int fsl_db_open( fsl_db * const db, char const * dbFile,
   }
   else{
     int sOpenFlags = 0;
-    if(isMem){
-      sOpenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
+    if(FSL_OPEN_F_RO & openFlags){
+      sOpenFlags |= SQLITE_OPEN_READONLY;
     }else{
-      if(FSL_OPEN_F_RO & openFlags){
-        sOpenFlags |= SQLITE_OPEN_READONLY;
-      }else{
-        if(FSL_OPEN_F_RW & openFlags){
-          sOpenFlags |= SQLITE_OPEN_READWRITE;
-        }
-        if(FSL_OPEN_F_CREATE & openFlags){
-          sOpenFlags |= SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
-        }
-        if(!sOpenFlags) sOpenFlags = SQLITE_OPEN_READONLY;
+      if(FSL_OPEN_F_RW & openFlags){
+        sOpenFlags |= SQLITE_OPEN_READWRITE;
       }
+      if(FSL_OPEN_F_CREATE & openFlags){
+        sOpenFlags |= SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
+      }
+      if(!sOpenFlags) sOpenFlags = SQLITE_OPEN_READONLY;
     }
     rc = sqlite3_open_v2( dbFile, &dbh, sOpenFlags, NULL );
     if(rc){
@@ -16050,6 +16071,7 @@ int fsl_db_open( fsl_db * const db, char const * dbFile,
       }
     }
     db->dbh = dbh;
+    sqlite3_extended_result_codes(dbh, 1);
     sqlite3_commit_hook(dbh, fsl_db_verify_begin_was_not_called, db);
     if(FSL_OPEN_F_TRACE_SQL & openFlags){
       fsl_db_sqltrace_enable(db, stdout);
@@ -16074,8 +16096,19 @@ int fsl_db_open( fsl_db * const db, char const * dbFile,
   return rc;
 }
 
+
+static int fsl__db_err_not_opened(fsl_db * const db){
+  return fsl_error_set(&db->error, FSL_RC_MISUSE,
+                       "DB is not opened.");
+}
+static int fsl__db_err_sql_empty(fsl_db * const db){
+  return fsl_error_set(&db->error, FSL_RC_MISUSE,
+                       "Empty SQL is not permitted.");
+ }
+
 int fsl_db_exec_multiv( fsl_db * const db, const char * sql, va_list args){
-  if(!db || !db->dbh || !sql) return FSL_RC_MISUSE;
+  if(!db->dbh) return fsl__db_err_not_opened(db);
+  else if(!sql || !*sql) return fsl__db_err_sql_empty(db);
   else{
     fsl_buffer buf = fsl_buffer_empty;
     int rc = 0;
@@ -16108,7 +16141,8 @@ int fsl_db_exec_multiv( fsl_db * const db, const char * sql, va_list args){
 }
 
 int fsl_db_exec_multi( fsl_db * const db, const char * sql, ...){
-  if(!db || !db->dbh || !sql) return FSL_RC_MISUSE;
+  if(!db->dbh) return fsl__db_err_not_opened(db);
+  else if(!sql || !*sql) return fsl__db_err_sql_empty(db);
   else{
     int rc;
     va_list args;
@@ -16120,7 +16154,8 @@ int fsl_db_exec_multi( fsl_db * const db, const char * sql, ...){
 }
 
 int fsl_db_execv( fsl_db * const db, const char * sql, va_list args){
-  if(!db || !db->dbh || !sql) return FSL_RC_MISUSE;
+  if(!db->dbh) return fsl__db_err_not_opened(db);
+  else if(!sql || !*sql) return fsl__db_err_sql_empty(db);
   else{
     fsl_stmt st = fsl_stmt_empty;
     int rc = 0;
@@ -16141,7 +16176,8 @@ int fsl_db_execv( fsl_db * const db, const char * sql, va_list args){
 }
 
 int fsl_db_exec( fsl_db * const db, const char * sql, ...){
-  if(!db || !db->dbh || !sql) return FSL_RC_MISUSE;
+  if(!db->dbh) return fsl__db_err_not_opened(db);
+  else if(!sql || !*sql) return fsl__db_err_sql_empty(db);
   else{
     int rc;
     va_list args;
@@ -16153,13 +16189,13 @@ int fsl_db_exec( fsl_db * const db, const char * sql, ...){
 }
 
 int fsl_db_changes_recent(fsl_db * const db){
-  return (db && db->dbh)
+  return db->dbh
     ? sqlite3_changes(db->dbh)
     : 0;
 }
 
 int fsl_db_changes_total(fsl_db * const db){
-  return (db && db->dbh)
+  return db->dbh
     ? sqlite3_total_changes(db->dbh)
     : 0;
 }
@@ -16191,20 +16227,21 @@ int fsl_db_transaction_level(fsl_db * const db){
 }
 
 int fsl_db_transaction_commit(fsl_db * const db){
-  return (db && db->dbh)
+  return db->dbh
     ? fsl_db_transaction_end(db, 0)
     : FSL_RC_MISUSE;
 }
 
 int fsl_db_transaction_rollback(fsl_db * const db){
-  return (db && db->dbh)
+  return db->dbh
     ? fsl_db_transaction_end(db, 1)
     : FSL_RC_MISUSE;
 }
 
 int fsl_db_rollback_force( fsl_db * const db ){
-  if(!db || !db->dbh) return FSL_RC_MISUSE;
-  else{
+  if(!db->dbh){
+    return fsl__db_err_not_opened(db);
+  }else{
     int rc;
     db->beginCount = 0;
     fsl_db_cleanup_beforeCommit(db);
@@ -16216,8 +16253,9 @@ int fsl_db_rollback_force( fsl_db * const db ){
 
 int fsl_db_transaction_end(fsl_db * const db, bool doRollback){
   int rc = 0;
-  if(!db || !db->dbh) return FSL_RC_MISUSE;
-  else if (db->beginCount<=0){
+  if(!db->dbh){
+    return fsl__db_err_not_opened(db);
+  }else if (db->beginCount<=0){
     return fsl_error_set(&db->error, FSL_RC_RANGE,
                          "No transaction is active.");
   }
@@ -16230,8 +16268,10 @@ int fsl_db_transaction_end(fsl_db * const db, bool doRollback){
   if(--db->beginCount > 0) return 0;
   assert(0==db->beginCount && "The commit-hook check relies on this.");
   assert(db->doRollback>=0);
+  int const changeCount =
+    sqlite3_total_changes(db->dbh) - db->priorChanges;
   if(0==db->doRollback){
-    if(db->priorChanges < sqlite3_total_changes(db->dbh)){
+    if(changeCount>0){
       /* Execute before-commit hooks and leaf checks */
       fsl_size_t x = 0;
       for( ; !rc && (x < db->beforeCommit.used); ++x ){
@@ -16259,18 +16299,26 @@ int fsl_db_transaction_end(fsl_db * const db, bool doRollback){
       db->doRollback = rc ? 1 : 0;
     }
   }
-  if(db->doRollback && db->f){
+  if(db->doRollback && db->f && changeCount>0){
     /**
-       If a rollback is underway, certain fsl_cx caches might be
-       referring to record IDs which were injected as part of the
-       being-rolled-back transaction. The only(?) reasonably sane way
-       to deal with that is to flush all relevant caches. It is
-       unfortunate that this bit is in the db class, as opposed to the
-       fsl_cx class, but we currently have no hook which would allow
-       us to trigger this from that class.
+       If a rollback is underway (from a transaction in which data was
+       written), certain fsl_cx caches might be referring to record
+       IDs which were injected as part of the being-rolled-back
+       transaction. The only(?) reasonably sane way to deal with that
+       is to flush all relevant caches. It is unfortunate that this
+       bit is in the db class, as opposed to the fsl_cx class, but we
+       currently have no hook which would allow us to trigger this
+       from that class.
     */
+#if 1
     fsl__bccache_reset(&db->f->cache.blobContent);
     fsl__cx_mcache_clear(db->f);
+#else
+    /* This one resets all of ^^^ plus certain repo-side config
+       settings, but it's not yet clear whether that they will be
+       reloaded when needed. */
+    fsl__cx_clear_repo_caches(d->f);
+#endif
   }
   fsl_db_cleanup_beforeCommit(db);
   fsl_db_reset_change_count(db);
@@ -16773,7 +16821,7 @@ bool fsl_db_table_exists(fsl_db * const db,
                         fsl_dbrole_e whichDb,
                         const char *zTable
 ){
-  const char *zDb = fsl_db_role_label( whichDb );
+  const char *zDb = fsl_db_role_name( whichDb );
   int rc = db->dbh
     ? sqlite3_table_column_metadata(db->dbh, zDb, zTable, 0,
                                     0, 0, 0, 0, 0)
@@ -16801,7 +16849,7 @@ bool fsl_db_table_has_column( fsl_db * const db, char const *zTableName, char co
 }
 
 char * fsl_db_random_hex(fsl_db * const db, fsl_size_t n){
-  if(!db || !n) return NULL;
+  if(!db->dbh || !n) return NULL;
   else{
     fsl_size_t rvLen = 0;
     char * rv = fsl_db_g_text(db, &rvLen,
@@ -16817,9 +16865,10 @@ char * fsl_db_random_hex(fsl_db * const db, fsl_size_t n){
 }
 
 
-int fsl_db_select_slistv( fsl_db * const db, fsl_list * tgt,
+int fsl_db_select_slistv( fsl_db * const db, fsl_list * const tgt,
                           char const * fmt, va_list args ){
-  if(!db || !tgt || !fmt) return FSL_RC_MISUSE;
+  if(!db->dbh) return fsl__db_err_not_opened(db);
+  else if(!fmt || !*fmt) return fsl__db_err_sql_empty(db);
   else if(!*fmt) return FSL_RC_RANGE;
   else{
     int rc;
@@ -16843,7 +16892,7 @@ int fsl_db_select_slistv( fsl_db * const db, fsl_list * tgt,
   }
 }
 
-int fsl_db_select_slist( fsl_db * const db, fsl_list * tgt,
+int fsl_db_select_slist( fsl_db * const db, fsl_list * const tgt,
                          char const * fmt, ... ){
   int rc;
   va_list va;
@@ -16854,8 +16903,9 @@ int fsl_db_select_slist( fsl_db * const db, fsl_list * tgt,
 }
 
 void fsl_db_sqltrace_enable( fsl_db * const db, FILE * outStream ){
-  if(db && db->dbh){
-    sqlite3_trace(db->dbh, fsl_db_sql_trace, outStream);
+  if(db->dbh){
+    sqlite3_trace_v2(db->dbh, SQLITE_TRACE_STMT,
+                     fsl__db_sq3TraceV2, outStream);
   }
 }
 
@@ -23718,250 +23768,13 @@ int fsl_delta_apply(
 #include <stdlib.h>
 #include <string.h> /* for memmove()/strlen() */
 
-#define MARKER(pfexp)                                               \
-  do{ printf("MARKER: %s:%d:%s():\t",__FILE__,__LINE__,__func__);   \
-    printf pfexp;                                                   \
-  } while(0)
-
-typedef uint64_t u64;
-typedef void ReCompiled /* porting crutch. i would strongly prefer to
-                           replace the regex support with a stateful
-                           predicate callback.
-                        */;
-
-#define DIFF_CONTEXT_MASK ((u64)0x0000ffff) /* Lines of context. Default if 0 */
-#define DIFF_WIDTH_MASK   ((u64)0x00ff0000) /* side-by-side column width */
-#define DIFF_IGNORE_EOLWS ((u64)0x01000000) /* Ignore end-of-line whitespace */
-#define DIFF_IGNORE_ALLWS ((u64)0x03000000) /* Ignore all whitespace */
-#define DIFF_SIDEBYSIDE   ((u64)0x04000000) /* Generate a side-by-side diff */
-#define DIFF_VERBOSE      ((u64)0x08000000) /* Missing shown as empty files */
-#define DIFF_BRIEF        ((u64)0x10000000) /* Show filenames only */
-#define DIFF_HTML         ((u64)0x20000000) /* Render for HTML */
-#define DIFF_LINENO       ((u64)0x40000000) /* Show line numbers */
-#define DIFF_NOOPT        (((u64)0x01)<<32) /* Suppress optimizations (debug) */
-#define DIFF_INVERT       (((u64)0x02)<<32) /* Invert the diff (debug) */
-#define DIFF_CONTEXT_EX   (((u64)0x04)<<32) /* Use context even if zero */
-#define DIFF_NOTTOOBIG    (((u64)0x08)<<32) /* Only display if not too big */
-#define DIFF_STRIP_EOLCR  (((u64)0x10)<<32) /* Strip trailing CR */
-
-/* Annotation flags (any DIFF flag can be used as Annotation flag as well) */
-#define ANN_FILE_VERS   (((u64)0x20)<<32) /* Show file vers rather than commit vers */
-#define ANN_FILE_ANCEST (((u64)0x40)<<32) /* Prefer check-ins in the ANCESTOR table */
-
-
-/*
-  ANSI escape codes: https://en.wikipedia.org/wiki/ANSI_escape_code
-*/
-#define ANSI_COLOR_BLACK(BOLD) ((BOLD) ? "\x1b[30m" : "\x1b[30m")
-#define ANSI_COLOR_RED(BOLD) ((BOLD) ? "\x1b[31;1m" : "\x1b[31m")
-#define ANSI_COLOR_GREEN(BOLD) ((BOLD) ? "\x1b[32;1m" : "\x1b[32m")
-#define ANSI_COLOR_YELLOW(BOLD) ((BOLD) ? "\x1b[33;1m" : "\x1b[33m")
-#define ANSI_COLOR_BLUE(BOLD) ((BOLD) ? "\x1b[34;1m" : "\x1b[34m")
-#define ANSI_COLOR_MAGENTA(BOLD) ((BOLD) ? "\x1b[35;1m" : "\x1b[35m")
-#define ANSI_COLOR_CYAN(BOLD) ((BOLD) ? "\x1b[36;1m" : "\x1b[36m")
-#define ANSI_COLOR_WHITE(BOLD) ((BOLD) ? "\x1b[37;1m" : "\x1b[37m")
-#define ANSI_DIFF_ADD(BOLD) ANSI_COLOR_GREEN(BOLD)
-#define ANSI_DIFF_RM(BOLD) ANSI_COLOR_RED(BOLD)
-#define ANSI_DIFF_MOD(BOLD) ANSI_COLOR_BLUE(BOLD)
-#define ANSI_BG_BLACK(BOLD) ((BOLD) ? "\x1b[40;1m" : "\x1b[40m")
-#define ANSI_BG_RED(BOLD) ((BOLD) ? "\x1b[41;1m" : "\x1b[41m")
-#define ANSI_BG_GREEN(BOLD) ((BOLD) ? "\x1b[42;1m" : "\x1b[42m")
-#define ANSI_BG_YELLOW(BOLD) ((BOLD) ? "\x1b[43;1m" : "\x1b[43m")
-#define ANSI_BG_BLUE(BOLD) ((BOLD) ? "\x1b[44;1m" : "\x1b[44m")
-#define ANSI_BG_MAGENTA(BOLD) ((BOLD) ? "\x1b[45;1m" : "\x1b[45m")
-#define ANSI_BG_CYAN(BOLD) ((BOLD) ? "\x1b[46;1m" : "\x1b[46m")
-#define ANSI_BG_WHITE(BOLD) ((BOLD) ? "\x1b[47;1m" : "\x1b[47m")
-#define ANSI_RESET_COLOR   "\x1b[39;49m"
-#define ANSI_RESET_ALL     "\x1b[0m"
-#define ANSI_RESET ANSI_RESET_ALL
-/*#define ANSI_BOLD     ";1m"*/
 
 /**
-    Extract the number of lines of context from diffFlags.
- */
-static int diff_context_lines(uint64_t diffFlags){
-  int n = diffFlags & DIFF_CONTEXT_MASK;
-  if( n==0 && (diffFlags & DIFF_CONTEXT_EX)==0 ) n = 5;
-  return n;
-}
-
-/*
-   Extract the width of columns for side-by-side diff.  Supply an
-   appropriate default if no width is given.
-*/
-static int diff_width(uint64_t diffFlags){
-  int w = (diffFlags & DIFF_WIDTH_MASK)/(DIFF_CONTEXT_MASK+1);
-  if( w==0 ) w = 80;
-  return w;
-}
-
-/**
-    Converts mask of public fsl_diff_flag_t (32-bit) values to the
-    Fossil-internal 64-bit bitmask used by the DIFF_xxx macros. Why?
-    (A) fossil(1) uses the macro approach and a low-level encoding of
-    data in the bitmask (e.g. the context lines count). The public API
-    hides the lower-level flags and allows the internal API to take
-    care of the encoding.
-*/
-static uint64_t fsl_diff_flags_convert( int mask ){
-  uint64_t rc = 0U;
-#define DO(F) if( (mask & F)==F ) rc |= (((u64)F) << 24)
-  DO(FSL_DIFF_IGNORE_EOLWS);
-  DO(FSL_DIFF_IGNORE_ALLWS);
-  DO(FSL_DIFF_SIDEBYSIDE);
-  DO(FSL_DIFF_VERBOSE);
-  DO(FSL_DIFF_BRIEF);
-  DO(FSL_DIFF_HTML);
-  DO(FSL_DIFF_LINENO);
-  DO(FSL_DIFF_NOOPT);
-  DO(FSL_DIFF_INVERT);
-  DO(FSL_DIFF_NOTTOOBIG);
-  DO(FSL_DIFF_STRIP_EOLCR);
-#undef DO
-  return rc;
-}
-
-/*
    Length of a dline
 */
 #define LENGTH(X)   ((X)->n)
 
 /**
-    Holds output state for diff generation.
- */
-struct DiffOutState {
-  /** Output callback. */
-  fsl_output_f out;
-  /** State for this->out(). */
-  void * oState;
-  /** For propagating output errors. */
-  int rc;
-  char ansiColor;
-};
-typedef struct DiffOutState DiffOutState;
-static const DiffOutState DiffOutState_empty = {
-NULL/*out*/,
-NULL/*oState*/,
-0/*rc*/,
-0/*useAnsiColor*/
-};
-
-/**
-    Internal helper. Sends src to o->out(). If n is negative, fsl_strlen()
-    is used to determine the length.
- */
-static int diff_out( DiffOutState * const o, void const * src, fsl_int_t n ){
-  return o->rc = n
-    ? o->out(o->oState, src, n<0 ? fsl_strlen((char const *)src) : (fsl_size_t)n)
-    : 0;
-}
-
-/**
-    fsl_output_f() impl for use with diff_outf(). state must be a
-    (DiffOutState*).
- */
-static int fsl_output_f_diff_out( void * state, void const * src,
-                                  fsl_size_t n ){
-  DiffOutState * const os = (DiffOutState *)state;
-  return os->rc = os->out(os->oState, src, n);
-}
-
-static int diff_outf( DiffOutState * o, char const * fmt, ... ){
-  va_list va;
-  va_start(va,fmt);
-  fsl_appendfv(fsl_output_f_diff_out, o, fmt, va);
-  va_end(va);
-  return o->rc;
-}
-
-/*
-   Append a single line of context-diff output to pOut.
-*/
-static int appendDiffLine(
-  DiffOutState *const pOut, /* Where to write the line of output */
-  char cPrefix,       /* One of " ", "+",  or "-" */
-  fsl_dline *pLine,       /* The line to be output */
-  int html,           /* True if generating HTML.  False for plain text */
-  ReCompiled *pRe     /* Colorize only if line matches this Regex */
-){
-  int rc = 0;
-  char const * ansiPrefix =
-    !pOut->ansiColor
-    ? NULL 
-    : (('+'==cPrefix)
-       ? ANSI_DIFF_ADD(0)
-       : (('-'==cPrefix) ? ANSI_DIFF_RM(0) : NULL))
-    ;
-  if(ansiPrefix) rc = diff_out(pOut, ansiPrefix, -1 );
-  if(!rc) rc = diff_out(pOut, &cPrefix, 1);
-  if(rc) return rc;
-  else if( html ){
-#if 0
-    if( pRe /*MISSING: && re_dline_match(pRe, pLine, 1)==0 */ ){
-      cPrefix = ' ';
-    }else
-#endif
-    if( cPrefix=='+' ){
-      rc = diff_out(pOut, "<span class=\"fsl-diff-add\">", -1);
-    }else if( cPrefix=='-' ){
-      rc = diff_out(pOut, "<span class=\"fsl-diff-rm\">", -1);
-    }
-    if(!rc){
-      /* unsigned short n = pLine->n; */
-      /* while( n>0 && (pLine->z[n-1]=='\n' || pLine->z[n-1]=='\r') ) n--; */
-      rc = pOut->rc = fsl_htmlize(pOut->out, pOut->oState,
-                                  pLine->z, pLine->n);
-      if( !rc && cPrefix!=' ' ){
-        rc = diff_out(pOut, "</span>", -1);
-      }
-    }
-  }else{
-    rc = diff_out(pOut, pLine->z, pLine->n);
-  }
-  if(!rc){
-    if(ansiPrefix){
-      rc = diff_out(pOut, ANSI_RESET, -1 );
-    }
-    if(!rc) rc = diff_out(pOut, "\n", 1);
-  }
-  return rc;
-}
-
-
-/*
-   Add two line numbers to the beginning of an output line for a context
-   diff.  One or the other of the two numbers might be zero, which means
-   to leave that number field blank.  The "html" parameter means to format
-   the output for HTML.
-*/
-static int appendDiffLineno(DiffOutState *pOut, int lnA,
-                            int lnB, int html){
-  int rc = 0;
-  if( html ){
-    rc = diff_out(pOut, "<span class=\"fsl-diff-lineno\">", -1);
-  }
-  if(!rc){
-    if( lnA>0 ){
-      rc = diff_outf(pOut, "%6d ", lnA);
-    }else{
-      rc = diff_out(pOut, "       ", 7);
-    }
-  }
-  if(!rc){
-    if( lnB>0 ){
-      rc = diff_outf(pOut, "%6d  ", lnB);
-    }else{
-      rc = diff_out(pOut, "        ", 8);
-    }
-    if( !rc && html ){
-      rc = diff_out(pOut, "</span>", -1);
-    }
-  }
-  return rc;
-}
-
-
-/*
    Minimum of two values
 */
 static int minInt(int a, int b){ return a<b ? a : b; }
@@ -24372,6 +24185,240 @@ void fsl__diff_optimize(fsl__diff_cx * const p){
   //fsl__dump_triples(p, __FILE__, __LINE__);
 }
 
+
+#if !defined(FSL_OMIT_DEPRECATED)
+
+#define MARKER(pfexp)                                               \
+  do{ printf("MARKER: %s:%d:%s():\t",__FILE__,__LINE__,__func__);   \
+    printf pfexp;                                                   \
+  } while(0)
+
+typedef uint64_t u64;
+typedef void ReCompiled /* porting crutch. i would strongly prefer to
+                           replace the regex support with a stateful
+                           predicate callback.
+                        */;
+
+#define DIFF_CONTEXT_MASK ((u64)0x0000ffff) /* Lines of context. Default if 0 */
+#define DIFF_WIDTH_MASK   ((u64)0x00ff0000) /* side-by-side column width */
+#define DIFF_IGNORE_EOLWS ((u64)0x01000000) /* Ignore end-of-line whitespace */
+#define DIFF_IGNORE_ALLWS ((u64)0x03000000) /* Ignore all whitespace */
+#define DIFF_SIDEBYSIDE   ((u64)0x04000000) /* Generate a side-by-side diff */
+#define DIFF_VERBOSE      ((u64)0x08000000) /* Missing shown as empty files */
+#define DIFF_BRIEF        ((u64)0x10000000) /* Show filenames only */
+#define DIFF_HTML         ((u64)0x20000000) /* Render for HTML */
+#define DIFF_LINENO       ((u64)0x40000000) /* Show line numbers */
+#define DIFF_NOOPT        (((u64)0x01)<<32) /* Suppress optimizations (debug) */
+#define DIFF_INVERT       (((u64)0x02)<<32) /* Invert the diff (debug) */
+#define DIFF_CONTEXT_EX   (((u64)0x04)<<32) /* Use context even if zero */
+#define DIFF_NOTTOOBIG    (((u64)0x08)<<32) /* Only display if not too big */
+#define DIFF_STRIP_EOLCR  (((u64)0x10)<<32) /* Strip trailing CR */
+
+/*
+  ANSI escape codes: https://en.wikipedia.org/wiki/ANSI_escape_code
+*/
+#define ANSI_COLOR_BLACK(BOLD) ((BOLD) ? "\x1b[30m" : "\x1b[30m")
+#define ANSI_COLOR_RED(BOLD) ((BOLD) ? "\x1b[31;1m" : "\x1b[31m")
+#define ANSI_COLOR_GREEN(BOLD) ((BOLD) ? "\x1b[32;1m" : "\x1b[32m")
+#define ANSI_COLOR_YELLOW(BOLD) ((BOLD) ? "\x1b[33;1m" : "\x1b[33m")
+#define ANSI_COLOR_BLUE(BOLD) ((BOLD) ? "\x1b[34;1m" : "\x1b[34m")
+#define ANSI_COLOR_MAGENTA(BOLD) ((BOLD) ? "\x1b[35;1m" : "\x1b[35m")
+#define ANSI_COLOR_CYAN(BOLD) ((BOLD) ? "\x1b[36;1m" : "\x1b[36m")
+#define ANSI_COLOR_WHITE(BOLD) ((BOLD) ? "\x1b[37;1m" : "\x1b[37m")
+#define ANSI_DIFF_ADD(BOLD) ANSI_COLOR_GREEN(BOLD)
+#define ANSI_DIFF_RM(BOLD) ANSI_COLOR_RED(BOLD)
+#define ANSI_DIFF_MOD(BOLD) ANSI_COLOR_BLUE(BOLD)
+#define ANSI_BG_BLACK(BOLD) ((BOLD) ? "\x1b[40;1m" : "\x1b[40m")
+#define ANSI_BG_RED(BOLD) ((BOLD) ? "\x1b[41;1m" : "\x1b[41m")
+#define ANSI_BG_GREEN(BOLD) ((BOLD) ? "\x1b[42;1m" : "\x1b[42m")
+#define ANSI_BG_YELLOW(BOLD) ((BOLD) ? "\x1b[43;1m" : "\x1b[43m")
+#define ANSI_BG_BLUE(BOLD) ((BOLD) ? "\x1b[44;1m" : "\x1b[44m")
+#define ANSI_BG_MAGENTA(BOLD) ((BOLD) ? "\x1b[45;1m" : "\x1b[45m")
+#define ANSI_BG_CYAN(BOLD) ((BOLD) ? "\x1b[46;1m" : "\x1b[46m")
+#define ANSI_BG_WHITE(BOLD) ((BOLD) ? "\x1b[47;1m" : "\x1b[47m")
+#define ANSI_RESET_COLOR   "\x1b[39;49m"
+#define ANSI_RESET_ALL     "\x1b[0m"
+#define ANSI_RESET ANSI_RESET_ALL
+/*#define ANSI_BOLD     ";1m"*/
+
+/**
+    Converts mask of public fsl_diff_flag_t (32-bit) values to the
+    Fossil-internal 64-bit bitmask used by the DIFF_xxx macros. Why?
+    (A) fossil(1) uses the macro approach and a low-level encoding of
+    data in the bitmask (e.g. the context lines count). The public API
+    hides the lower-level flags and allows the internal API to take
+    care of the encoding.
+*/
+static uint64_t fsl_diff_flags_convert( int mask ){
+  uint64_t rc = 0U;
+#define DO(F) if( (mask & F)==F ) rc |= (((u64)F) << 24)
+  DO(FSL_DIFF2_IGNORE_EOLWS);
+  DO(FSL_DIFF2_IGNORE_ALLWS);
+  DO(FSL_DIFF2_LINE_NUMBERS);
+  DO(FSL_DIFF_SIDEBYSIDE);
+  DO(FSL_DIFF2_NOTTOOBIG);
+  DO(FSL_DIFF2_STRIP_EOLCR);
+  DO(FSL_DIFF_VERBOSE);
+  DO(FSL_DIFF_BRIEF);
+  DO(FSL_DIFF_HTML);
+  DO(FSL_DIFF_NOOPT);
+  DO(FSL_DIFF_INVERT);
+#undef DO
+  return rc;
+}
+
+/**
+    Holds output state for diff generation.
+ */
+struct DiffOutState {
+  /** Output callback. */
+  fsl_output_f out;
+  /** State for this->out(). */
+  void * oState;
+  /** For propagating output errors. */
+  int rc;
+  char ansiColor;
+};
+typedef struct DiffOutState DiffOutState;
+static const DiffOutState DiffOutState_empty = {
+NULL/*out*/,
+NULL/*oState*/,
+0/*rc*/,
+0/*useAnsiColor*/
+};
+
+/**
+    Internal helper. Sends src to o->out(). If n is negative, fsl_strlen()
+    is used to determine the length.
+ */
+static int diff_out( DiffOutState * const o, void const * src, fsl_int_t n ){
+  return o->rc = n
+    ? o->out(o->oState, src, n<0 ? fsl_strlen((char const *)src) : (fsl_size_t)n)
+    : 0;
+}
+
+/**
+    fsl_output_f() impl for use with diff_outf(). state must be a
+    (DiffOutState*).
+ */
+static int fsl_output_f_diff_out( void * state, void const * src,
+                                  fsl_size_t n ){
+  DiffOutState * const os = (DiffOutState *)state;
+  return os->rc = os->out(os->oState, src, n);
+}
+
+static int diff_outf( DiffOutState * o, char const * fmt, ... ){
+  va_list va;
+  va_start(va,fmt);
+  fsl_appendfv(fsl_output_f_diff_out, o, fmt, va);
+  va_end(va);
+  return o->rc;
+}
+
+/*
+   Append a single line of context-diff output to pOut.
+*/
+static int appendDiffLine(
+  DiffOutState *const pOut, /* Where to write the line of output */
+  char cPrefix,       /* One of " ", "+",  or "-" */
+  fsl_dline *pLine,       /* The line to be output */
+  int html,           /* True if generating HTML.  False for plain text */
+  ReCompiled *pRe     /* Colorize only if line matches this Regex */
+){
+  int rc = 0;
+  char const * ansiPrefix =
+    !pOut->ansiColor
+    ? NULL 
+    : (('+'==cPrefix)
+       ? ANSI_DIFF_ADD(0)
+       : (('-'==cPrefix) ? ANSI_DIFF_RM(0) : NULL))
+    ;
+  if(ansiPrefix) rc = diff_out(pOut, ansiPrefix, -1 );
+  if(!rc) rc = diff_out(pOut, &cPrefix, 1);
+  if(rc) return rc;
+  else if( html ){
+#if 0
+    if( pRe /*MISSING: && re_dline_match(pRe, pLine, 1)==0 */ ){
+      cPrefix = ' ';
+    }else
+#endif
+    if( cPrefix=='+' ){
+      rc = diff_out(pOut, "<span class=\"fsl-diff-add\">", -1);
+    }else if( cPrefix=='-' ){
+      rc = diff_out(pOut, "<span class=\"fsl-diff-rm\">", -1);
+    }
+    if(!rc){
+      /* unsigned short n = pLine->n; */
+      /* while( n>0 && (pLine->z[n-1]=='\n' || pLine->z[n-1]=='\r') ) n--; */
+      rc = pOut->rc = fsl_htmlize(pOut->out, pOut->oState,
+                                  pLine->z, pLine->n);
+      if( !rc && cPrefix!=' ' ){
+        rc = diff_out(pOut, "</span>", -1);
+      }
+    }
+  }else{
+    rc = diff_out(pOut, pLine->z, pLine->n);
+  }
+  if(!rc){
+    if(ansiPrefix){
+      rc = diff_out(pOut, ANSI_RESET, -1 );
+    }
+    if(!rc) rc = diff_out(pOut, "\n", 1);
+  }
+  return rc;
+}
+
+
+/*
+   Add two line numbers to the beginning of an output line for a context
+   diff.  One or the other of the two numbers might be zero, which means
+   to leave that number field blank.  The "html" parameter means to format
+   the output for HTML.
+*/
+static int appendDiffLineno(DiffOutState *pOut, int lnA,
+                            int lnB, int html){
+  int rc = 0;
+  if( html ){
+    rc = diff_out(pOut, "<span class=\"fsl-diff-lineno\">", -1);
+  }
+  if(!rc){
+    if( lnA>0 ){
+      rc = diff_outf(pOut, "%6d ", lnA);
+    }else{
+      rc = diff_out(pOut, "       ", 7);
+    }
+  }
+  if(!rc){
+    if( lnB>0 ){
+      rc = diff_outf(pOut, "%6d  ", lnB);
+    }else{
+      rc = diff_out(pOut, "        ", 8);
+    }
+    if( !rc && html ){
+      rc = diff_out(pOut, "</span>", -1);
+    }
+  }
+  return rc;
+}
+
+/**
+    Extract the number of lines of context from diffFlags.
+ */
+static int diff_context_lines(uint64_t diffFlags){
+  int n = diffFlags & DIFF_CONTEXT_MASK;
+  if( n==0 && (diffFlags & DIFF_CONTEXT_EX)==0 ) n = 5;
+  return n;
+}
+
+/*
+   Extract the width of columns for side-by-side diff.  Supply an
+   appropriate default if no width is given.
+*/
+static int diff_width(uint64_t diffFlags){
+  int w = (diffFlags & DIFF_WIDTH_MASK)/(DIFF_CONTEXT_MASK+1);
+  if( w==0 ) w = 80;
+  return w;
+}
 
 /*
    Given a raw diff p[] in which the p->aEdit[] array has been filled
@@ -25662,8 +25709,6 @@ int fsl_diff_text(fsl_buffer const *pA, fsl_buffer const *pB,
                             contextLines, sbsWidth, diffFlags, NULL );
 }
 
-
-
 int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
                             fsl_buffer * pOut,
                             short contextLines,
@@ -25696,8 +25741,6 @@ int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
 #undef SBS_MKR
 #undef SBS_LNB
 #undef SBS_TXTB
-#undef ANN_FILE_VERS
-#undef ANN_FILE_ANCEST
 
 #undef ANSI_COLOR_BLACK
 #undef ANSI_COLOR_RED
@@ -25721,6 +25764,7 @@ int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
 #undef ANSI_DIFF_ADD
 #undef ANSI_DIFF_MOD
 #undef ANSI_DIFF_RM
+#endif /*FSL_OMIT_DEPRECATED*/
 /* end of file ./src/diff.c */
 /* start of file ./src/diff2.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
@@ -25741,7 +25785,6 @@ int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
    project, initially implemented by D. Richard Hipp, ported and
    the license re-assigned to this project with this consent.
 */
-#include <assert.h>
 #include <memory.h>
 #include <stdlib.h>
 #include <string.h> /* for memmove()/strlen() */
@@ -25753,7 +25796,7 @@ int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
   } while(0)
 
 
-const fsl_diff_opt fsl_diff_opt_empty = fsl_diff_opt_empty_m;
+const fsl_dibu_opt fsl_dibu_opt_empty = fsl_dibu_opt_empty_m;
 const fsl_dibu fsl_dibu_empty = fsl_dibu_empty_m;
 const fsl_dline fsl_dline_empty = fsl_dline_empty_m;
 const fsl_dline_change fsl_dline_change_empty = fsl_dline_change_empty_m;
@@ -26221,7 +26264,7 @@ static int smallGap2(const int *R, int ma, int mb){
   return m<=2 || m<=(R[1]+R[2]+R[4]+R[5])/8;
 }
 
-static unsigned short diff_opt_context_lines(fsl_diff_opt const * opt){
+static unsigned short diff_opt_context_lines(fsl_dibu_opt const * opt){
   const unsigned short dflt = 5;
   unsigned short n = opt ? opt->contextLines : dflt;
   if( !n && (opt->diffFlags & FSL_DIFF2_CONTEXT_ZERO)==0 ){
@@ -26340,7 +26383,7 @@ static int match_dline2(const fsl_dline *pA, const fsl_dline *pB){
 static int diffBlockAlignment(
   const fsl_dline *aLeft, int nLeft,     /* Text on the left */
   const fsl_dline *aRight, int nRight,   /* Text on the right */
-  fsl_diff_opt *pOpt,                  /* Configuration options */
+  fsl_dibu_opt * const pOpt,             /* Configuration options */
   unsigned char **pResult, /* Raw result */
   unsigned *pNResult               /* OUTPUT: length of result */
 ){
@@ -26531,7 +26574,7 @@ static int fdb__format(
 ){
   const fsl_dline *A;        /* Left side of the diff */
   const fsl_dline *B;        /* Right side of the diff */
-  fsl_diff_opt * const pOpt = pBuilder->opt;
+  fsl_dibu_opt * const pOpt = pBuilder->opt;
   const int *R;          /* Array of COPY/DELETE/INSERT triples */
   unsigned int a;    /* Index of next line in A[] */
   unsigned int b;    /* Index of next line in B[] */
@@ -26547,6 +26590,7 @@ static int fdb__format(
   int rc = 0;
   
 #define RC if(rc) goto end
+#define METRIC(M) if(1==passNumber) ++pBuilder->metrics.M
   pass_again:
   contextLines = diff_opt_context_lines(pOpt);
   skip = 0;
@@ -26559,19 +26603,19 @@ static int fdb__format(
   while( mxr>2 && R[mxr-1]==0 && R[mxr-2]==0 ){ mxr -= 3; }
 
   pBuilder->lnLHS = pBuilder->lnRHS = 0;
+  ++passNumber;
   if(pBuilder->start){
-    pBuilder->passNumber = ++passNumber;
+    pBuilder->passNumber = passNumber;
     rc = pBuilder->start(pBuilder);
     RC;
   }
-
   for(r=0; r<mxr; r += 3*nr){
     /* Figure out how many triples to show in a single block */
     for(nr=1; R[r+nr*3]>0 && R[r+nr*3]<(int)contextLines*2; nr++){}
 
 #if 0
     /* MISSING: this "should" be replaced by a stateful predicate
-       function, probably in the fsl_diff_opt class. */
+       function, probably in the fsl_dibu_opt class. */
     /* If there is a regex, skip this block (generate no diff output)
     ** if the regex matches or does not match both insert and delete.
     ** Only display the block if one side matches but the other side does
@@ -26726,6 +26770,7 @@ static int fdb__format(
         switch( alignment[j] ){
           case 1: {
             /* Delete one line from the left */
+            METRIC(deletions);
             rc = pBuilder->deletion(pBuilder, &A[a]);
             if(rc) goto bail;
             ma--;
@@ -26734,6 +26779,7 @@ static int fdb__format(
           }
           case 2: {
             /* Insert one line on the right */
+            METRIC(insertions);
             rc = pBuilder->insertion(pBuilder, &B[b]);
             if(rc) goto bail;
             assert( mb>0 );
@@ -26743,9 +26789,10 @@ static int fdb__format(
           }
           case 3: {
             /* The left line is changed into the right line */
-            if( cx->cmpLine(&A[a], &B[b])==0 ){
+            if( 0==cx->cmpLine(&A[a], &B[b]) ){
               rc = pBuilder->common(pBuilder, &A[a]);
             }else{
+              METRIC(edits);
               rc = pBuilder->edit(pBuilder, &A[a], &B[b]);
             }
             if(rc) goto bail;
@@ -26758,6 +26805,7 @@ static int fdb__format(
           }
           case 4: {
             /* Delete from left then separately insert on the right */
+            METRIC(replacements);
             rc = pBuilder->replacement(pBuilder, &A[a], &B[b]);
             if(rc) goto bail;
             ma--;
@@ -26802,6 +26850,7 @@ static int fdb__format(
   }
   end:
 #undef RC
+#undef METRIC
   if(0==rc){
     if(pBuilder->finish) pBuilder->finish(pBuilder);
     if(pBuilder->twoPass && 1==passNumber){
@@ -26831,13 +26880,13 @@ static int fdb__format(
 static int fsl_diff2_text_impl(fsl_buffer const *pA,
                                fsl_buffer const *pB,
                                fsl_dibu * const pBuilder,
-                               fsl_diff_opt const * const opt_,
+                               fsl_dibu_opt const * const opt_,
                                int ** outRaw){
   int rc = 0;
   fsl__diff_cx c = fsl__diff_cx_empty;
   bool ignoreWs = false;
   int ansiOptCount = 0;
-  fsl_diff_opt opt = *opt_
+  fsl_dibu_opt opt = *opt_
     /*we need a copy for the sake of the FSL_DIFF2_INVERT flag*/;
   if(!pA || !pB || (pBuilder && outRaw)) return FSL_RC_MISUSE;
 
@@ -26918,7 +26967,7 @@ static int fsl_diff2_text_impl(fsl_buffer const *pA,
      That last point makes this impl tiny compared to the original!
   */
   if(pBuilder){
-    fsl_diff_opt * const oldOpt = pBuilder->opt;
+    fsl_dibu_opt * const oldOpt = pBuilder->opt;
     pBuilder->opt = &opt;
     rc = fdb__format(&c, pBuilder);
     pBuilder->opt = oldOpt;
@@ -26940,9 +26989,11 @@ int fsl_diff_v2(fsl_buffer const * pv1,
 
 int fsl_diff_v2_raw(fsl_buffer const * pv1,
                     fsl_buffer const * pv2,
-                    fsl_diff_opt const * const opt,
+                    fsl_dibu_opt const * const opt,
                     int **outRaw ){
-  return fsl_diff2_text_impl(pv1, pv2, NULL, opt, outRaw);
+  return fsl_diff2_text_impl(pv1, pv2, NULL,
+                             opt ? opt : &fsl_dibu_opt_empty,
+                             outRaw);
 }
 
 
@@ -26959,8 +27010,9 @@ fsl_dibu * fsl_dibu_alloc(fsl_size_t extra){
 }
 
 static int fdb__out(fsl_dibu *const b,
-                    char const *z, fsl_size_t n){
-  return b->opt->out(b->opt->outState, z, n);
+                    char const *z, fsl_int_t n){
+  if(n<0) n = (fsl_int_t)fsl_strlen(z);
+  return b->opt->out(b->opt->outState, z, (fsl_size_t)n);
 }
 static int fdb__outf(fsl_dibu * const b,
                      char const *fmt, ...){
@@ -27492,7 +27544,7 @@ static int fdb__utxt_start(fsl_dibu * const b){
   UIMPL(p);
   p->deleting = false;
   if(p->bufIns.mem) fsl_buffer_reuse(&p->bufIns);
-  else fsl_buffer_reserve(&p->bufIns, 1024 * 4);
+  else fsl_buffer_reserve(&p->bufIns, 1024 * 2);
   if(0==(FSL_DIFF2_NOINDEX & b->opt->diffFlags)){
     rc = fdb__outf(b,"Index: %s\n%.66c\n",
                    b->opt->nameLHS/*RHS?*/, '=');
@@ -27523,7 +27575,7 @@ static int fdb__utxt_chunkHeader(fsl_dibu* const b,
   //     38     38    fsl_buffer fcontent2;
   //     39     39    fsl_buffer fhash;
   //     40     40    fsl_list globs;
-  //            41 +  fsl_diff_opt diffOpt;
+  //            41 +  fsl_dibu_opt diffOpt;
   //            42 +  fsl_diff_builder * diffBuilder;
   //     41     43  } VDiffApp = {
   //     42     44  NULL/*glob*/,
@@ -27718,9 +27770,9 @@ struct DiBuTcl {
 typedef struct DiBuTcl DiBuTcl;
 static const DiBuTcl DiBuTcl_empty = {fsl_buffer_empty_m};
 
-#define BR_OPEN if(FSL_DIFF2_TCL_BRACES & b->opt->diffFlags) \
+#define BR_OPEN if(FSL_DIBU_TCL_BRACES & b->implFlags) \
     rc = fdb__out(b, "{", 1)
-#define BR_CLOSE if(FSL_DIFF2_TCL_BRACES & b->opt->diffFlags) \
+#define BR_CLOSE if(FSL_DIBU_TCL_BRACES & b->implFlags) \
     rc = fdb__out(b, "}", 1)
 
 #define DTCL_BUFFER(B) &((DiBuTcl*)(B)->pimpl)->str
@@ -27730,7 +27782,9 @@ static int fdb__outtcl(fsl_dibu * const b,
   int rc;
   fsl_buffer * const o = DTCL_BUFFER(b);
   fsl_buffer_reuse(o);
-  rc = fsl_buffer_append_tcl_literal(o, z, n);
+  rc = fsl_buffer_append_tcl_literal(o,
+                                     (b->implFlags & FSL_DIBU_TCL_BRACES_ESC),
+                                     z, n);
   if(0==rc) rc = fdb__out(b, (char const *)o->mem, o->used);
   if(chAppend && 0==rc) rc = fdb__out(b, &chAppend, 1);
   return rc;
@@ -27739,8 +27793,11 @@ static int fdb__outtcl(fsl_dibu * const b,
 static int fdb__tcl_start(fsl_dibu * const b){
   int rc = 0;
   fsl_buffer_reuse(DTCL_BUFFER(b));
-  BR_OPEN;
-  if(0==rc) rc = fdb__out(b, "\n", 1);
+  if(1==++b->fileCount &&
+     FSL_DIBU_TCL_TK==(b->implFlags & FSL_DIBU_TCL_TK)){
+    rc = fdb__out(b, "set difftxt {\n", -1);
+  }
+  if(0==rc && b->fileCount>1) rc = fdb__out(b, "\n", 1);
   if(0==rc && b->opt->nameLHS){
     char const * zRHS =
       b->opt->nameRHS ? b->opt->nameRHS : b->opt->nameLHS;
@@ -27838,12 +27895,24 @@ static int fdb__tcl_edit(fsl_dibu * const b,
 
 static int fdb__tcl_finish(fsl_dibu * const b){
   int rc = 0;
+#if 0
   BR_CLOSE;
-  if(0==rc && FSL_DIFF2_TCL_BRACES & b->opt->diffFlags){
+  if(0==rc && FSL_DIBU_TCL_BRACES & b->implFlags){
     rc = fdb__out(b, "\n", 1);
+  }
+#endif
+  return rc;
+}
+static int fdb__tcl_finally(fsl_dibu * const b){
+  int rc = 0;
+  if(FSL_DIBU_TCL_TK==(b->implFlags & FSL_DIBU_TCL_TK)){
+    extern char const * fsl_difftk_cstr;
+    rc = fdb__out(b, "}\nset fossilcmd {}\n", -1);
+    if(0==rc) fdb__out(b, fsl_difftk_cstr, -1);
   }
   return rc;
 }
+
 #undef BR_OPEN
 #undef BR_CLOSE
 
@@ -27866,6 +27935,7 @@ static fsl_dibu * fsl__diff_builder_tcl(void){
     rc->replacement = fdb__tcl_replacement;
     rc->edit = fdb__tcl_edit;
     rc->finish = fdb__tcl_finish;
+    rc->finally = fdb__tcl_finally;
     rc->finalize = fdb__tcl_finalize;
     assert(0!=rc->pimpl);
     DiBuTcl * const dbt = (DiBuTcl*)rc->pimpl;
@@ -27905,7 +27975,7 @@ static int fdb__splittxt_start(fsl_dibu * const b){
     rc = fdb__out(b, "\n", 1);
   }
   if(0==rc){
-    fsl_diff_opt const * const o = b->opt;
+    fsl_dibu_opt const * const o = b->opt;
     if(o->nameLHS || o->nameRHS
        || o->hashLHS || o->hashRHS){
       rc = fdb__outf(b, "--- %s%s%s\n+++ %s%s%s\n",
@@ -28049,7 +28119,7 @@ static int fdb__splittxt_replacement(fsl_dibu * const b,
   return rc;
 #endif
 }
-                 
+
 static int fdb__splittxt_finish(fsl_dibu * const b){
   int rc = 0;
   if(1==b->passNumber){
@@ -28895,7 +28965,7 @@ fsl_size_t fsl_file_simplify_name(char *z, fsl_int_t n_, bool slash){
 
 int fsl_file_canonical_name2(const char *zRoot,
                              const char *zOrigName,
-                             fsl_buffer *pOut, bool slash){
+                             fsl_buffer * const pOut, bool slash){
   int rc;
   if(!zOrigName || !pOut) return FSL_RC_MISUSE;
   else if( fsl_is_absolute_path(zOrigName) || (zRoot && !*zRoot)){
@@ -28947,13 +29017,14 @@ int fsl_file_canonical_name2(const char *zRoot,
 
 
 int fsl_file_canonical_name(const char *zOrigName,
-                            fsl_buffer *pOut, bool slash){
+                            fsl_buffer * const pOut,
+                            bool slash){
   return fsl_file_canonical_name2(NULL, zOrigName, pOut, slash);
 }
 
 int fsl_file_dirpart(char const * zFilename,
                      fsl_int_t nLen,
-                     fsl_buffer * pOut,
+                     fsl_buffer * const pOut,
                      bool leaveSlash){
   if(!zFilename || !*zFilename || !pOut) return FSL_RC_MISUSE;
   else if(!nLen) return FSL_RC_RANGE;
@@ -33049,8 +33120,8 @@ int fsl_buffer_merge3(fsl_buffer * const pPivot,
   ** pivot, and the third integer is the number of lines of text that are
   ** inserted.  The edit array ends with a triple of 0,0,0.
   */
-  rc = fsl__diff_text_raw(pPivot, pV1, 0, &aC1);
-  if(!rc) rc = fsl__diff_text_raw(pPivot, pV2, 0, &aC2);
+  rc = fsl_diff_v2_raw(pPivot, pV1, NULL, &aC1);
+  if(!rc) rc = fsl_diff_v2_raw(pPivot, pV2, NULL, &aC2);
   RC;
   assert(aC1 && aC2);
 
@@ -33255,15 +33326,9 @@ bool fsl_buffer_contains_merge_marker(fsl_buffer const *p){
 #undef __STRICT_ANSI__
 #include <errno.h>
 
-#ifdef _WIN32
+#if FSL_PLATFORM_IS_WINDOWS
 #include <windows.h>
 #include <fcntl.h>
-/*
-   Print a fatal error and quit.
-*/
-static void win32_fatal_error(const char *zMsg){
-  /*fossil_fatal("%s", zMsg); TODO: what to do here? */
-}
 #else
 #include <unistd.h>
 #include <signal.h>
@@ -33298,7 +33363,7 @@ static void win32_fatal_error(const char *zMsg){
 #endif
 
 
-#ifdef _WIN32
+#if FSL_PLATFORM_IS_WINDOWS
 /*
    On windows, create a child process and specify the stdin, stdout,
    and stderr channels for that process to use.
@@ -33342,7 +33407,8 @@ static int win32_create_child_process(
     CloseHandle( pi.hThread );
     *pChildPid = pi.dwProcessId;
   }else{
-    win32_fatal_error("cannot create child process");
+    //fsl__fatal(FSL_RC_ERROR, "cannot create child process");
+    rc = FSL_RC_ERROR;
   }
   return rc!=0;
 }
@@ -33363,7 +33429,7 @@ static int win32_create_child_process(
     Return 0 on success, non-0 on error.
  */
 int fsl_popen2(const char *zCmd, int *pfdIn, FILE **ppOut, int *pChildPid){
-#ifdef _WIN32
+#if FSL_PLATFORM_IS_WINDOWS
   /* FIXME: port these win32_fatal_error() bits to error codes. */
   HANDLE hStdinRd, hStdinWr, hStdoutRd, hStdoutWr, hStderr;
   SECURITY_ATTRIBUTES saAttr;    
@@ -33375,12 +33441,14 @@ int fsl_popen2(const char *zCmd, int *pfdIn, FILE **ppOut, int *pChildPid){
   saAttr.lpSecurityDescriptor = NULL; 
   hStderr = GetStdHandle(STD_ERROR_HANDLE);
   if( !CreatePipe(&hStdoutRd, &hStdoutWr, &saAttr, 4096) ){
-    win32_fatal_error("cannot create pipe for stdout");
+    //win32_fatal_error("cannot create pipe for stdout");
+    return FSL_RC_IO;
   }
   SetHandleInformation( hStdoutRd, HANDLE_FLAG_INHERIT, FALSE);
 
   if( !CreatePipe(&hStdinRd, &hStdinWr, &saAttr, 4096) ){
-    win32_fatal_error("cannot create pipe for stdin");
+    //win32_fatal_error("cannot create pipe for stdin");
+    return FSL_RC_IO;
   }
   SetHandleInformation( hStdinWr, HANDLE_FLAG_INHERIT, FALSE);
   
@@ -33434,7 +33502,8 @@ int fsl_popen2(const char *zCmd, int *pfdIn, FILE **ppOut, int *pChildPid){
     if( fd!=1 ) nErr++;
     close(pin[0]);
     close(pin[1]);
-    execl("/bin/sh", "/bin/sh", "-c", zCmd, (char*)0);
+    execl("/bin/sh", "/bin/sh", "-c", zCmd, (char*)0)
+      /* doesn't return on success */;
     return fsl_errno_to_rc(errno, FSL_RC_ERROR);
   }else{
     /* This is the parent process */
@@ -33449,18 +33518,27 @@ int fsl_popen2(const char *zCmd, int *pfdIn, FILE **ppOut, int *pChildPid){
 
 /**
     Close the connection to a child process previously created using
-    fsl_popen2().  Kill off the child process, then close the pipes.
+    fsl_popen2(). All 3 arguments are assumed to values returned via
+    fsl_popen2()'s output parameters: the input file descriptor,
+    output FILE handle, and child process PID.
+
+    If childPid is not zero, that process is killed with SIGINT before
+    the I/O channels are closed.
+
+    On Windows platforms, killing of the child process is not
+    implemented. (Patches are welcomed.)
  */
 void fsl_pclose2(int fdIn, FILE *pOut, int childPid){
-#ifdef _WIN32
+#if FSL_PLATFORM_IS_WINDOWS
   /* Not implemented, yet */
   close(fdIn);
   fclose(pOut);
 #else
+  if(childPid>0) kill(childPid, SIGINT);
   close(fdIn);
   fclose(pOut);
-  kill(childPid, SIGINT);
-  while( waitpid(0, 0, WNOHANG)>0 ) {}
+  while( waitpid(childPid>0 ? (pid_t)childPid : (pid_t)0,
+                 NULL, WNOHANG)>0 ) {}
 #endif
 }
 
@@ -34460,8 +34538,6 @@ int fsl_repo_create(fsl_cx * f, fsl_repo_create_opt const * opt ){
   fsl_time_t const unixNow = (fsl_time_t)time(0);
   bool fileExists;
   bool inTrans = 0;
-  extern int fsl_cx_attach_role(fsl_cx * f, const char *zDbName, fsl_dbrole_e r)
-    /* Internal routine from cx.c */;
   if(!opt || !opt->filename) return FSL_RC_MISUSE;
   fileExists = 0 == fsl_file_access(opt->filename,0);
   if(fileExists && !opt->allowOverwrite){
@@ -34477,8 +34553,6 @@ int fsl_repo_create(fsl_cx * f, fsl_repo_create_opt const * opt ){
       /* Will fail if a transaction is active! */;
     switch(rc){
       case 0:
-      case FSL_RC_NOT_FOUND:
-        rc = 0;
         break;
       default:
         return rc;
@@ -34495,26 +34569,15 @@ int fsl_repo_create(fsl_cx * f, fsl_repo_create_opt const * opt ){
      before continuing, to ensure a clean slate.
   */
   if(fileExists){
-#if 0
-    FILE * file = fsl_fopen(opt->filename, "w"/*truncates it*/);
-    if(!file){
-      rc = fsl_cx_err_set(f, fsl_errno_to_rc(errno, FSL_RC_IO),
-                          "Cannot open '%s' for writing.",
-                          opt->filename);
-      goto end2;    
-    }else{
-      fsl_fclose(file);
-    }
-#else
     rc = fsl_file_unlink(opt->filename);
     if(rc){
       rc = fsl_cx_err_set(f, rc, "Cannot unlink existing repo file: %s",
                           opt->filename);
       goto end2;
     }
-#endif
   }
-  rc = fsl_cx_attach_role(f, opt->filename, FSL_DBROLE_REPO);
+  rc = fsl__cx_attach_role(f, opt->filename, FSL_DBROLE_REPO, true);
+  MARKER(("attach role rc=%s\n", fsl_rc_cstr(rc)));
   if(rc){
     goto end2;
   }
@@ -34549,28 +34612,26 @@ int fsl_repo_create(fsl_cx * f, fsl_repo_create_opt const * opt ){
       exercised).
     */
     rc = fsl_db_exec_multi(db,
-                           "INSERT INTO repo.config (name,value,mtime) "
+                           "INSERT OR IGNORE INTO %q.config (name,value,mtime) "
                            "VALUES ('server-code',"
                            "lower(hex(randomblob(20))),"
                            "%"PRIi64");"
-                           "INSERT INTO repo.config (name,value,mtime) "
+                           "INSERT OR IGNORE INTO %q.config (name,value,mtime) "
                            "VALUES ('project-code',"
                            "lower(hex(randomblob(20))),"
                            "%"PRIi64");",
-                           (int64_t)unixNow,
-                           (int64_t)unixNow
-                           );
+                           db->name, (int64_t)unixNow,
+                           db->name, (int64_t)unixNow);
     if(rc) goto end1;
   }
-
   
   /* Set some config vars ... */
   {
     fsl_stmt st = fsl_stmt_empty;
     rc = fsl_db_prepare(db, &st,
-                        "INSERT INTO repo.config (name,value,mtime) "
+                        "INSERT INTO %q.config (name,value,mtime) "
                         "VALUES (?,?,%"PRIi64")",
-                        (int64_t)unixNow);
+                        db->name, (int64_t)unixNow);
     if(!rc){
       fsl_stmt_bind_int64(&st, 3, unixNow);
 #define DBSET_STR(KEY,VAL) \
@@ -34609,7 +34670,7 @@ int fsl_repo_create(fsl_cx * f, fsl_repo_create_opt const * opt ){
     else fsl_db_transaction_end(db, 1);
     inTrans = 0;
   }
-  fsl_cx_close_dbs(f);
+  fsl_close_scm_dbs(f);
   db = 0;
   if(rc) goto end2;
 
@@ -34666,15 +34727,16 @@ int fsl_repo_create(fsl_cx * f, fsl_repo_create_opt const * opt ){
        Copy all settings from the supplied template repository.
     */
     rc = fsl_db_exec(db,
-                     "INSERT OR REPLACE INTO repo.config"
+                     "INSERT OR REPLACE INTO %q.config"
                      " SELECT name,value,mtime FROM settingSrc.config"
                      "  WHERE (name IN %s OR name IN %s)"
                      "    AND name NOT GLOB 'project-*';",
-                     inopConfig, inopDb);
+                     db->name, inopConfig, inopDb);
     if(rc) goto detach;
     rc = fsl_db_exec(db,
-                     "REPLACE INTO repo.reportfmt "
-                     "SELECT * FROM settingSrc.reportfmt;");
+                     "REPLACE INTO %q.reportfmt "
+                     "SELECT * FROM settingSrc.reportfmt;",
+                     db->name);
     if(rc) goto detach;
 
     /*
@@ -34686,7 +34748,7 @@ int fsl_repo_create(fsl_cx * f, fsl_repo_create_opt const * opt ){
        The list of columns copied by this SQL statement may need to be
        revised in the future.
     */
-    rc = fsl_db_exec(db, "UPDATE repo.user SET"
+    rc = fsl_db_exec(db, "UPDATE %q.user SET"
       "  cap = (SELECT u2.cap FROM settingSrc.user u2"
       "         WHERE u2.login = user.login),"
       "  info = (SELECT u2.info FROM settingSrc.user u2"
@@ -34695,8 +34757,8 @@ int fsl_repo_create(fsl_cx * f, fsl_repo_create_opt const * opt ){
       "           WHERE u2.login = user.login),"
       "  photo = (SELECT u2.photo FROM settingSrc.user u2"
       "           WHERE u2.login = user.login)"
-      " WHERE user.login IN ('anonymous','nobody','developer','reader');"
-    );
+      " WHERE user.login IN ('anonymous','nobody','developer','reader');",
+      db->name);
 
     detach:
     fsl_free(inopConfig);
@@ -34895,7 +34957,7 @@ char fsl_repo_is_readonly(fsl_cx const * f){
     int const roleId = f->ckout.db.dbh ? FSL_DBROLE_MAIN : FSL_DBROLE_REPO
       /* If CKOUT is attached, it is the main DB and REPO is ATTACHed. */
       ;
-    char const * zRole = fsl_db_role_label(roleId);
+    char const * zRole = fsl_db_role_name(roleId);
     assert(f->dbMain);
     return sqlite3_db_readonly(f->dbMain->dbh, zRole) ? 1 : 0;
   }
@@ -34928,7 +34990,7 @@ int fsl__repo_record_filename(fsl_cx * const f){
     rc = fsl_db_exec(dbConf,
                      "INSERT OR IGNORE INTO %s.global_config(name,value) "
                      "VALUES('repo:%q',1)",
-                     fsl_db_role_label(dbRole),
+                     fsl_db_role_name(dbRole),
                      fsl_buffer_cstr(full));
     if(rc){
       fsl_cx_uplift_db_error(f, dbConf);
@@ -34944,7 +35006,7 @@ int fsl__repo_record_filename(fsl_cx * const f){
     int ro;
     assert(dbR);
     ro = sqlite3_db_readonly(dbR->dbh,
-                             fsl_db_role_label(FSL_DBROLE_REPO));
+                             fsl_db_role_name(FSL_DBROLE_REPO));
     assert(ro>=0);
     if(!ro){
       fsl_buffer localRoot = fsl_buffer_empty;
@@ -34959,7 +35021,7 @@ int fsl__repo_record_filename(fsl_cx * const f){
           rc = fsl_db_exec(dbConf,
                            "REPLACE INTO INTO %s.global_config(name,value) "
                            "VALUES('ckout:%q',1)",
-                           fsl_db_role_label(dbRole),
+                           fsl_db_role_name(dbRole),
                            fsl_buffer_cstr(&localRoot));
         }
         if(0==rc){
@@ -34968,7 +35030,7 @@ int fsl__repo_record_filename(fsl_cx * const f){
           rc = fsl_db_exec(dbR,
                            "REPLACE INTO %s.config(name, value, mtime) "
                            "VALUES('ckout:%q', 1, now())",
-                           fsl_db_role_label(FSL_DBROLE_REPO),
+                           fsl_db_role_name(FSL_DBROLE_REPO),
                            fsl_buffer_cstr(&localRoot));
         }
       }
@@ -35404,7 +35466,7 @@ static int fsl__rebuild_update_schema(FslRebuildState * const frs){
   */
   zBlobSchema =
     fsl_db_g_text(frs->db, NULL, "SELECT sql FROM %!Q.sqlite_schema"
-                  " WHERE name='blob'", fsl_db_role_label(FSL_DBROLE_REPO));
+                  " WHERE name='blob'", fsl_db_role_name(FSL_DBROLE_REPO));
   if(!zBlobSchema){
     /* ^^^^ reminder: fossil(1) simply ignores this case, silently
        doing nothing instead. */
@@ -35427,7 +35489,7 @@ static int fsl__rebuild_update_schema(FslRebuildState * const frs){
            "PRAGMA writable_schema=ON;"
            "UPDATE %!Q.sqlite_schema SET sql=%Q WHERE name LIKE 'blob';"
            "PRAGMA writable_schema=OFF;",
-           fsl_db_role_label(FSL_DBROLE_REPO), zBlobSchema
+           fsl_db_role_name(FSL_DBROLE_REPO), zBlobSchema
       );
       sqlite3_db_config(frs->db->dbh, SQLITE_DBCONFIG_DEFENSIVE, 1, &rc2);
       break;
@@ -35439,7 +35501,7 @@ static int fsl__rebuild_update_schema(FslRebuildState * const frs){
     "  %!Q.artifact(rid,rcvid,size,atype,srcid,hash,content) AS "
     "    SELECT blob.rid,rcvid,size,1,srcid,uuid,content"
     "      FROM blob LEFT JOIN delta ON (blob.rid=delta.rid);",
-    fsl_db_role_label(FSL_DBROLE_REPO)
+    fsl_db_role_name(FSL_DBROLE_REPO)
   );
   
   end:
@@ -35740,7 +35802,7 @@ static int fsl__rebuild(fsl_cx * const f, fsl_rebuild_opt const * const opt){
                       ")"
      " AND name NOT GLOB 'sqlite_*'"
      " AND name NOT GLOB 'fx_*'",
-     fsl_db_role_label(FSL_DBROLE_REPO)
+     fsl_db_role_name(FSL_DBROLE_REPO)
   );
   while( 0==rc && FSL_RC_STEP_ROW==fsl_stmt_step(&q) ){
     rc = fsl_buffer_appendf(sql, "DROP TABLE IF EXISTS %!Q;\n",
@@ -40839,7 +40901,6 @@ static void fsl_db_cx_glob_udf(
 int fsl__cx_init_db(fsl_cx * const f, fsl_db * const db){
   int rc;
   assert(!f->dbMain);
-  assert(db==&f->dbMem && "Currently the case - may change later.");
   if(f->cxConfig.traceSql){
     fsl_db_sqltrace_enable(db, stdout);
   }
@@ -40854,8 +40915,8 @@ int fsl__cx_init_db(fsl_cx * const f, fsl_db * const db){
                          "PRAGMA foreign_keys=OFF;"
                          // ^^^ vmerge table relies on this for its magical
                          // vmerge.id values.
-                         "PRAGMA main.temp_store=FILE;"
-                         "PRAGMA main.journal_mode=TRUNCATE;"
+                         //"PRAGMA main.temp_store=FILE;"
+                         //"PRAGMA main.journal_mode=TRUNCATE;"
                          // ^^^ note that WAL is not possible on a TEMP db
                          // and OFF leads to undefined behaviour if
                          // ROLLBACK is used!
@@ -43024,23 +43085,722 @@ int fsl_repo_zip_sym_to_filename( fsl_cx * const f, char const * sym,
 
 #undef MARKER
 /* end of file ./src/zip.c */
-/* start of file ./src/schema_config_cstr.c */
-/* Binary form of file ./sql/config.sql */
-/** @page page_schema_config_cstr Schema: config.sql
-@code
--- This file contains the schema for the database that is kept in the
--- ~/.fossil file and that stores information about the users setup.
---
-CREATE TABLE cfg.global_config(
-  name TEXT PRIMARY KEY,
-  value TEXT
-);
+/* start of file ./src/difftk_cstr.c */
+/** @page page_difftk_cstr difftk.tcl
 
--- Identifier for this file type.
--- The integer is the same as 'FSLG'.
-PRAGMA cfg.application_id=252006675;
- @endcode
- @see schema_config()
+Binary form of file ./src/difftk.tcl.
+
+*/
+/* auto-generated code - edit at your own risk! (Good luck with that!) */
+static char const fsl_difftk_cstr_a[] = {
+35, 32, 84, 104, 105, 115, 32, 115, 99, 114, 105, 112, 116, 32, 119, 97, 115, 32, 116, 97, 
+107, 101, 110, 32, 118, 101, 114, 98, 97, 116, 105, 109, 32, 102, 114, 111, 109, 32, 116, 104, 
+101, 32, 70, 111, 115, 115, 105, 108, 32, 83, 67, 77, 32, 112, 114, 111, 106, 101, 99, 116, 
+46, 32, 32, 73, 116, 32, 105, 115, 10, 35, 32, 110, 111, 116, 32, 115, 116, 97, 110, 100, 
+97, 108, 111, 110, 101, 58, 32, 105, 116, 32, 105, 115, 32, 105, 110, 116, 101, 110, 100, 101, 
+100, 32, 116, 111, 32, 98, 101, 32, 101, 109, 98, 101, 100, 100, 101, 100, 32, 105, 110, 32, 
+111, 117, 116, 112, 117, 116, 32, 103, 101, 110, 101, 114, 97, 116, 101, 100, 32, 98, 121, 10, 
+35, 32, 102, 45, 118, 100, 105, 102, 102, 32, 40, 111, 114, 32, 115, 105, 109, 105, 108, 97, 
+114, 41, 46, 10, 115, 101, 116, 32, 112, 114, 111, 103, 32, 123, 10, 112, 97, 99, 107, 97, 
+103, 101, 32, 114, 101, 113, 117, 105, 114, 101, 32, 84, 107, 10, 10, 97, 114, 114, 97, 121, 
+32, 115, 101, 116, 32, 67, 70, 71, 32, 123, 10, 32, 32, 84, 73, 84, 76, 69, 32, 32, 
+32, 32, 32, 32, 123, 70, 111, 115, 115, 105, 108, 32, 68, 105, 102, 102, 125, 10, 32, 32, 
+76, 78, 95, 67, 79, 76, 95, 66, 71, 32, 32, 35, 100, 100, 100, 100, 100, 100, 10, 32, 
+32, 76, 78, 95, 67, 79, 76, 95, 70, 71, 32, 32, 35, 52, 52, 52, 52, 52, 52, 10, 
+32, 32, 84, 88, 84, 95, 67, 79, 76, 95, 66, 71, 32, 35, 102, 102, 102, 102, 102, 102, 
+10, 32, 32, 84, 88, 84, 95, 67, 79, 76, 95, 70, 71, 32, 35, 48, 48, 48, 48, 48, 
+48, 10, 32, 32, 77, 75, 82, 95, 67, 79, 76, 95, 66, 71, 32, 35, 52, 52, 52, 52, 
+52, 52, 10, 32, 32, 77, 75, 82, 95, 67, 79, 76, 95, 70, 71, 32, 35, 100, 100, 100, 
+100, 100, 100, 10, 32, 32, 67, 72, 78, 71, 95, 66, 71, 32, 32, 32, 32, 35, 100, 48, 
+100, 48, 102, 102, 10, 32, 32, 65, 68, 68, 95, 66, 71, 32, 32, 32, 32, 32, 35, 99, 
+48, 102, 102, 99, 48, 10, 32, 32, 82, 77, 95, 66, 71, 32, 32, 32, 32, 32, 32, 35, 
+102, 102, 99, 48, 99, 48, 10, 32, 32, 72, 82, 95, 70, 71, 32, 32, 32, 32, 32, 32, 
+35, 52, 52, 52, 52, 52, 52, 10, 32, 32, 72, 82, 95, 80, 65, 68, 95, 84, 79, 80, 
+32, 52, 10, 32, 32, 72, 82, 95, 80, 65, 68, 95, 66, 84, 77, 32, 56, 10, 32, 32, 
+70, 78, 95, 66, 71, 32, 32, 32, 32, 32, 32, 35, 52, 52, 52, 52, 52, 52, 10, 32, 
+32, 70, 78, 95, 70, 71, 32, 32, 32, 32, 32, 32, 35, 102, 102, 102, 102, 102, 102, 10, 
+32, 32, 70, 78, 95, 80, 65, 68, 32, 32, 32, 32, 32, 53, 10, 32, 32, 69, 82, 82, 
+95, 70, 71, 32, 32, 32, 32, 32, 35, 101, 101, 48, 48, 48, 48, 10, 32, 32, 80, 65, 
+68, 88, 32, 32, 32, 32, 32, 32, 32, 53, 10, 32, 32, 87, 73, 68, 84, 72, 32, 32, 
+32, 32, 32, 32, 56, 48, 10, 32, 32, 72, 69, 73, 71, 72, 84, 32, 32, 32, 32, 32, 
+52, 53, 10, 32, 32, 76, 66, 95, 72, 69, 73, 71, 72, 84, 32, 32, 50, 53, 10, 125, 
+10, 10, 105, 102, 32, 123, 33, 91, 110, 97, 109, 101, 115, 112, 97, 99, 101, 32, 101, 120, 
+105, 115, 116, 115, 32, 116, 116, 107, 93, 125, 32, 123, 10, 32, 32, 105, 110, 116, 101, 114, 
+112, 32, 97, 108, 105, 97, 115, 32, 123, 125, 32, 58, 58, 116, 116, 107, 58, 58, 115, 99, 
+114, 111, 108, 108, 98, 97, 114, 32, 123, 125, 32, 58, 58, 115, 99, 114, 111, 108, 108, 98, 
+97, 114, 10, 32, 32, 105, 110, 116, 101, 114, 112, 32, 97, 108, 105, 97, 115, 32, 123, 125, 
+32, 58, 58, 116, 116, 107, 58, 58, 109, 101, 110, 117, 98, 117, 116, 116, 111, 110, 32, 123, 
+125, 32, 58, 58, 109, 101, 110, 117, 98, 117, 116, 116, 111, 110, 10, 125, 10, 10, 112, 114, 
+111, 99, 32, 100, 101, 104, 116, 109, 108, 32, 123, 120, 125, 32, 123, 10, 32, 32, 115, 101, 
+116, 32, 120, 32, 91, 114, 101, 103, 115, 117, 98, 32, 45, 97, 108, 108, 32, 123, 60, 91, 
+94, 62, 93, 42, 62, 125, 32, 36, 120, 32, 123, 125, 93, 10, 32, 32, 114, 101, 116, 117, 
+114, 110, 32, 91, 115, 116, 114, 105, 110, 103, 32, 109, 97, 112, 32, 123, 38, 97, 109, 112, 
+59, 32, 38, 32, 38, 108, 116, 59, 32, 60, 32, 38, 103, 116, 59, 32, 62, 32, 38, 35, 
+51, 57, 59, 32, 39, 32, 38, 113, 117, 111, 116, 59, 32, 92, 34, 125, 32, 36, 120, 93, 
+10, 125, 10, 10, 112, 114, 111, 99, 32, 99, 111, 108, 115, 32, 123, 125, 32, 123, 10, 32, 
+32, 114, 101, 116, 117, 114, 110, 32, 91, 108, 105, 115, 116, 32, 46, 108, 110, 65, 32, 46, 
+116, 120, 116, 65, 32, 46, 109, 107, 114, 32, 46, 108, 110, 66, 32, 46, 116, 120, 116, 66, 
+93, 10, 125, 10, 10, 112, 114, 111, 99, 32, 99, 111, 108, 84, 121, 112, 101, 32, 123, 99, 
+125, 32, 123, 10, 32, 32, 114, 101, 103, 101, 120, 112, 32, 123, 91, 97, 45, 122, 93, 43, 
+125, 32, 36, 99, 32, 116, 121, 112, 101, 10, 32, 32, 114, 101, 116, 117, 114, 110, 32, 36, 
+116, 121, 112, 101, 10, 125, 10, 10, 112, 114, 111, 99, 32, 103, 101, 116, 76, 105, 110, 101, 
+32, 123, 100, 105, 102, 102, 116, 120, 116, 32, 78, 32, 105, 105, 118, 97, 114, 125, 32, 123, 
+10, 32, 32, 117, 112, 118, 97, 114, 32, 36, 105, 105, 118, 97, 114, 32, 105, 105, 10, 32, 
+32, 105, 102, 32, 123, 36, 105, 105, 62, 61, 36, 78, 125, 32, 123, 114, 101, 116, 117, 114, 
+110, 32, 45, 49, 125, 10, 32, 32, 115, 101, 116, 32, 120, 32, 91, 108, 105, 110, 100, 101, 
+120, 32, 36, 100, 105, 102, 102, 116, 120, 116, 32, 36, 105, 105, 93, 10, 32, 32, 105, 110, 
+99, 114, 32, 105, 105, 10, 32, 32, 114, 101, 116, 117, 114, 110, 32, 36, 120, 10, 125, 10, 
+10, 112, 114, 111, 99, 32, 114, 101, 97, 100, 68, 105, 102, 102, 115, 32, 123, 102, 111, 115, 
+115, 105, 108, 99, 109, 100, 125, 32, 123, 10, 32, 32, 103, 108, 111, 98, 97, 108, 32, 100, 
+105, 102, 102, 116, 120, 116, 10, 32, 32, 105, 102, 32, 123, 33, 91, 105, 110, 102, 111, 32, 
+101, 120, 105, 115, 116, 115, 32, 100, 105, 102, 102, 116, 120, 116, 93, 125, 32, 123, 10, 32, 
+32, 32, 32, 115, 101, 116, 32, 105, 110, 32, 91, 111, 112, 101, 110, 32, 36, 102, 111, 115, 
+115, 105, 108, 99, 109, 100, 32, 114, 93, 10, 32, 32, 32, 32, 102, 99, 111, 110, 102, 105, 
+103, 117, 114, 101, 32, 36, 105, 110, 32, 45, 101, 110, 99, 111, 100, 105, 110, 103, 32, 117, 
+116, 102, 45, 56, 10, 32, 32, 32, 32, 115, 101, 116, 32, 100, 105, 102, 102, 116, 120, 116, 
+32, 91, 115, 112, 108, 105, 116, 32, 91, 114, 101, 97, 100, 32, 36, 105, 110, 93, 32, 92, 
+110, 93, 10, 32, 32, 32, 32, 99, 108, 111, 115, 101, 32, 36, 105, 110, 10, 32, 32, 125, 
+10, 32, 32, 115, 101, 116, 32, 78, 32, 91, 108, 108, 101, 110, 103, 116, 104, 32, 36, 100, 
+105, 102, 102, 116, 120, 116, 93, 10, 32, 32, 115, 101, 116, 32, 105, 105, 32, 48, 10, 32, 
+32, 115, 101, 116, 32, 110, 68, 105, 102, 102, 115, 32, 48, 10, 32, 32, 115, 101, 116, 32, 
+110, 49, 32, 48, 10, 32, 32, 115, 101, 116, 32, 110, 50, 32, 48, 32, 32, 10, 32, 32, 
+97, 114, 114, 97, 121, 32, 115, 101, 116, 32, 119, 105, 100, 116, 104, 115, 32, 123, 116, 120, 
+116, 32, 51, 32, 108, 110, 32, 51, 32, 109, 107, 114, 32, 49, 125, 10, 32, 32, 119, 104, 
+105, 108, 101, 32, 123, 91, 115, 101, 116, 32, 108, 105, 110, 101, 32, 91, 103, 101, 116, 76, 
+105, 110, 101, 32, 36, 100, 105, 102, 102, 116, 120, 116, 32, 36, 78, 32, 105, 105, 93, 93, 
+32, 33, 61, 32, 45, 49, 125, 32, 123, 10, 32, 32, 32, 32, 115, 119, 105, 116, 99, 104, 
+32, 45, 45, 32, 91, 108, 105, 110, 100, 101, 120, 32, 36, 108, 105, 110, 101, 32, 48, 93, 
+32, 123, 10, 32, 32, 32, 32, 32, 32, 70, 73, 76, 69, 32, 123, 10, 32, 32, 32, 32, 
+32, 32, 32, 32, 105, 110, 99, 114, 32, 110, 68, 105, 102, 102, 115, 10, 32, 32, 32, 32, 
+32, 32, 32, 32, 102, 111, 114, 101, 97, 99, 104, 32, 119, 120, 32, 91, 108, 105, 115, 116, 
+32, 91, 115, 116, 114, 105, 110, 103, 32, 108, 101, 110, 103, 116, 104, 32, 36, 110, 49, 93, 
+32, 91, 115, 116, 114, 105, 110, 103, 32, 108, 101, 110, 103, 116, 104, 32, 36, 110, 50, 93, 
+93, 32, 123, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 105, 102, 32, 123, 36, 119, 
+120, 62, 36, 119, 105, 100, 116, 104, 115, 40, 108, 110, 41, 125, 32, 123, 115, 101, 116, 32, 
+119, 105, 100, 116, 104, 115, 40, 108, 110, 41, 32, 36, 119, 120, 125, 10, 32, 32, 32, 32, 
+32, 32, 32, 32, 125, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 108, 110, 65, 32, 105, 
+110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 92, 110, 32, 102, 110, 32, 92, 110, 32, 45, 
+10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 116, 120, 116, 65, 32, 105, 110, 115, 101, 114, 
+116, 32, 101, 110, 100, 32, 91, 108, 105, 110, 100, 101, 120, 32, 36, 108, 105, 110, 101, 32, 
+49, 93, 92, 110, 32, 102, 110, 32, 92, 110, 32, 45, 10, 32, 32, 32, 32, 32, 32, 32, 
+32, 46, 109, 107, 114, 32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 92, 110, 32, 
+102, 110, 32, 92, 110, 32, 45, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 108, 110, 66, 
+32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 92, 110, 32, 102, 110, 32, 92, 110, 
+32, 45, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 116, 120, 116, 66, 32, 105, 110, 115, 
+101, 114, 116, 32, 101, 110, 100, 32, 91, 108, 105, 110, 100, 101, 120, 32, 36, 108, 105, 110, 
+101, 32, 50, 93, 92, 110, 32, 102, 110, 32, 92, 110, 32, 45, 10, 32, 32, 32, 32, 32, 
+32, 32, 32, 46, 119, 102, 105, 108, 101, 115, 46, 108, 98, 32, 105, 110, 115, 101, 114, 116, 
+32, 101, 110, 100, 32, 91, 108, 105, 110, 100, 101, 120, 32, 36, 108, 105, 110, 101, 32, 50, 
+93, 10, 32, 32, 32, 32, 32, 32, 32, 32, 115, 101, 116, 32, 110, 49, 32, 48, 10, 32, 
+32, 32, 32, 32, 32, 32, 32, 115, 101, 116, 32, 110, 50, 32, 48, 10, 32, 32, 32, 32, 
+32, 32, 125, 10, 32, 32, 32, 32, 32, 32, 83, 75, 73, 80, 32, 123, 10, 32, 32, 32, 
+32, 32, 32, 32, 32, 115, 101, 116, 32, 110, 32, 91, 108, 105, 110, 100, 101, 120, 32, 36, 
+108, 105, 110, 101, 32, 49, 93, 10, 32, 32, 32, 32, 32, 32, 32, 32, 105, 110, 99, 114, 
+32, 110, 49, 32, 36, 110, 10, 32, 32, 32, 32, 32, 32, 32, 32, 105, 110, 99, 114, 32, 
+110, 50, 32, 36, 110, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 108, 110, 65, 32, 105, 
+110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 46, 46, 46, 92, 110, 32, 104, 114, 108, 110, 
+10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 116, 120, 116, 65, 32, 105, 110, 115, 101, 114, 
+116, 32, 101, 110, 100, 32, 91, 115, 116, 114, 105, 110, 103, 32, 114, 101, 112, 101, 97, 116, 
+32, 46, 32, 51, 48, 93, 92, 110, 32, 104, 114, 116, 120, 116, 10, 32, 32, 32, 32, 32, 
+32, 32, 32, 46, 109, 107, 114, 32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 92, 
+110, 32, 104, 114, 108, 110, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 108, 110, 66, 32, 
+105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 46, 46, 46, 92, 110, 32, 104, 114, 108, 
+110, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 116, 120, 116, 66, 32, 105, 110, 115, 101, 
+114, 116, 32, 101, 110, 100, 32, 91, 115, 116, 114, 105, 110, 103, 32, 114, 101, 112, 101, 97, 
+116, 32, 46, 32, 51, 48, 93, 92, 110, 32, 104, 114, 116, 120, 116, 10, 32, 32, 32, 32, 
+32, 32, 125, 10, 32, 32, 32, 32, 32, 32, 67, 79, 77, 32, 123, 10, 32, 32, 32, 32, 
+32, 32, 32, 32, 115, 101, 116, 32, 120, 32, 91, 108, 105, 110, 100, 101, 120, 32, 36, 108, 
+105, 110, 101, 32, 49, 93, 10, 32, 32, 32, 32, 32, 32, 32, 32, 105, 110, 99, 114, 32, 
+110, 49, 10, 32, 32, 32, 32, 32, 32, 32, 32, 105, 110, 99, 114, 32, 110, 50, 10, 32, 
+32, 32, 32, 32, 32, 32, 32, 46, 108, 110, 65, 32, 105, 110, 115, 101, 114, 116, 32, 101, 
+110, 100, 32, 36, 110, 49, 92, 110, 32, 45, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 
+116, 120, 116, 65, 32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 36, 120, 92, 110, 
+32, 45, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 109, 107, 114, 32, 105, 110, 115, 101, 
+114, 116, 32, 101, 110, 100, 32, 92, 110, 32, 45, 10, 32, 32, 32, 32, 32, 32, 32, 32, 
+46, 108, 110, 66, 32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 36, 110, 50, 92, 
+110, 32, 45, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 116, 120, 116, 66, 32, 105, 110, 
+115, 101, 114, 116, 32, 101, 110, 100, 32, 36, 120, 92, 110, 32, 45, 10, 32, 32, 32, 32, 
+32, 32, 125, 10, 32, 32, 32, 32, 32, 32, 73, 78, 83, 32, 123, 10, 32, 32, 32, 32, 
+32, 32, 32, 32, 115, 101, 116, 32, 120, 32, 91, 108, 105, 110, 100, 101, 120, 32, 36, 108, 
+105, 110, 101, 32, 49, 93, 10, 32, 32, 32, 32, 32, 32, 32, 32, 105, 110, 99, 114, 32, 
+110, 50, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 108, 110, 65, 32, 105, 110, 115, 101, 
+114, 116, 32, 101, 110, 100, 32, 92, 110, 32, 45, 10, 32, 32, 32, 32, 32, 32, 32, 32, 
+46, 116, 120, 116, 65, 32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 92, 110, 32, 
+45, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 109, 107, 114, 32, 105, 110, 115, 101, 114, 
+116, 32, 101, 110, 100, 32, 62, 92, 110, 32, 45, 10, 32, 32, 32, 32, 32, 32, 32, 32, 
+46, 108, 110, 66, 32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 36, 110, 50, 92, 
+110, 32, 45, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 116, 120, 116, 66, 32, 105, 110, 
+115, 101, 114, 116, 32, 101, 110, 100, 32, 36, 120, 32, 97, 100, 100, 32, 92, 110, 32, 45, 
+10, 32, 32, 32, 32, 32, 32, 125, 10, 32, 32, 32, 32, 32, 32, 68, 69, 76, 32, 123, 
+10, 32, 32, 32, 32, 32, 32, 32, 32, 115, 101, 116, 32, 120, 32, 91, 108, 105, 110, 100, 
+101, 120, 32, 36, 108, 105, 110, 101, 32, 49, 93, 10, 32, 32, 32, 32, 32, 32, 32, 32, 
+105, 110, 99, 114, 32, 110, 49, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 108, 110, 65, 
+32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 36, 110, 49, 92, 110, 32, 45, 10, 
+32, 32, 32, 32, 32, 32, 32, 32, 46, 116, 120, 116, 65, 32, 105, 110, 115, 101, 114, 116, 
+32, 101, 110, 100, 32, 36, 120, 32, 114, 109, 32, 92, 110, 32, 45, 10, 32, 32, 32, 32, 
+32, 32, 32, 32, 46, 109, 107, 114, 32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 
+60, 92, 110, 32, 45, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 108, 110, 66, 32, 105, 
+110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 92, 110, 32, 45, 10, 32, 32, 32, 32, 32, 
+32, 32, 32, 46, 116, 120, 116, 66, 32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 
+92, 110, 32, 45, 10, 32, 32, 32, 32, 32, 32, 125, 10, 32, 32, 32, 32, 32, 32, 69, 
+68, 73, 84, 32, 123, 10, 32, 32, 32, 32, 32, 32, 32, 32, 105, 110, 99, 114, 32, 110, 
+49, 10, 32, 32, 32, 32, 32, 32, 32, 32, 105, 110, 99, 114, 32, 110, 50, 10, 32, 32, 
+32, 32, 32, 32, 32, 32, 46, 108, 110, 65, 32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 
+100, 32, 36, 110, 49, 92, 110, 32, 45, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 108, 
+110, 66, 32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 36, 110, 50, 92, 110, 32, 
+45, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 109, 107, 114, 32, 105, 110, 115, 101, 114, 
+116, 32, 101, 110, 100, 32, 124, 92, 110, 32, 45, 10, 32, 32, 32, 32, 32, 32, 32, 32, 
+115, 101, 116, 32, 110, 110, 32, 91, 108, 108, 101, 110, 103, 116, 104, 32, 36, 108, 105, 110, 
+101, 93, 10, 32, 32, 32, 32, 32, 32, 32, 32, 102, 111, 114, 32, 123, 115, 101, 116, 32, 
+105, 32, 49, 125, 32, 123, 36, 105, 60, 36, 110, 110, 125, 32, 123, 105, 110, 99, 114, 32, 
+105, 32, 51, 125, 32, 123, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 115, 101, 116, 
+32, 120, 32, 91, 108, 105, 110, 100, 101, 120, 32, 36, 108, 105, 110, 101, 32, 36, 105, 93, 
+10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 105, 102, 32, 123, 36, 120, 32, 110, 101, 
+32, 34, 34, 125, 32, 123, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 46, 
+116, 120, 116, 65, 32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 36, 120, 32, 45, 
+10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 46, 116, 120, 116, 66, 32, 105, 
+110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 36, 120, 32, 45, 10, 32, 32, 32, 32, 32, 
+32, 32, 32, 32, 32, 125, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 105, 102, 32, 
+123, 36, 105, 43, 50, 60, 36, 110, 110, 125, 32, 123, 10, 32, 32, 32, 32, 32, 32, 32, 
+32, 32, 32, 32, 32, 115, 101, 116, 32, 120, 49, 32, 91, 108, 105, 110, 100, 101, 120, 32, 
+36, 108, 105, 110, 101, 32, 91, 101, 120, 112, 114, 32, 123, 36, 105, 43, 49, 125, 93, 93, 
+10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 115, 101, 116, 32, 120, 50, 32, 
+91, 108, 105, 110, 100, 101, 120, 32, 36, 108, 105, 110, 101, 32, 91, 101, 120, 112, 114, 32, 
+123, 36, 105, 43, 50, 125, 93, 93, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+32, 105, 102, 32, 123, 34, 36, 120, 49, 34, 32, 101, 113, 32, 34, 34, 125, 32, 123, 10, 
+32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 46, 116, 120, 116, 66, 32, 
+105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 36, 120, 50, 32, 97, 100, 100, 10, 32, 
+32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 125, 32, 101, 108, 115, 101, 105, 102, 32, 
+123, 34, 36, 120, 50, 34, 32, 101, 113, 32, 34, 34, 125, 32, 123, 10, 32, 32, 32, 32, 
+32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 46, 116, 120, 116, 65, 32, 105, 110, 115, 101, 
+114, 116, 32, 101, 110, 100, 32, 36, 120, 49, 32, 114, 109, 10, 32, 32, 32, 32, 32, 32, 
+32, 32, 32, 32, 32, 32, 125, 32, 101, 108, 115, 101, 32, 123, 10, 32, 32, 32, 32, 32, 
+32, 32, 32, 32, 32, 32, 32, 32, 32, 46, 116, 120, 116, 65, 32, 105, 110, 115, 101, 114, 
+116, 32, 101, 110, 100, 32, 36, 120, 49, 32, 99, 104, 110, 103, 10, 32, 32, 32, 32, 32, 
+32, 32, 32, 32, 32, 32, 32, 32, 32, 46, 116, 120, 116, 66, 32, 105, 110, 115, 101, 114, 
+116, 32, 101, 110, 100, 32, 36, 120, 50, 32, 99, 104, 110, 103, 10, 32, 32, 32, 32, 32, 
+32, 32, 32, 32, 32, 32, 32, 125, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 125, 
+10, 32, 32, 32, 32, 32, 32, 32, 32, 125, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 
+116, 120, 116, 65, 32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 92, 110, 32, 45, 
+10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 116, 120, 116, 66, 32, 105, 110, 115, 101, 114, 
+116, 32, 101, 110, 100, 32, 92, 110, 32, 45, 10, 32, 32, 32, 32, 32, 32, 125, 10, 32, 
+32, 32, 32, 32, 32, 34, 34, 32, 123, 10, 32, 32, 32, 32, 32, 32, 32, 32, 102, 111, 
+114, 101, 97, 99, 104, 32, 119, 120, 32, 91, 108, 105, 115, 116, 32, 91, 115, 116, 114, 105, 
+110, 103, 32, 108, 101, 110, 103, 116, 104, 32, 36, 110, 49, 93, 32, 91, 115, 116, 114, 105, 
+110, 103, 32, 108, 101, 110, 103, 116, 104, 32, 36, 110, 50, 93, 93, 32, 123, 10, 32, 32, 
+32, 32, 32, 32, 32, 32, 32, 32, 105, 102, 32, 123, 36, 119, 120, 62, 36, 119, 105, 100, 
+116, 104, 115, 40, 108, 110, 41, 125, 32, 123, 115, 101, 116, 32, 119, 105, 100, 116, 104, 115, 
+40, 108, 110, 41, 32, 36, 119, 120, 125, 10, 32, 32, 32, 32, 32, 32, 32, 32, 125, 10, 
+32, 32, 32, 32, 32, 32, 125, 10, 32, 32, 32, 32, 32, 32, 100, 101, 102, 97, 117, 108, 
+116, 32, 123, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 108, 110, 65, 32, 105, 110, 115, 
+101, 114, 116, 32, 101, 110, 100, 32, 92, 110, 32, 45, 10, 32, 32, 32, 32, 32, 32, 32, 
+32, 46, 116, 120, 116, 65, 32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 36, 108, 
+105, 110, 101, 92, 110, 32, 101, 114, 114, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 109, 
+107, 114, 32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 92, 110, 32, 45, 10, 32, 
+32, 32, 32, 32, 32, 32, 32, 46, 108, 110, 66, 32, 105, 110, 115, 101, 114, 116, 32, 101, 
+110, 100, 32, 92, 110, 32, 45, 10, 32, 32, 32, 32, 32, 32, 32, 32, 46, 116, 120, 116, 
+66, 32, 105, 110, 115, 101, 114, 116, 32, 101, 110, 100, 32, 36, 108, 105, 110, 101, 92, 110, 
+32, 101, 114, 114, 10, 32, 32, 32, 32, 32, 32, 125, 10, 32, 32, 32, 32, 125, 10, 32, 
+32, 125, 10, 10, 32, 32, 102, 111, 114, 101, 97, 99, 104, 32, 99, 32, 91, 99, 111, 108, 
+115, 93, 32, 123, 10, 32, 32, 32, 32, 115, 101, 116, 32, 116, 121, 112, 101, 32, 91, 99, 
+111, 108, 84, 121, 112, 101, 32, 36, 99, 93, 10, 32, 32, 32, 32, 105, 102, 32, 123, 36, 
+116, 121, 112, 101, 32, 110, 101, 32, 34, 116, 120, 116, 34, 125, 32, 123, 10, 32, 32, 32, 
+32, 32, 32, 36, 99, 32, 99, 111, 110, 102, 105, 103, 32, 45, 119, 105, 100, 116, 104, 32, 
+36, 119, 105, 100, 116, 104, 115, 40, 36, 116, 121, 112, 101, 41, 10, 32, 32, 32, 32, 125, 
+10, 32, 32, 32, 32, 36, 99, 32, 99, 111, 110, 102, 105, 103, 32, 45, 115, 116, 97, 116, 
+101, 32, 100, 105, 115, 97, 98, 108, 101, 100, 10, 32, 32, 125, 10, 32, 32, 105, 102, 32, 
+123, 36, 110, 68, 105, 102, 102, 115, 32, 60, 61, 32, 91, 46, 119, 102, 105, 108, 101, 115, 
+46, 108, 98, 32, 99, 103, 101, 116, 32, 45, 104, 101, 105, 103, 104, 116, 93, 125, 32, 123, 
+10, 32, 32, 32, 32, 46, 119, 102, 105, 108, 101, 115, 46, 108, 98, 32, 99, 111, 110, 102, 
+105, 103, 32, 45, 104, 101, 105, 103, 104, 116, 32, 36, 110, 68, 105, 102, 102, 115, 10, 32, 
+32, 32, 32, 103, 114, 105, 100, 32, 114, 101, 109, 111, 118, 101, 32, 46, 119, 102, 105, 108, 
+101, 115, 46, 115, 98, 10, 32, 32, 125, 10, 10, 32, 32, 114, 101, 116, 117, 114, 110, 32, 
+36, 110, 68, 105, 102, 102, 115, 10, 125, 10, 10, 112, 114, 111, 99, 32, 118, 105, 101, 119, 
+68, 105, 102, 102, 32, 123, 105, 100, 120, 125, 32, 123, 10, 32, 32, 46, 116, 120, 116, 65, 
+32, 121, 118, 105, 101, 119, 32, 36, 105, 100, 120, 10, 32, 32, 46, 116, 120, 116, 65, 32, 
+120, 118, 105, 101, 119, 32, 109, 111, 118, 101, 116, 111, 32, 48, 10, 125, 10, 10, 112, 114, 
+111, 99, 32, 99, 121, 99, 108, 101, 68, 105, 102, 102, 115, 32, 123, 123, 114, 101, 118, 101, 
+114, 115, 101, 32, 48, 125, 125, 32, 123, 10, 32, 32, 105, 102, 32, 123, 36, 114, 101, 118, 
+101, 114, 115, 101, 125, 32, 123, 10, 32, 32, 32, 32, 115, 101, 116, 32, 114, 97, 110, 103, 
+101, 32, 91, 46, 116, 120, 116, 65, 32, 116, 97, 103, 32, 112, 114, 101, 118, 114, 97, 110, 
+103, 101, 32, 102, 110, 32, 64, 48, 44, 48, 32, 49, 46, 48, 93, 10, 32, 32, 32, 32, 
+105, 102, 32, 123, 36, 114, 97, 110, 103, 101, 32, 101, 113, 32, 34, 34, 125, 32, 123, 10, 
+32, 32, 32, 32, 32, 32, 118, 105, 101, 119, 68, 105, 102, 102, 32, 123, 102, 110, 46, 108, 
+97, 115, 116, 32, 45, 49, 99, 125, 10, 32, 32, 32, 32, 125, 32, 101, 108, 115, 101, 32, 
+123, 10, 32, 32, 32, 32, 32, 32, 118, 105, 101, 119, 68, 105, 102, 102, 32, 91, 108, 105, 
+110, 100, 101, 120, 32, 36, 114, 97, 110, 103, 101, 32, 48, 93, 10, 32, 32, 32, 32, 125, 
+10, 32, 32, 125, 32, 101, 108, 115, 101, 32, 123, 10, 32, 32, 32, 32, 115, 101, 116, 32, 
+114, 97, 110, 103, 101, 32, 91, 46, 116, 120, 116, 65, 32, 116, 97, 103, 32, 110, 101, 120, 
+116, 114, 97, 110, 103, 101, 32, 102, 110, 32, 123, 64, 48, 44, 48, 32, 43, 49, 99, 125, 
+32, 101, 110, 100, 93, 10, 32, 32, 32, 32, 105, 102, 32, 123, 36, 114, 97, 110, 103, 101, 
+32, 101, 113, 32, 34, 34, 32, 124, 124, 32, 91, 108, 105, 110, 100, 101, 120, 32, 91, 46, 
+116, 120, 116, 65, 32, 121, 118, 105, 101, 119, 93, 32, 49, 93, 32, 61, 61, 32, 49, 125, 
+32, 123, 10, 32, 32, 32, 32, 32, 32, 118, 105, 101, 119, 68, 105, 102, 102, 32, 102, 110, 
+46, 102, 105, 114, 115, 116, 10, 32, 32, 32, 32, 125, 32, 101, 108, 115, 101, 32, 123, 10, 
+32, 32, 32, 32, 32, 32, 118, 105, 101, 119, 68, 105, 102, 102, 32, 91, 108, 105, 110, 100, 
+101, 120, 32, 36, 114, 97, 110, 103, 101, 32, 48, 93, 10, 32, 32, 32, 32, 125, 10, 32, 
+32, 125, 10, 125, 10, 10, 112, 114, 111, 99, 32, 120, 118, 105, 115, 32, 123, 99, 111, 108, 
+125, 32, 123, 10, 32, 32, 115, 101, 116, 32, 118, 105, 101, 119, 32, 91, 36, 99, 111, 108, 
+32, 120, 118, 105, 101, 119, 93, 10, 32, 32, 114, 101, 116, 117, 114, 110, 32, 91, 101, 120, 
+112, 114, 32, 123, 91, 108, 105, 110, 100, 101, 120, 32, 36, 118, 105, 101, 119, 32, 49, 93, 
+45, 91, 108, 105, 110, 100, 101, 120, 32, 36, 118, 105, 101, 119, 32, 48, 93, 125, 93, 10, 
+125, 10, 10, 112, 114, 111, 99, 32, 115, 99, 114, 111, 108, 108, 45, 120, 32, 123, 97, 114, 
+103, 115, 125, 32, 123, 10, 32, 32, 115, 101, 116, 32, 99, 32, 46, 116, 120, 116, 91, 101, 
+120, 112, 114, 32, 123, 91, 120, 118, 105, 115, 32, 46, 116, 120, 116, 65, 93, 32, 60, 32, 
+91, 120, 118, 105, 115, 32, 46, 116, 120, 116, 66, 93, 32, 63, 32, 34, 65, 34, 32, 58, 
+32, 34, 66, 34, 125, 93, 10, 32, 32, 101, 118, 97, 108, 32, 36, 99, 32, 120, 118, 105, 
+101, 119, 32, 36, 97, 114, 103, 115, 10, 125, 10, 10, 105, 110, 116, 101, 114, 112, 32, 97, 
+108, 105, 97, 115, 32, 123, 125, 32, 115, 99, 114, 111, 108, 108, 45, 121, 32, 123, 125, 32, 
+46, 116, 120, 116, 65, 32, 121, 118, 105, 101, 119, 10, 10, 112, 114, 111, 99, 32, 110, 111, 
+111, 112, 32, 123, 97, 114, 103, 115, 125, 32, 123, 125, 10, 10, 112, 114, 111, 99, 32, 101, 
+110, 97, 98, 108, 101, 83, 121, 110, 99, 32, 123, 97, 120, 105, 115, 125, 32, 123, 10, 32, 
+32, 117, 112, 100, 97, 116, 101, 32, 105, 100, 108, 101, 116, 97, 115, 107, 115, 10, 32, 32, 
+105, 110, 116, 101, 114, 112, 32, 97, 108, 105, 97, 115, 32, 123, 125, 32, 115, 121, 110, 99, 
+45, 36, 97, 120, 105, 115, 32, 123, 125, 10, 32, 32, 114, 101, 110, 97, 109, 101, 32, 95, 
+115, 121, 110, 99, 45, 36, 97, 120, 105, 115, 32, 115, 121, 110, 99, 45, 36, 97, 120, 105, 
+115, 10, 125, 10, 10, 112, 114, 111, 99, 32, 100, 105, 115, 97, 98, 108, 101, 83, 121, 110, 
+99, 32, 123, 97, 120, 105, 115, 125, 32, 123, 10, 32, 32, 114, 101, 110, 97, 109, 101, 32, 
+115, 121, 110, 99, 45, 36, 97, 120, 105, 115, 32, 95, 115, 121, 110, 99, 45, 36, 97, 120, 
+105, 115, 10, 32, 32, 105, 110, 116, 101, 114, 112, 32, 97, 108, 105, 97, 115, 32, 123, 125, 
+32, 115, 121, 110, 99, 45, 36, 97, 120, 105, 115, 32, 123, 125, 32, 110, 111, 111, 112, 10, 
+125, 10, 10, 112, 114, 111, 99, 32, 115, 121, 110, 99, 45, 120, 32, 123, 99, 111, 108, 32, 
+102, 105, 114, 115, 116, 32, 108, 97, 115, 116, 125, 32, 123, 10, 32, 32, 100, 105, 115, 97, 
+98, 108, 101, 83, 121, 110, 99, 32, 120, 10, 32, 32, 36, 99, 111, 108, 32, 120, 118, 105, 
+101, 119, 32, 109, 111, 118, 101, 116, 111, 32, 91, 101, 120, 112, 114, 32, 123, 36, 102, 105, 
+114, 115, 116, 42, 91, 120, 118, 105, 115, 32, 36, 99, 111, 108, 93, 47, 40, 36, 108, 97, 
+115, 116, 45, 36, 102, 105, 114, 115, 116, 41, 125, 93, 10, 32, 32, 102, 111, 114, 101, 97, 
+99, 104, 32, 115, 105, 100, 101, 32, 123, 65, 32, 66, 125, 32, 123, 10, 32, 32, 32, 32, 
+115, 101, 116, 32, 115, 98, 32, 46, 115, 98, 120, 36, 115, 105, 100, 101, 10, 32, 32, 32, 
+32, 115, 101, 116, 32, 120, 118, 105, 101, 119, 32, 91, 46, 116, 120, 116, 36, 115, 105, 100, 
+101, 32, 120, 118, 105, 101, 119, 93, 10, 32, 32, 32, 32, 105, 102, 32, 123, 91, 108, 105, 
+110, 100, 101, 120, 32, 36, 120, 118, 105, 101, 119, 32, 48, 93, 32, 62, 32, 48, 32, 124, 
+124, 32, 91, 108, 105, 110, 100, 101, 120, 32, 36, 120, 118, 105, 101, 119, 32, 49, 93, 32, 
+60, 32, 49, 125, 32, 123, 10, 32, 32, 32, 32, 32, 32, 103, 114, 105, 100, 32, 36, 115, 
+98, 10, 32, 32, 32, 32, 32, 32, 101, 118, 97, 108, 32, 36, 115, 98, 32, 115, 101, 116, 
+32, 36, 120, 118, 105, 101, 119, 10, 32, 32, 32, 32, 125, 32, 101, 108, 115, 101, 32, 123, 
+10, 32, 32, 32, 32, 32, 32, 103, 114, 105, 100, 32, 114, 101, 109, 111, 118, 101, 32, 36, 
+115, 98, 10, 32, 32, 32, 32, 125, 10, 32, 32, 125, 10, 32, 32, 101, 110, 97, 98, 108, 
+101, 83, 121, 110, 99, 32, 120, 10, 125, 10, 10, 112, 114, 111, 99, 32, 115, 121, 110, 99, 
+45, 121, 32, 123, 102, 105, 114, 115, 116, 32, 108, 97, 115, 116, 125, 32, 123, 10, 32, 32, 
+100, 105, 115, 97, 98, 108, 101, 83, 121, 110, 99, 32, 121, 10, 32, 32, 102, 111, 114, 101, 
+97, 99, 104, 32, 99, 32, 91, 99, 111, 108, 115, 93, 32, 123, 10, 32, 32, 32, 32, 36, 
+99, 32, 121, 118, 105, 101, 119, 32, 109, 111, 118, 101, 116, 111, 32, 36, 102, 105, 114, 115, 
+116, 10, 32, 32, 125, 10, 32, 32, 105, 102, 32, 123, 36, 102, 105, 114, 115, 116, 32, 62, 
+32, 48, 32, 124, 124, 32, 36, 108, 97, 115, 116, 32, 60, 32, 49, 125, 32, 123, 10, 32, 
+32, 32, 32, 103, 114, 105, 100, 32, 46, 115, 98, 121, 10, 32, 32, 32, 32, 46, 115, 98, 
+121, 32, 115, 101, 116, 32, 36, 102, 105, 114, 115, 116, 32, 36, 108, 97, 115, 116, 10, 32, 
+32, 125, 32, 101, 108, 115, 101, 32, 123, 10, 32, 32, 32, 32, 103, 114, 105, 100, 32, 114, 
+101, 109, 111, 118, 101, 32, 46, 115, 98, 121, 10, 32, 32, 125, 10, 32, 32, 101, 110, 97, 
+98, 108, 101, 83, 121, 110, 99, 32, 121, 10, 125, 10, 10, 119, 109, 32, 119, 105, 116, 104, 
+100, 114, 97, 119, 32, 46, 10, 119, 109, 32, 116, 105, 116, 108, 101, 32, 46, 32, 36, 67, 
+70, 71, 40, 84, 73, 84, 76, 69, 41, 10, 119, 109, 32, 105, 99, 111, 110, 110, 97, 109, 
+101, 32, 46, 32, 36, 67, 70, 71, 40, 84, 73, 84, 76, 69, 41, 10, 35, 32, 75, 101, 
+121, 115, 116, 114, 111, 107, 101, 32, 98, 105, 110, 100, 105, 110, 103, 115, 32, 102, 111, 114, 
+32, 111, 110, 32, 116, 104, 101, 32, 116, 111, 112, 45, 108, 101, 118, 101, 108, 32, 119, 105, 
+110, 100, 111, 119, 32, 102, 111, 114, 32, 110, 97, 118, 105, 103, 97, 116, 105, 111, 110, 32, 
+97, 110, 100, 10, 35, 32, 99, 111, 110, 116, 114, 111, 108, 32, 97, 108, 115, 111, 32, 102, 
+105, 114, 101, 32, 119, 104, 101, 110, 32, 116, 104, 111, 115, 101, 32, 115, 97, 109, 101, 32, 
+107, 101, 121, 115, 116, 114, 111, 107, 101, 115, 32, 97, 114, 101, 32, 112, 114, 101, 115, 115, 
+101, 100, 32, 105, 110, 32, 116, 104, 101, 10, 35, 32, 83, 101, 97, 114, 99, 104, 32, 101, 
+110, 116, 114, 121, 32, 98, 111, 120, 46, 32, 32, 68, 105, 115, 97, 98, 108, 101, 32, 116, 
+104, 101, 109, 44, 32, 116, 111, 32, 112, 114, 101, 118, 101, 110, 116, 32, 116, 104, 101, 32, 
+100, 105, 102, 102, 32, 115, 99, 114, 101, 101, 110, 32, 102, 114, 111, 109, 10, 35, 32, 100, 
+105, 115, 97, 112, 112, 101, 97, 114, 105, 110, 103, 32, 97, 98, 114, 117, 112, 116, 108, 121, 
+32, 97, 110, 100, 32, 117, 110, 101, 120, 112, 101, 99, 116, 101, 100, 108, 121, 32, 119, 104, 
+101, 110, 32, 115, 101, 97, 114, 99, 104, 105, 110, 103, 32, 102, 111, 114, 32, 34, 113, 34, 
+46, 10, 35, 10, 98, 105, 110, 100, 32, 46, 32, 60, 67, 111, 110, 116, 114, 111, 108, 45, 
+113, 62, 32, 101, 120, 105, 116, 10, 98, 105, 110, 100, 32, 46, 32, 60, 67, 111, 110, 116, 
+114, 111, 108, 45, 112, 62, 32, 123, 99, 97, 116, 99, 104, 32, 115, 101, 97, 114, 99, 104, 
+80, 114, 101, 118, 59, 32, 98, 114, 101, 97, 107, 125, 10, 98, 105, 110, 100, 32, 46, 32, 
+60, 67, 111, 110, 116, 114, 111, 108, 45, 110, 62, 32, 123, 99, 97, 116, 99, 104, 32, 115, 
+101, 97, 114, 99, 104, 78, 101, 120, 116, 59, 32, 98, 114, 101, 97, 107, 125, 10, 98, 105, 
+110, 100, 32, 46, 32, 60, 69, 115, 99, 97, 112, 101, 62, 60, 69, 115, 99, 97, 112, 101, 
+62, 32, 101, 120, 105, 116, 10, 98, 105, 110, 100, 32, 46, 32, 60, 68, 101, 115, 116, 114, 
+111, 121, 62, 32, 123, 97, 102, 116, 101, 114, 32, 48, 32, 101, 120, 105, 116, 125, 10, 98, 
+105, 110, 100, 32, 46, 32, 60, 84, 97, 98, 62, 32, 123, 99, 121, 99, 108, 101, 68, 105, 
+102, 102, 115, 59, 32, 98, 114, 101, 97, 107, 125, 10, 98, 105, 110, 100, 32, 46, 32, 60, 
+60, 80, 114, 101, 118, 87, 105, 110, 100, 111, 119, 62, 62, 32, 123, 99, 121, 99, 108, 101, 
+68, 105, 102, 102, 115, 32, 49, 59, 32, 98, 114, 101, 97, 107, 125, 10, 98, 105, 110, 100, 
+32, 46, 32, 60, 67, 111, 110, 116, 114, 111, 108, 45, 102, 62, 32, 123, 115, 101, 97, 114, 
+99, 104, 79, 110, 79, 102, 102, 59, 32, 98, 114, 101, 97, 107, 125, 10, 98, 105, 110, 100, 
+32, 46, 32, 60, 67, 111, 110, 116, 114, 111, 108, 45, 103, 62, 32, 123, 99, 97, 116, 99, 
+104, 32, 115, 101, 97, 114, 99, 104, 78, 101, 120, 116, 59, 32, 98, 114, 101, 97, 107, 125, 
+10, 98, 105, 110, 100, 32, 46, 32, 60, 82, 101, 116, 117, 114, 110, 62, 32, 123, 10, 32, 
+32, 101, 118, 101, 110, 116, 32, 103, 101, 110, 101, 114, 97, 116, 101, 32, 46, 98, 98, 46, 
+102, 105, 108, 101, 115, 32, 60, 49, 62, 10, 32, 32, 101, 118, 101, 110, 116, 32, 103, 101, 
+110, 101, 114, 97, 116, 101, 32, 46, 98, 98, 46, 102, 105, 108, 101, 115, 32, 60, 66, 117, 
+116, 116, 111, 110, 82, 101, 108, 101, 97, 115, 101, 45, 49, 62, 10, 32, 32, 98, 114, 101, 
+97, 107, 10, 125, 10, 102, 111, 114, 101, 97, 99, 104, 32, 123, 107, 101, 121, 32, 97, 120, 
+105, 115, 32, 97, 114, 103, 115, 125, 32, 123, 10, 32, 32, 85, 112, 32, 32, 32, 32, 121, 
+32, 123, 115, 99, 114, 111, 108, 108, 32, 45, 53, 32, 117, 110, 105, 116, 115, 125, 10, 32, 
+32, 107, 32, 32, 32, 32, 32, 121, 32, 123, 115, 99, 114, 111, 108, 108, 32, 45, 53, 32, 
+117, 110, 105, 116, 115, 125, 10, 32, 32, 68, 111, 119, 110, 32, 32, 121, 32, 123, 115, 99, 
+114, 111, 108, 108, 32, 53, 32, 117, 110, 105, 116, 115, 125, 10, 32, 32, 106, 32, 32, 32, 
+32, 32, 121, 32, 123, 115, 99, 114, 111, 108, 108, 32, 53, 32, 117, 110, 105, 116, 115, 125, 
+10, 32, 32, 76, 101, 102, 116, 32, 32, 120, 32, 123, 115, 99, 114, 111, 108, 108, 32, 45, 
+53, 32, 117, 110, 105, 116, 115, 125, 10, 32, 32, 104, 32, 32, 32, 32, 32, 120, 32, 123, 
+115, 99, 114, 111, 108, 108, 32, 45, 53, 32, 117, 110, 105, 116, 115, 125, 10, 32, 32, 82, 
+105, 103, 104, 116, 32, 120, 32, 123, 115, 99, 114, 111, 108, 108, 32, 53, 32, 117, 110, 105, 
+116, 115, 125, 10, 32, 32, 108, 32, 32, 32, 32, 32, 120, 32, 123, 115, 99, 114, 111, 108, 
+108, 32, 53, 32, 117, 110, 105, 116, 115, 125, 10, 32, 32, 80, 114, 105, 111, 114, 32, 121, 
+32, 123, 115, 99, 114, 111, 108, 108, 32, 45, 49, 32, 112, 97, 103, 101, 125, 10, 32, 32, 
+98, 32, 32, 32, 32, 32, 121, 32, 123, 115, 99, 114, 111, 108, 108, 32, 45, 49, 32, 112, 
+97, 103, 101, 125, 10, 32, 32, 78, 101, 120, 116, 32, 32, 121, 32, 123, 115, 99, 114, 111, 
+108, 108, 32, 49, 32, 112, 97, 103, 101, 125, 10, 32, 32, 115, 112, 97, 99, 101, 32, 121, 
+32, 123, 115, 99, 114, 111, 108, 108, 32, 49, 32, 112, 97, 103, 101, 125, 10, 32, 32, 72, 
+111, 109, 101, 32, 32, 121, 32, 123, 109, 111, 118, 101, 116, 111, 32, 48, 125, 10, 32, 32, 
+103, 32, 32, 32, 32, 32, 121, 32, 123, 109, 111, 118, 101, 116, 111, 32, 48, 125, 10, 32, 
+32, 69, 110, 100, 32, 32, 32, 121, 32, 123, 109, 111, 118, 101, 116, 111, 32, 49, 125, 10, 
+125, 32, 123, 10, 32, 32, 98, 105, 110, 100, 32, 46, 32, 60, 36, 107, 101, 121, 62, 32, 
+34, 115, 99, 114, 111, 108, 108, 45, 36, 97, 120, 105, 115, 32, 36, 97, 114, 103, 115, 59, 
+32, 98, 114, 101, 97, 107, 34, 10, 32, 32, 98, 105, 110, 100, 32, 46, 32, 60, 83, 104, 
+105, 102, 116, 45, 36, 107, 101, 121, 62, 32, 99, 111, 110, 116, 105, 110, 117, 101, 10, 125, 
+10, 10, 102, 114, 97, 109, 101, 32, 46, 98, 98, 10, 58, 58, 116, 116, 107, 58, 58, 109, 
+101, 110, 117, 98, 117, 116, 116, 111, 110, 32, 46, 98, 98, 46, 102, 105, 108, 101, 115, 32, 
+45, 116, 101, 120, 116, 32, 34, 70, 105, 108, 101, 115, 34, 10, 105, 102, 32, 123, 91, 116, 
+107, 32, 119, 105, 110, 100, 111, 119, 105, 110, 103, 115, 121, 115, 116, 101, 109, 93, 32, 101, 
+113, 32, 34, 119, 105, 110, 51, 50, 34, 125, 32, 123, 10, 32, 32, 58, 58, 116, 116, 107, 
+58, 58, 115, 116, 121, 108, 101, 32, 116, 104, 101, 109, 101, 32, 117, 115, 101, 32, 119, 105, 
+110, 110, 97, 116, 105, 118, 101, 10, 32, 32, 46, 98, 98, 46, 102, 105, 108, 101, 115, 32, 
+99, 111, 110, 102, 105, 103, 117, 114, 101, 32, 45, 112, 97, 100, 100, 105, 110, 103, 32, 123, 
+50, 48, 32, 49, 32, 49, 48, 32, 50, 125, 10, 125, 10, 116, 111, 112, 108, 101, 118, 101, 
+108, 32, 46, 119, 102, 105, 108, 101, 115, 10, 119, 109, 32, 119, 105, 116, 104, 100, 114, 97, 
+119, 32, 46, 119, 102, 105, 108, 101, 115, 10, 117, 112, 100, 97, 116, 101, 32, 105, 100, 108, 
+101, 116, 97, 115, 107, 115, 10, 119, 109, 32, 116, 114, 97, 110, 115, 105, 101, 110, 116, 32, 
+46, 119, 102, 105, 108, 101, 115, 32, 46, 10, 119, 109, 32, 111, 118, 101, 114, 114, 105, 100, 
+101, 114, 101, 100, 105, 114, 101, 99, 116, 32, 46, 119, 102, 105, 108, 101, 115, 32, 49, 10, 
+108, 105, 115, 116, 98, 111, 120, 32, 46, 119, 102, 105, 108, 101, 115, 46, 108, 98, 32, 45, 
+119, 105, 100, 116, 104, 32, 48, 32, 45, 104, 101, 105, 103, 104, 116, 32, 36, 67, 70, 71, 
+40, 76, 66, 95, 72, 69, 73, 71, 72, 84, 41, 32, 45, 97, 99, 116, 105, 118, 101, 115, 
+116, 121, 108, 101, 32, 110, 111, 110, 101, 32, 92, 10, 32, 32, 45, 121, 115, 99, 114, 111, 
+108, 108, 32, 123, 46, 119, 102, 105, 108, 101, 115, 46, 115, 98, 32, 115, 101, 116, 125, 10, 
+58, 58, 116, 116, 107, 58, 58, 115, 99, 114, 111, 108, 108, 98, 97, 114, 32, 46, 119, 102, 
+105, 108, 101, 115, 46, 115, 98, 32, 45, 99, 111, 109, 109, 97, 110, 100, 32, 123, 46, 119, 
+102, 105, 108, 101, 115, 46, 108, 98, 32, 121, 118, 105, 101, 119, 125, 10, 103, 114, 105, 100, 
+32, 46, 119, 102, 105, 108, 101, 115, 46, 108, 98, 32, 46, 119, 102, 105, 108, 101, 115, 46, 
+115, 98, 32, 45, 115, 116, 105, 99, 107, 121, 32, 110, 115, 10, 98, 105, 110, 100, 32, 46, 
+98, 98, 46, 102, 105, 108, 101, 115, 32, 60, 49, 62, 32, 123, 10, 32, 32, 115, 101, 116, 
+32, 120, 32, 91, 119, 105, 110, 102, 111, 32, 114, 111, 111, 116, 120, 32, 37, 87, 93, 10, 
+32, 32, 115, 101, 116, 32, 121, 32, 91, 101, 120, 112, 114, 32, 123, 91, 119, 105, 110, 102, 
+111, 32, 114, 111, 111, 116, 121, 32, 37, 87, 93, 43, 91, 119, 105, 110, 102, 111, 32, 104, 
+101, 105, 103, 104, 116, 32, 37, 87, 93, 125, 93, 10, 32, 32, 119, 109, 32, 103, 101, 111, 
+109, 101, 116, 114, 121, 32, 46, 119, 102, 105, 108, 101, 115, 32, 43, 36, 120, 43, 36, 121, 
+10, 32, 32, 119, 109, 32, 100, 101, 105, 99, 111, 110, 105, 102, 121, 32, 46, 119, 102, 105, 
+108, 101, 115, 10, 32, 32, 102, 111, 99, 117, 115, 32, 46, 119, 102, 105, 108, 101, 115, 46, 
+108, 98, 10, 125, 10, 98, 105, 110, 100, 32, 46, 119, 102, 105, 108, 101, 115, 32, 60, 70, 
+111, 99, 117, 115, 79, 117, 116, 62, 32, 123, 119, 109, 32, 119, 105, 116, 104, 100, 114, 97, 
+119, 32, 46, 119, 102, 105, 108, 101, 115, 125, 10, 98, 105, 110, 100, 32, 46, 119, 102, 105, 
+108, 101, 115, 32, 60, 69, 115, 99, 97, 112, 101, 62, 32, 123, 102, 111, 99, 117, 115, 32, 
+46, 125, 10, 102, 111, 114, 101, 97, 99, 104, 32, 101, 118, 116, 32, 123, 49, 32, 82, 101, 
+116, 117, 114, 110, 125, 32, 123, 10, 32, 32, 98, 105, 110, 100, 32, 46, 119, 102, 105, 108, 
+101, 115, 46, 108, 98, 32, 60, 36, 101, 118, 116, 62, 32, 123, 10, 32, 32, 32, 32, 99, 
+97, 116, 99, 104, 32, 123, 10, 32, 32, 32, 32, 32, 32, 115, 101, 116, 32, 105, 100, 120, 
+32, 91, 108, 105, 110, 100, 101, 120, 32, 91, 46, 116, 120, 116, 65, 32, 116, 97, 103, 32, 
+114, 97, 110, 103, 101, 115, 32, 102, 110, 93, 32, 91, 101, 120, 112, 114, 32, 123, 91, 37, 
+87, 32, 99, 117, 114, 115, 101, 108, 101, 99, 116, 105, 111, 110, 93, 42, 50, 125, 93, 93, 
+10, 32, 32, 32, 32, 32, 32, 118, 105, 101, 119, 68, 105, 102, 102, 32, 36, 105, 100, 120, 
+10, 32, 32, 32, 32, 125, 10, 32, 32, 32, 32, 102, 111, 99, 117, 115, 32, 46, 10, 32, 
+32, 32, 32, 98, 114, 101, 97, 107, 10, 32, 32, 125, 10, 125, 10, 98, 105, 110, 100, 32, 
+46, 119, 102, 105, 108, 101, 115, 46, 108, 98, 32, 60, 77, 111, 116, 105, 111, 110, 62, 32, 
+123, 10, 32, 32, 37, 87, 32, 115, 101, 108, 101, 99, 116, 105, 111, 110, 32, 99, 108, 101, 
+97, 114, 32, 48, 32, 101, 110, 100, 10, 32, 32, 37, 87, 32, 115, 101, 108, 101, 99, 116, 
+105, 111, 110, 32, 115, 101, 116, 32, 64, 37, 120, 44, 37, 121, 10, 125, 10, 10, 102, 111, 
+114, 101, 97, 99, 104, 32, 123, 115, 105, 100, 101, 32, 115, 121, 110, 99, 67, 111, 108, 125, 
+32, 123, 65, 32, 46, 116, 120, 116, 66, 32, 66, 32, 46, 116, 120, 116, 65, 125, 32, 123, 
+10, 32, 32, 115, 101, 116, 32, 108, 110, 32, 46, 108, 110, 36, 115, 105, 100, 101, 10, 32, 
+32, 116, 101, 120, 116, 32, 36, 108, 110, 10, 32, 32, 36, 108, 110, 32, 116, 97, 103, 32, 
+99, 111, 110, 102, 105, 103, 32, 45, 32, 45, 106, 117, 115, 116, 105, 102, 121, 32, 114, 105, 
+103, 104, 116, 10, 10, 32, 32, 115, 101, 116, 32, 116, 120, 116, 32, 46, 116, 120, 116, 36, 
+115, 105, 100, 101, 10, 32, 32, 116, 101, 120, 116, 32, 36, 116, 120, 116, 32, 45, 119, 105, 
+100, 116, 104, 32, 36, 67, 70, 71, 40, 87, 73, 68, 84, 72, 41, 32, 45, 104, 101, 105, 
+103, 104, 116, 32, 36, 67, 70, 71, 40, 72, 69, 73, 71, 72, 84, 41, 32, 45, 119, 114, 
+97, 112, 32, 110, 111, 110, 101, 32, 92, 10, 32, 32, 32, 32, 45, 120, 115, 99, 114, 111, 
+108, 108, 32, 34, 115, 121, 110, 99, 45, 120, 32, 36, 115, 121, 110, 99, 67, 111, 108, 34, 
+10, 32, 32, 99, 97, 116, 99, 104, 32, 123, 36, 116, 120, 116, 32, 99, 111, 110, 102, 105, 
+103, 32, 45, 116, 97, 98, 115, 116, 121, 108, 101, 32, 119, 111, 114, 100, 112, 114, 111, 99, 
+101, 115, 115, 111, 114, 125, 32, 59, 35, 32, 82, 101, 113, 117, 105, 114, 101, 100, 32, 102, 
+111, 114, 32, 84, 107, 62, 61, 56, 46, 53, 10, 32, 32, 102, 111, 114, 101, 97, 99, 104, 
+32, 116, 97, 103, 32, 123, 97, 100, 100, 32, 114, 109, 32, 99, 104, 110, 103, 125, 32, 123, 
+10, 32, 32, 32, 32, 36, 116, 120, 116, 32, 116, 97, 103, 32, 99, 111, 110, 102, 105, 103, 
+32, 36, 116, 97, 103, 32, 45, 98, 97, 99, 107, 103, 114, 111, 117, 110, 100, 32, 36, 67, 
+70, 71, 40, 91, 115, 116, 114, 105, 110, 103, 32, 116, 111, 117, 112, 112, 101, 114, 32, 36, 
+116, 97, 103, 93, 95, 66, 71, 41, 10, 32, 32, 32, 32, 36, 116, 120, 116, 32, 116, 97, 
+103, 32, 108, 111, 119, 101, 114, 32, 36, 116, 97, 103, 10, 32, 32, 125, 10, 32, 32, 36, 
+116, 120, 116, 32, 116, 97, 103, 32, 99, 111, 110, 102, 105, 103, 32, 102, 110, 32, 45, 98, 
+97, 99, 107, 103, 114, 111, 117, 110, 100, 32, 36, 67, 70, 71, 40, 70, 78, 95, 66, 71, 
+41, 32, 45, 102, 111, 114, 101, 103, 114, 111, 117, 110, 100, 32, 36, 67, 70, 71, 40, 70, 
+78, 95, 70, 71, 41, 32, 92, 10, 32, 32, 32, 32, 45, 106, 117, 115, 116, 105, 102, 121, 
+32, 99, 101, 110, 116, 101, 114, 10, 32, 32, 36, 116, 120, 116, 32, 116, 97, 103, 32, 99, 
+111, 110, 102, 105, 103, 32, 101, 114, 114, 32, 45, 102, 111, 114, 101, 103, 114, 111, 117, 110, 
+100, 32, 36, 67, 70, 71, 40, 69, 82, 82, 95, 70, 71, 41, 10, 125, 10, 116, 101, 120, 
+116, 32, 46, 109, 107, 114, 10, 10, 102, 111, 114, 101, 97, 99, 104, 32, 99, 32, 91, 99, 
+111, 108, 115, 93, 32, 123, 10, 32, 32, 115, 101, 116, 32, 107, 101, 121, 80, 114, 101, 102, 
+105, 120, 32, 91, 115, 116, 114, 105, 110, 103, 32, 116, 111, 117, 112, 112, 101, 114, 32, 91, 
+99, 111, 108, 84, 121, 112, 101, 32, 36, 99, 93, 93, 95, 67, 79, 76, 95, 10, 32, 32, 
+105, 102, 32, 123, 91, 116, 107, 32, 119, 105, 110, 100, 111, 119, 105, 110, 103, 115, 121, 115, 
+116, 101, 109, 93, 32, 101, 113, 32, 34, 119, 105, 110, 51, 50, 34, 125, 32, 123, 36, 99, 
+32, 99, 111, 110, 102, 105, 103, 32, 45, 102, 111, 110, 116, 32, 123, 99, 111, 117, 114, 105, 
+101, 114, 32, 57, 125, 125, 10, 32, 32, 36, 99, 32, 99, 111, 110, 102, 105, 103, 32, 45, 
+98, 103, 32, 36, 67, 70, 71, 40, 36, 123, 107, 101, 121, 80, 114, 101, 102, 105, 120, 125, 
+66, 71, 41, 32, 45, 102, 103, 32, 36, 67, 70, 71, 40, 36, 123, 107, 101, 121, 80, 114, 
+101, 102, 105, 120, 125, 70, 71, 41, 32, 45, 98, 111, 114, 100, 101, 114, 119, 105, 100, 116, 
+104, 32, 48, 32, 92, 10, 32, 32, 32, 32, 45, 112, 97, 100, 120, 32, 36, 67, 70, 71, 
+40, 80, 65, 68, 88, 41, 32, 45, 121, 115, 99, 114, 111, 108, 108, 32, 115, 121, 110, 99, 
+45, 121, 10, 32, 32, 36, 99, 32, 116, 97, 103, 32, 99, 111, 110, 102, 105, 103, 32, 104, 
+114, 108, 110, 32, 45, 115, 112, 97, 99, 105, 110, 103, 49, 32, 36, 67, 70, 71, 40, 72, 
+82, 95, 80, 65, 68, 95, 84, 79, 80, 41, 32, 45, 115, 112, 97, 99, 105, 110, 103, 51, 
+32, 36, 67, 70, 71, 40, 72, 82, 95, 80, 65, 68, 95, 66, 84, 77, 41, 32, 92, 10, 
+32, 32, 32, 32, 32, 45, 102, 111, 114, 101, 103, 114, 111, 117, 110, 100, 32, 36, 67, 70, 
+71, 40, 72, 82, 95, 70, 71, 41, 32, 45, 106, 117, 115, 116, 105, 102, 121, 32, 114, 105, 
+103, 104, 116, 10, 32, 32, 36, 99, 32, 116, 97, 103, 32, 99, 111, 110, 102, 105, 103, 32, 
+104, 114, 116, 120, 116, 32, 32, 45, 115, 112, 97, 99, 105, 110, 103, 49, 32, 36, 67, 70, 
+71, 40, 72, 82, 95, 80, 65, 68, 95, 84, 79, 80, 41, 32, 45, 115, 112, 97, 99, 105, 
+110, 103, 51, 32, 36, 67, 70, 71, 40, 72, 82, 95, 80, 65, 68, 95, 66, 84, 77, 41, 
+32, 92, 10, 32, 32, 32, 32, 32, 45, 102, 111, 114, 101, 103, 114, 111, 117, 110, 100, 32, 
+36, 67, 70, 71, 40, 72, 82, 95, 70, 71, 41, 32, 45, 106, 117, 115, 116, 105, 102, 121, 
+32, 99, 101, 110, 116, 101, 114, 10, 32, 32, 36, 99, 32, 116, 97, 103, 32, 99, 111, 110, 
+102, 105, 103, 32, 102, 110, 32, 45, 115, 112, 97, 99, 105, 110, 103, 49, 32, 36, 67, 70, 
+71, 40, 70, 78, 95, 80, 65, 68, 41, 32, 45, 115, 112, 97, 99, 105, 110, 103, 51, 32, 
+36, 67, 70, 71, 40, 70, 78, 95, 80, 65, 68, 41, 10, 32, 32, 98, 105, 110, 100, 116, 
+97, 103, 115, 32, 36, 99, 32, 34, 46, 32, 36, 99, 32, 84, 101, 120, 116, 32, 97, 108, 
+108, 34, 10, 32, 32, 98, 105, 110, 100, 32, 36, 99, 32, 60, 49, 62, 32, 123, 102, 111, 
+99, 117, 115, 32, 37, 87, 125, 10, 125, 10, 10, 58, 58, 116, 116, 107, 58, 58, 115, 99, 
+114, 111, 108, 108, 98, 97, 114, 32, 46, 115, 98, 121, 32, 45, 99, 111, 109, 109, 97, 110, 
+100, 32, 123, 46, 116, 120, 116, 65, 32, 121, 118, 105, 101, 119, 125, 32, 45, 111, 114, 105, 
+101, 110, 116, 32, 118, 101, 114, 116, 105, 99, 97, 108, 10, 58, 58, 116, 116, 107, 58, 58, 
+115, 99, 114, 111, 108, 108, 98, 97, 114, 32, 46, 115, 98, 120, 65, 32, 45, 99, 111, 109, 
+109, 97, 110, 100, 32, 123, 46, 116, 120, 116, 65, 32, 120, 118, 105, 101, 119, 125, 32, 45, 
+111, 114, 105, 101, 110, 116, 32, 104, 111, 114, 105, 122, 111, 110, 116, 97, 108, 10, 58, 58, 
+116, 116, 107, 58, 58, 115, 99, 114, 111, 108, 108, 98, 97, 114, 32, 46, 115, 98, 120, 66, 
+32, 45, 99, 111, 109, 109, 97, 110, 100, 32, 123, 46, 116, 120, 116, 66, 32, 120, 118, 105, 
+101, 119, 125, 32, 45, 111, 114, 105, 101, 110, 116, 32, 104, 111, 114, 105, 122, 111, 110, 116, 
+97, 108, 10, 102, 114, 97, 109, 101, 32, 46, 115, 112, 97, 99, 101, 114, 10, 10, 105, 102, 
+32, 123, 91, 114, 101, 97, 100, 68, 105, 102, 102, 115, 32, 36, 102, 111, 115, 115, 105, 108, 
+99, 109, 100, 93, 32, 61, 61, 32, 48, 125, 32, 123, 10, 32, 32, 116, 107, 95, 109, 101, 
+115, 115, 97, 103, 101, 66, 111, 120, 32, 45, 116, 121, 112, 101, 32, 111, 107, 32, 45, 116, 
+105, 116, 108, 101, 32, 36, 67, 70, 71, 40, 84, 73, 84, 76, 69, 41, 32, 45, 109, 101, 
+115, 115, 97, 103, 101, 32, 34, 78, 111, 32, 99, 104, 97, 110, 103, 101, 115, 34, 10, 32, 
+32, 101, 120, 105, 116, 10, 125, 10, 117, 112, 100, 97, 116, 101, 32, 105, 100, 108, 101, 116, 
+97, 115, 107, 115, 10, 10, 112, 114, 111, 99, 32, 115, 97, 118, 101, 68, 105, 102, 102, 32, 
+123, 125, 32, 123, 10, 32, 32, 115, 101, 116, 32, 102, 110, 32, 91, 116, 107, 95, 103, 101, 
+116, 83, 97, 118, 101, 70, 105, 108, 101, 93, 10, 32, 32, 105, 102, 32, 123, 36, 102, 110, 
+61, 61, 34, 34, 125, 32, 114, 101, 116, 117, 114, 110, 10, 32, 32, 115, 101, 116, 32, 111, 
+117, 116, 32, 91, 111, 112, 101, 110, 32, 36, 102, 110, 32, 119, 98, 93, 10, 32, 32, 112, 
+117, 116, 115, 32, 36, 111, 117, 116, 32, 34, 35, 33, 47, 117, 115, 114, 47, 98, 105, 110, 
+47, 116, 99, 108, 115, 104, 92, 110, 35, 92, 110, 35, 32, 82, 117, 110, 32, 116, 104, 105, 
+115, 32, 115, 99, 114, 105, 112, 116, 32, 117, 115, 105, 110, 103, 32, 39, 116, 99, 108, 115, 
+104, 39, 32, 111, 114, 32, 39, 119, 105, 115, 104, 39, 34, 10, 32, 32, 112, 117, 116, 115, 
+32, 36, 111, 117, 116, 32, 34, 35, 32, 116, 111, 32, 115, 101, 101, 32, 116, 104, 101, 32, 
+103, 114, 97, 112, 104, 105, 99, 97, 108, 32, 100, 105, 102, 102, 46, 92, 110, 35, 34, 10, 
+32, 32, 112, 117, 116, 115, 32, 36, 111, 117, 116, 32, 34, 115, 101, 116, 32, 102, 111, 115, 
+115, 105, 108, 99, 109, 100, 32, 123, 125, 34, 10, 32, 32, 112, 117, 116, 115, 32, 36, 111, 
+117, 116, 32, 34, 115, 101, 116, 32, 112, 114, 111, 103, 32, 91, 108, 105, 115, 116, 32, 36, 
+58, 58, 112, 114, 111, 103, 93, 34, 10, 32, 32, 112, 117, 116, 115, 32, 36, 111, 117, 116, 
+32, 34, 115, 101, 116, 32, 100, 105, 102, 102, 116, 120, 116, 32, 92, 49, 55, 51, 34, 10, 
+32, 32, 102, 111, 114, 101, 97, 99, 104, 32, 101, 32, 36, 58, 58, 100, 105, 102, 102, 116, 
+120, 116, 32, 123, 112, 117, 116, 115, 32, 36, 111, 117, 116, 32, 91, 108, 105, 115, 116, 32, 
+36, 101, 93, 125, 10, 32, 32, 112, 117, 116, 115, 32, 36, 111, 117, 116, 32, 34, 92, 49, 
+55, 53, 34, 10, 32, 32, 112, 117, 116, 115, 32, 36, 111, 117, 116, 32, 34, 101, 118, 97, 
+108, 32, 92, 36, 112, 114, 111, 103, 34, 10, 32, 32, 99, 108, 111, 115, 101, 32, 36, 111, 
+117, 116, 10, 125, 10, 112, 114, 111, 99, 32, 105, 110, 118, 101, 114, 116, 68, 105, 102, 102, 
+32, 123, 125, 32, 123, 10, 32, 32, 103, 108, 111, 98, 97, 108, 32, 67, 70, 71, 10, 32, 
+32, 97, 114, 114, 97, 121, 32, 115, 101, 116, 32, 120, 32, 91, 103, 114, 105, 100, 32, 105, 
+110, 102, 111, 32, 46, 116, 120, 116, 65, 93, 10, 32, 32, 105, 102, 32, 123, 36, 120, 40, 
+45, 99, 111, 108, 117, 109, 110, 41, 61, 61, 49, 125, 32, 123, 10, 32, 32, 32, 32, 103, 
+114, 105, 100, 32, 99, 111, 110, 102, 105, 103, 32, 46, 108, 110, 66, 32, 45, 99, 111, 108, 
+117, 109, 110, 32, 48, 10, 32, 32, 32, 32, 103, 114, 105, 100, 32, 99, 111, 110, 102, 105, 
+103, 32, 46, 116, 120, 116, 66, 32, 45, 99, 111, 108, 117, 109, 110, 32, 49, 10, 32, 32, 
+32, 32, 46, 116, 120, 116, 66, 32, 116, 97, 103, 32, 99, 111, 110, 102, 105, 103, 32, 97, 
+100, 100, 32, 45, 98, 97, 99, 107, 103, 114, 111, 117, 110, 100, 32, 36, 67, 70, 71, 40, 
+82, 77, 95, 66, 71, 41, 10, 32, 32, 32, 32, 103, 114, 105, 100, 32, 99, 111, 110, 102, 
+105, 103, 32, 46, 108, 110, 65, 32, 45, 99, 111, 108, 117, 109, 110, 32, 51, 10, 32, 32, 
+32, 32, 103, 114, 105, 100, 32, 99, 111, 110, 102, 105, 103, 32, 46, 116, 120, 116, 65, 32, 
+45, 99, 111, 108, 117, 109, 110, 32, 52, 10, 32, 32, 32, 32, 46, 116, 120, 116, 65, 32, 
+116, 97, 103, 32, 99, 111, 110, 102, 105, 103, 32, 114, 109, 32, 45, 98, 97, 99, 107, 103, 
+114, 111, 117, 110, 100, 32, 36, 67, 70, 71, 40, 65, 68, 68, 95, 66, 71, 41, 10, 32, 
+32, 32, 32, 46, 98, 98, 46, 105, 110, 118, 101, 114, 116, 32, 99, 111, 110, 102, 105, 103, 
+32, 45, 116, 101, 120, 116, 32, 85, 110, 105, 110, 118, 101, 114, 116, 10, 32, 32, 125, 32, 
+101, 108, 115, 101, 32, 123, 10, 32, 32, 32, 32, 103, 114, 105, 100, 32, 99, 111, 110, 102, 
+105, 103, 32, 46, 108, 110, 65, 32, 45, 99, 111, 108, 117, 109, 110, 32, 48, 10, 32, 32, 
+32, 32, 103, 114, 105, 100, 32, 99, 111, 110, 102, 105, 103, 32, 46, 116, 120, 116, 65, 32, 
+45, 99, 111, 108, 117, 109, 110, 32, 49, 10, 32, 32, 32, 32, 46, 116, 120, 116, 65, 32, 
+116, 97, 103, 32, 99, 111, 110, 102, 105, 103, 32, 114, 109, 32, 45, 98, 97, 99, 107, 103, 
+114, 111, 117, 110, 100, 32, 36, 67, 70, 71, 40, 82, 77, 95, 66, 71, 41, 10, 32, 32, 
+32, 32, 103, 114, 105, 100, 32, 99, 111, 110, 102, 105, 103, 32, 46, 108, 110, 66, 32, 45, 
+99, 111, 108, 117, 109, 110, 32, 51, 10, 32, 32, 32, 32, 103, 114, 105, 100, 32, 99, 111, 
+110, 102, 105, 103, 32, 46, 116, 120, 116, 66, 32, 45, 99, 111, 108, 117, 109, 110, 32, 52, 
+10, 32, 32, 32, 32, 46, 116, 120, 116, 66, 32, 116, 97, 103, 32, 99, 111, 110, 102, 105, 
+103, 32, 97, 100, 100, 32, 45, 98, 97, 99, 107, 103, 114, 111, 117, 110, 100, 32, 36, 67, 
+70, 71, 40, 65, 68, 68, 95, 66, 71, 41, 10, 32, 32, 32, 32, 46, 98, 98, 46, 105, 
+110, 118, 101, 114, 116, 32, 99, 111, 110, 102, 105, 103, 32, 45, 116, 101, 120, 116, 32, 73, 
+110, 118, 101, 114, 116, 10, 32, 32, 125, 10, 32, 32, 46, 109, 107, 114, 32, 99, 111, 110, 
+102, 105, 103, 32, 45, 115, 116, 97, 116, 101, 32, 110, 111, 114, 109, 97, 108, 10, 32, 32, 
+115, 101, 116, 32, 99, 108, 116, 32, 91, 46, 109, 107, 114, 32, 115, 101, 97, 114, 99, 104, 
+32, 45, 97, 108, 108, 32, 60, 32, 49, 46, 48, 32, 101, 110, 100, 93, 10, 32, 32, 115, 
+101, 116, 32, 99, 103, 116, 32, 91, 46, 109, 107, 114, 32, 115, 101, 97, 114, 99, 104, 32, 
+45, 97, 108, 108, 32, 62, 32, 49, 46, 48, 32, 101, 110, 100, 93, 10, 32, 32, 102, 111, 
+114, 101, 97, 99, 104, 32, 99, 32, 36, 99, 108, 116, 32, 123, 46, 109, 107, 114, 32, 114, 
+101, 112, 108, 97, 99, 101, 32, 36, 99, 32, 34, 36, 99, 32, 43, 49, 32, 99, 104, 97, 
+114, 115, 34, 32, 62, 125, 10, 32, 32, 102, 111, 114, 101, 97, 99, 104, 32, 99, 32, 36, 
+99, 103, 116, 32, 123, 46, 109, 107, 114, 32, 114, 101, 112, 108, 97, 99, 101, 32, 36, 99, 
+32, 34, 36, 99, 32, 43, 49, 32, 99, 104, 97, 114, 115, 34, 32, 60, 125, 10, 32, 32, 
+46, 109, 107, 114, 32, 99, 111, 110, 102, 105, 103, 32, 45, 115, 116, 97, 116, 101, 32, 100, 
+105, 115, 97, 98, 108, 101, 100, 10, 125, 10, 112, 114, 111, 99, 32, 115, 101, 97, 114, 99, 
+104, 79, 110, 79, 102, 102, 32, 123, 125, 32, 123, 10, 32, 32, 105, 102, 32, 123, 91, 105, 
+110, 102, 111, 32, 101, 120, 105, 115, 116, 115, 32, 58, 58, 115, 101, 97, 114, 99, 104, 93, 
+125, 32, 123, 10, 32, 32, 32, 32, 117, 110, 115, 101, 116, 32, 58, 58, 115, 101, 97, 114, 
+99, 104, 10, 32, 32, 32, 32, 46, 116, 120, 116, 65, 32, 116, 97, 103, 32, 114, 101, 109, 
+111, 118, 101, 32, 115, 101, 97, 114, 99, 104, 32, 49, 46, 48, 32, 101, 110, 100, 10, 32, 
+32, 32, 32, 46, 116, 120, 116, 66, 32, 116, 97, 103, 32, 114, 101, 109, 111, 118, 101, 32, 
+115, 101, 97, 114, 99, 104, 32, 49, 46, 48, 32, 101, 110, 100, 10, 32, 32, 32, 32, 112, 
+97, 99, 107, 32, 102, 111, 114, 103, 101, 116, 32, 46, 98, 98, 46, 115, 102, 114, 97, 109, 
+101, 10, 32, 32, 32, 32, 102, 111, 99, 117, 115, 32, 46, 10, 32, 32, 125, 32, 101, 108, 
+115, 101, 32, 123, 10, 32, 32, 32, 32, 115, 101, 116, 32, 58, 58, 115, 101, 97, 114, 99, 
+104, 32, 46, 116, 120, 116, 65, 10, 32, 32, 32, 32, 105, 102, 32, 123, 33, 91, 119, 105, 
+110, 102, 111, 32, 101, 120, 105, 115, 116, 115, 32, 46, 98, 98, 46, 115, 102, 114, 97, 109, 
+101, 93, 125, 32, 123, 10, 32, 32, 32, 32, 32, 32, 102, 114, 97, 109, 101, 32, 46, 98, 
+98, 46, 115, 102, 114, 97, 109, 101, 10, 32, 32, 32, 32, 32, 32, 58, 58, 116, 116, 107, 
+58, 58, 101, 110, 116, 114, 121, 32, 46, 98, 98, 46, 115, 102, 114, 97, 109, 101, 46, 101, 
+32, 45, 119, 105, 100, 116, 104, 32, 49, 48, 10, 32, 32, 32, 32, 32, 32, 112, 97, 99, 
+107, 32, 46, 98, 98, 46, 115, 102, 114, 97, 109, 101, 46, 101, 32, 45, 115, 105, 100, 101, 
+32, 108, 101, 102, 116, 32, 45, 102, 105, 108, 108, 32, 121, 32, 45, 101, 120, 112, 97, 110, 
+100, 32, 49, 10, 32, 32, 32, 32, 32, 32, 98, 105, 110, 100, 32, 46, 98, 98, 46, 115, 
+102, 114, 97, 109, 101, 46, 101, 32, 60, 82, 101, 116, 117, 114, 110, 62, 32, 123, 115, 101, 
+97, 114, 99, 104, 78, 101, 120, 116, 59, 32, 98, 114, 101, 97, 107, 125, 10, 32, 32, 32, 
+32, 32, 32, 58, 58, 116, 116, 107, 58, 58, 98, 117, 116, 116, 111, 110, 32, 46, 98, 98, 
+46, 115, 102, 114, 97, 109, 101, 46, 110, 120, 32, 45, 116, 101, 120, 116, 32, 92, 117, 50, 
+49, 57, 51, 32, 45, 119, 105, 100, 116, 104, 32, 49, 32, 45, 99, 111, 109, 109, 97, 110, 
+100, 32, 115, 101, 97, 114, 99, 104, 78, 101, 120, 116, 10, 32, 32, 32, 32, 32, 32, 58, 
+58, 116, 116, 107, 58, 58, 98, 117, 116, 116, 111, 110, 32, 46, 98, 98, 46, 115, 102, 114, 
+97, 109, 101, 46, 112, 118, 32, 45, 116, 101, 120, 116, 32, 92, 117, 50, 49, 57, 49, 32, 
+45, 119, 105, 100, 116, 104, 32, 49, 32, 45, 99, 111, 109, 109, 97, 110, 100, 32, 115, 101, 
+97, 114, 99, 104, 80, 114, 101, 118, 10, 32, 32, 32, 32, 32, 32, 116, 107, 95, 111, 112, 
+116, 105, 111, 110, 77, 101, 110, 117, 32, 46, 98, 98, 46, 115, 102, 114, 97, 109, 101, 46, 
+116, 121, 112, 32, 58, 58, 115, 101, 97, 114, 99, 104, 95, 116, 121, 112, 101, 32, 92, 10, 
+32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 69, 120, 97, 99, 116, 32, 123, 78, 111, 
+32, 67, 97, 115, 101, 125, 32, 123, 82, 101, 103, 69, 120, 112, 125, 32, 123, 87, 104, 111, 
+108, 101, 32, 87, 111, 114, 100, 125, 10, 32, 32, 32, 32, 32, 32, 46, 98, 98, 46, 115, 
+102, 114, 97, 109, 101, 46, 116, 121, 112, 32, 99, 111, 110, 102, 105, 103, 32, 45, 119, 105, 
+100, 116, 104, 32, 49, 48, 10, 32, 32, 32, 32, 32, 32, 115, 101, 116, 32, 58, 58, 115, 
+101, 97, 114, 99, 104, 95, 116, 121, 112, 101, 32, 69, 120, 97, 99, 116, 10, 32, 32, 32, 
+32, 32, 32, 112, 97, 99, 107, 32, 46, 98, 98, 46, 115, 102, 114, 97, 109, 101, 46, 110, 
+120, 32, 46, 98, 98, 46, 115, 102, 114, 97, 109, 101, 46, 112, 118, 32, 46, 98, 98, 46, 
+115, 102, 114, 97, 109, 101, 46, 116, 121, 112, 32, 45, 115, 105, 100, 101, 32, 108, 101, 102, 
+116, 10, 32, 32, 32, 32, 125, 10, 32, 32, 32, 32, 112, 97, 99, 107, 32, 46, 98, 98, 
+46, 115, 102, 114, 97, 109, 101, 32, 45, 115, 105, 100, 101, 32, 108, 101, 102, 116, 10, 32, 
+32, 32, 32, 97, 102, 116, 101, 114, 32, 105, 100, 108, 101, 32, 123, 102, 111, 99, 117, 115, 
+32, 46, 98, 98, 46, 115, 102, 114, 97, 109, 101, 46, 101, 125, 10, 32, 32, 125, 10, 125, 
+10, 112, 114, 111, 99, 32, 115, 101, 97, 114, 99, 104, 78, 101, 120, 116, 32, 123, 125, 32, 
+123, 115, 101, 97, 114, 99, 104, 83, 116, 101, 112, 32, 45, 102, 111, 114, 119, 97, 114, 100, 
+115, 32, 43, 49, 32, 49, 46, 48, 32, 101, 110, 100, 125, 10, 112, 114, 111, 99, 32, 115, 
+101, 97, 114, 99, 104, 80, 114, 101, 118, 32, 123, 125, 32, 123, 115, 101, 97, 114, 99, 104, 
+83, 116, 101, 112, 32, 45, 98, 97, 99, 107, 119, 97, 114, 100, 115, 32, 45, 49, 32, 101, 
+110, 100, 32, 49, 46, 48, 125, 10, 112, 114, 111, 99, 32, 115, 101, 97, 114, 99, 104, 83, 
+116, 101, 112, 32, 123, 100, 105, 114, 101, 99, 116, 105, 111, 110, 32, 105, 110, 99, 114, 32, 
+115, 116, 97, 114, 116, 32, 115, 116, 111, 112, 125, 32, 123, 10, 32, 32, 115, 101, 116, 32, 
+112, 97, 116, 116, 101, 114, 110, 32, 91, 46, 98, 98, 46, 115, 102, 114, 97, 109, 101, 46, 
+101, 32, 103, 101, 116, 93, 10, 32, 32, 105, 102, 32, 123, 36, 112, 97, 116, 116, 101, 114, 
+110, 61, 61, 34, 34, 125, 32, 114, 101, 116, 117, 114, 110, 10, 32, 32, 115, 101, 116, 32, 
+99, 111, 117, 110, 116, 32, 48, 10, 32, 32, 115, 101, 116, 32, 119, 32, 36, 58, 58, 115, 
+101, 97, 114, 99, 104, 10, 32, 32, 105, 102, 32, 123, 34, 36, 119, 34, 61, 61, 34, 46, 
+116, 120, 116, 65, 34, 125, 32, 123, 115, 101, 116, 32, 111, 116, 104, 101, 114, 32, 46, 116, 
+120, 116, 66, 125, 32, 123, 115, 101, 116, 32, 111, 116, 104, 101, 114, 32, 46, 116, 120, 116, 
+65, 125, 10, 32, 32, 105, 102, 32, 123, 91, 108, 115, 101, 97, 114, 99, 104, 32, 91, 36, 
+119, 32, 109, 97, 114, 107, 32, 110, 97, 109, 101, 115, 93, 32, 115, 101, 97, 114, 99, 104, 
+93, 60, 48, 125, 32, 123, 10, 32, 32, 32, 32, 36, 119, 32, 109, 97, 114, 107, 32, 115, 
+101, 116, 32, 115, 101, 97, 114, 99, 104, 32, 36, 115, 116, 97, 114, 116, 10, 32, 32, 125, 
+10, 32, 32, 115, 119, 105, 116, 99, 104, 32, 36, 58, 58, 115, 101, 97, 114, 99, 104, 95, 
+116, 121, 112, 101, 32, 123, 10, 32, 32, 32, 32, 69, 120, 97, 99, 116, 32, 32, 32, 32, 
+32, 32, 32, 32, 123, 115, 101, 116, 32, 115, 116, 32, 45, 101, 120, 97, 99, 116, 125, 10, 
+32, 32, 32, 32, 123, 78, 111, 32, 67, 97, 115, 101, 125, 32, 32, 32, 32, 123, 115, 101, 
+116, 32, 115, 116, 32, 45, 110, 111, 99, 97, 115, 101, 125, 10, 32, 32, 32, 32, 123, 82, 
+101, 103, 69, 120, 112, 125, 32, 32, 32, 32, 32, 123, 115, 101, 116, 32, 115, 116, 32, 45, 
+114, 101, 103, 101, 120, 112, 125, 10, 32, 32, 32, 32, 123, 87, 104, 111, 108, 101, 32, 87, 
+111, 114, 100, 125, 32, 123, 115, 101, 116, 32, 115, 116, 32, 45, 114, 101, 103, 101, 120, 112, 
+59, 32, 115, 101, 116, 32, 112, 97, 116, 116, 101, 114, 110, 32, 92, 92, 121, 36, 112, 97, 
+116, 116, 101, 114, 110, 92, 92, 121, 125, 10, 32, 32, 125, 10, 32, 32, 115, 101, 116, 32, 
+105, 100, 120, 32, 91, 36, 119, 32, 115, 101, 97, 114, 99, 104, 32, 45, 99, 111, 117, 110, 
+116, 32, 99, 111, 117, 110, 116, 32, 36, 100, 105, 114, 101, 99, 116, 105, 111, 110, 32, 36, 
+115, 116, 32, 45, 45, 32, 92, 10, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 
+32, 32, 36, 112, 97, 116, 116, 101, 114, 110, 32, 34, 115, 101, 97, 114, 99, 104, 32, 36, 
+105, 110, 99, 114, 32, 99, 104, 97, 114, 115, 34, 32, 36, 115, 116, 111, 112, 93, 10, 32, 
+32, 105, 102, 32, 123, 34, 36, 105, 100, 120, 34, 61, 61, 34, 34, 125, 32, 123, 10, 32, 
+32, 32, 32, 115, 101, 116, 32, 105, 100, 120, 32, 91, 36, 111, 116, 104, 101, 114, 32, 115, 
+101, 97, 114, 99, 104, 32, 45, 99, 111, 117, 110, 116, 32, 99, 111, 117, 110, 116, 32, 36, 
+100, 105, 114, 101, 99, 116, 105, 111, 110, 32, 36, 115, 116, 32, 45, 45, 32, 36, 112, 97, 
+116, 116, 101, 114, 110, 32, 36, 115, 116, 97, 114, 116, 32, 36, 115, 116, 111, 112, 93, 10, 
+32, 32, 32, 32, 105, 102, 32, 123, 34, 36, 105, 100, 120, 34, 33, 61, 34, 34, 125, 32, 
+123, 10, 32, 32, 32, 32, 32, 32, 115, 101, 116, 32, 116, 104, 105, 115, 32, 36, 119, 10, 
+32, 32, 32, 32, 32, 32, 115, 101, 116, 32, 119, 32, 36, 111, 116, 104, 101, 114, 10, 32, 
+32, 32, 32, 32, 32, 115, 101, 116, 32, 111, 116, 104, 101, 114, 32, 36, 116, 104, 105, 115, 
+10, 32, 32, 32, 32, 125, 32, 101, 108, 115, 101, 32, 123, 10, 32, 32, 32, 32, 32, 32, 
+115, 101, 116, 32, 105, 100, 120, 32, 91, 36, 119, 32, 115, 101, 97, 114, 99, 104, 32, 45, 
+99, 111, 117, 110, 116, 32, 99, 111, 117, 110, 116, 32, 36, 100, 105, 114, 101, 99, 116, 105, 
+111, 110, 32, 36, 115, 116, 32, 45, 45, 32, 36, 112, 97, 116, 116, 101, 114, 110, 32, 36, 
+115, 116, 97, 114, 116, 32, 36, 115, 116, 111, 112, 93, 10, 32, 32, 32, 32, 125, 10, 32, 
+32, 125, 10, 32, 32, 36, 119, 32, 116, 97, 103, 32, 114, 101, 109, 111, 118, 101, 32, 115, 
+101, 97, 114, 99, 104, 32, 49, 46, 48, 32, 101, 110, 100, 10, 32, 32, 36, 119, 32, 109, 
+97, 114, 107, 32, 117, 110, 115, 101, 116, 32, 115, 101, 97, 114, 99, 104, 10, 32, 32, 36, 
+111, 116, 104, 101, 114, 32, 116, 97, 103, 32, 114, 101, 109, 111, 118, 101, 32, 115, 101, 97, 
+114, 99, 104, 32, 49, 46, 48, 32, 101, 110, 100, 10, 32, 32, 36, 111, 116, 104, 101, 114, 
+32, 109, 97, 114, 107, 32, 117, 110, 115, 101, 116, 32, 115, 101, 97, 114, 99, 104, 10, 32, 
+32, 105, 102, 32, 123, 34, 36, 105, 100, 120, 34, 33, 61, 34, 34, 125, 32, 123, 10, 32, 
+32, 32, 32, 36, 119, 32, 109, 97, 114, 107, 32, 115, 101, 116, 32, 115, 101, 97, 114, 99, 
+104, 32, 36, 105, 100, 120, 10, 32, 32, 32, 32, 36, 119, 32, 121, 118, 105, 101, 119, 32, 
+45, 112, 105, 99, 107, 112, 108, 97, 99, 101, 32, 36, 105, 100, 120, 10, 32, 32, 32, 32, 
+36, 119, 32, 116, 97, 103, 32, 97, 100, 100, 32, 115, 101, 97, 114, 99, 104, 32, 115, 101, 
+97, 114, 99, 104, 32, 34, 36, 105, 100, 120, 32, 43, 36, 99, 111, 117, 110, 116, 32, 99, 
+104, 97, 114, 115, 34, 10, 32, 32, 32, 32, 36, 119, 32, 116, 97, 103, 32, 99, 111, 110, 
+102, 105, 103, 32, 115, 101, 97, 114, 99, 104, 32, 45, 98, 97, 99, 107, 103, 114, 111, 117, 
+110, 100, 32, 123, 35, 102, 99, 99, 48, 48, 48, 125, 10, 32, 32, 125, 10, 32, 32, 115, 
+101, 116, 32, 58, 58, 115, 101, 97, 114, 99, 104, 32, 36, 119, 10, 125, 10, 58, 58, 116, 
+116, 107, 58, 58, 98, 117, 116, 116, 111, 110, 32, 46, 98, 98, 46, 113, 117, 105, 116, 32, 
+45, 116, 101, 120, 116, 32, 123, 81, 117, 105, 116, 125, 32, 45, 99, 111, 109, 109, 97, 110, 
+100, 32, 101, 120, 105, 116, 10, 58, 58, 116, 116, 107, 58, 58, 98, 117, 116, 116, 111, 110, 
+32, 46, 98, 98, 46, 105, 110, 118, 101, 114, 116, 32, 45, 116, 101, 120, 116, 32, 123, 73, 
+110, 118, 101, 114, 116, 125, 32, 45, 99, 111, 109, 109, 97, 110, 100, 32, 105, 110, 118, 101, 
+114, 116, 68, 105, 102, 102, 10, 58, 58, 116, 116, 107, 58, 58, 98, 117, 116, 116, 111, 110, 
+32, 46, 98, 98, 46, 115, 97, 118, 101, 32, 45, 116, 101, 120, 116, 32, 123, 83, 97, 118, 
+101, 32, 65, 115, 46, 46, 46, 125, 32, 45, 99, 111, 109, 109, 97, 110, 100, 32, 115, 97, 
+118, 101, 68, 105, 102, 102, 10, 58, 58, 116, 116, 107, 58, 58, 98, 117, 116, 116, 111, 110, 
+32, 46, 98, 98, 46, 115, 101, 97, 114, 99, 104, 32, 45, 116, 101, 120, 116, 32, 123, 83, 
+101, 97, 114, 99, 104, 125, 32, 45, 99, 111, 109, 109, 97, 110, 100, 32, 115, 101, 97, 114, 
+99, 104, 79, 110, 79, 102, 102, 10, 112, 97, 99, 107, 32, 46, 98, 98, 46, 113, 117, 105, 
+116, 32, 46, 98, 98, 46, 105, 110, 118, 101, 114, 116, 32, 45, 115, 105, 100, 101, 32, 108, 
+101, 102, 116, 10, 105, 102, 32, 123, 36, 102, 111, 115, 115, 105, 108, 99, 109, 100, 33, 61, 
+34, 34, 125, 32, 123, 112, 97, 99, 107, 32, 46, 98, 98, 46, 115, 97, 118, 101, 32, 45, 
+115, 105, 100, 101, 32, 108, 101, 102, 116, 125, 10, 112, 97, 99, 107, 32, 46, 98, 98, 46, 
+102, 105, 108, 101, 115, 32, 46, 98, 98, 46, 115, 101, 97, 114, 99, 104, 32, 45, 115, 105, 
+100, 101, 32, 108, 101, 102, 116, 10, 103, 114, 105, 100, 32, 114, 111, 119, 99, 111, 110, 102, 
+105, 103, 117, 114, 101, 32, 46, 32, 49, 32, 45, 119, 101, 105, 103, 104, 116, 32, 49, 10, 
+103, 114, 105, 100, 32, 99, 111, 108, 117, 109, 110, 99, 111, 110, 102, 105, 103, 117, 114, 101, 
+32, 46, 32, 49, 32, 45, 119, 101, 105, 103, 104, 116, 32, 49, 10, 103, 114, 105, 100, 32, 
+99, 111, 108, 117, 109, 110, 99, 111, 110, 102, 105, 103, 117, 114, 101, 32, 46, 32, 52, 32, 
+45, 119, 101, 105, 103, 104, 116, 32, 49, 10, 103, 114, 105, 100, 32, 46, 98, 98, 32, 45, 
+114, 111, 119, 32, 48, 32, 45, 99, 111, 108, 117, 109, 110, 115, 112, 97, 110, 32, 54, 10, 
+101, 118, 97, 108, 32, 103, 114, 105, 100, 32, 91, 99, 111, 108, 115, 93, 32, 45, 114, 111, 
+119, 32, 49, 32, 45, 115, 116, 105, 99, 107, 121, 32, 110, 115, 101, 119, 10, 103, 114, 105, 
+100, 32, 46, 115, 98, 121, 32, 45, 114, 111, 119, 32, 49, 32, 45, 99, 111, 108, 117, 109, 
+110, 32, 53, 32, 45, 115, 116, 105, 99, 107, 121, 32, 110, 115, 10, 103, 114, 105, 100, 32, 
+46, 115, 98, 120, 65, 32, 45, 114, 111, 119, 32, 50, 32, 45, 99, 111, 108, 117, 109, 110, 
+115, 112, 97, 110, 32, 50, 32, 45, 115, 116, 105, 99, 107, 121, 32, 101, 119, 10, 103, 114, 
+105, 100, 32, 46, 115, 112, 97, 99, 101, 114, 32, 45, 114, 111, 119, 32, 50, 32, 45, 99, 
+111, 108, 117, 109, 110, 32, 50, 10, 103, 114, 105, 100, 32, 46, 115, 98, 120, 66, 32, 45, 
+114, 111, 119, 32, 50, 32, 45, 99, 111, 108, 117, 109, 110, 32, 51, 32, 45, 99, 111, 108, 
+117, 109, 110, 115, 112, 97, 110, 32, 50, 32, 45, 115, 116, 105, 99, 107, 121, 32, 101, 119, 
+10, 10, 46, 115, 112, 97, 99, 101, 114, 32, 99, 111, 110, 102, 105, 103, 32, 45, 104, 101, 
+105, 103, 104, 116, 32, 91, 119, 105, 110, 102, 111, 32, 104, 101, 105, 103, 104, 116, 32, 46, 
+115, 98, 120, 65, 93, 10, 119, 109, 32, 100, 101, 105, 99, 111, 110, 105, 102, 121, 32, 46, 
+10, 125, 10, 101, 118, 97, 108, 32, 36, 112, 114, 111, 103, 10, 
+0};
+char const * fsl_difftk_cstr = fsl_difftk_cstr_a;
+/* end of ./src/difftk.tcl */
+/* end of file ./src/difftk_cstr.c */
+/* start of file ./src/schema_config_cstr.c */
+/** @page page_schema_config_cstr config.sql
+
+Binary form of file ./sql/config.sql.
+
 */
 /* auto-generated code - edit at your own risk! (Good luck with that!) */
 static char const fsl_schema_config_cstr_a[] = {
@@ -43066,144 +43826,10 @@ char const * fsl_schema_config_cstr = fsl_schema_config_cstr_a;
 /* end of ./sql/config.sql */
 /* end of file ./src/schema_config_cstr.c */
 /* start of file ./src/schema_repo1_cstr.c */
-/* Binary form of file ./sql/repo-static.sql */
-/** @page page_schema_repo1_cstr Schema: repo-static.sql
-@code
--- This file contains parts of the schema that are fixed and
--- unchanging across Fossil versions.
+/** @page page_schema_repo1_cstr repo-static.sql
 
+Binary form of file ./sql/repo-static.sql.
 
--- The BLOB and DELTA tables contain all records held in the repository.
---
--- The BLOB.CONTENT column is always compressed using zlib.  This
--- column might hold the full text of the record or it might hold
--- a delta that is able to reconstruct the record from some other
--- record.  If BLOB.CONTENT holds a delta, then a DELTA table entry
--- will exist for the record and that entry will point to another
--- entry that holds the source of the delta.  Deltas can be chained.
---
--- The blob and delta tables collectively hold the "global state" of
--- a Fossil repository.  
---
-CREATE TABLE repo.blob(
-  rid INTEGER PRIMARY KEY,        -- Record ID
-  rcvid INTEGER,                  -- Origin of this record
-  size INTEGER,                   -- Size of content. -1 for a phantom.
-  uuid TEXT UNIQUE NOT NULL,      -- SHA1 hash of the content
-  content BLOB,                   -- Compressed content of this record
-  CHECK( length(uuid)>=40 AND rid>0 )
-);
-CREATE TABLE repo.delta(
-  rid INTEGER PRIMARY KEY,                 -- Record ID
-  srcid INTEGER NOT NULL REFERENCES blob   -- Record holding source document
-);
-CREATE INDEX repo.delta_i1 ON delta(srcid);
-
--------------------------------------------------------------------------
--- The BLOB and DELTA tables above hold the "global state" of a Fossil
--- project; the stuff that is normally exchanged during "sync".  The
--- "local state" of a repository is contained in the remaining tables of
--- the zRepositorySchema1 string.  
--------------------------------------------------------------------------
-
--- Whenever new blobs are received into the repository, an entry
--- in this table records the source of the blob.
---
-CREATE TABLE repo.rcvfrom(
-  rcvid INTEGER PRIMARY KEY,      -- Received-From ID
-  uid INTEGER REFERENCES user,    -- User login
-  mtime DATETIME,                 -- Time of receipt.  Julian day.
-  nonce TEXT UNIQUE,              -- Nonce used for login
-  ipaddr TEXT                     -- Remote IP address.  NULL for direct.
-);
-INSERT INTO repo.rcvfrom(rcvid,uid,mtime,nonce,ipaddr)
-VALUES (1, 1, julianday('now'), NULL, NULL);
-
--- Information about users
---
--- The user.pw field can be either cleartext of the password, or
--- a SHA1 hash of the password.  If the user.pw field is exactly 40
--- characters long we assume it is a SHA1 hash.  Otherwise, it is
--- cleartext.  The sha1_shared_secret() routine computes the password
--- hash based on the project-code, the user login, and the cleartext
--- password.
---
-CREATE TABLE repo.user(
-  uid INTEGER PRIMARY KEY,        -- User ID
-  login TEXT UNIQUE,              -- login name of the user
-  pw TEXT,                        -- password
-  cap TEXT,                       -- Capabilities of this user
-  cookie TEXT,                    -- WWW login cookie
-  ipaddr TEXT,                    -- IP address for which cookie is valid
-  cexpire DATETIME,               -- Time when cookie expires
-  info TEXT,                      -- contact information
-  mtime DATE,                     -- last change.  seconds since 1970
-  photo BLOB                      -- JPEG image of this user
-);
-
--- The VAR table holds miscellanous information about the repository.
--- in the form of name-value pairs.
---
-CREATE TABLE repo.config(
-  name TEXT PRIMARY KEY NOT NULL,  -- Primary name of the entry
-  value CLOB,                      -- Content of the named parameter
-  mtime DATE,                      -- last modified.  seconds since 1970
-  CHECK( typeof(name)='text' AND length(name)>=1 )
-);
-
--- Artifacts that should not be processed are identified in the
--- "shun" table.  Artifacts that are control-file forgeries or
--- spam or artifacts whose contents violate administrative policy
--- can be shunned in order to prevent them from contaminating
--- the repository.
---
--- Shunned artifacts do not exist in the blob table.  Hence they
--- have not artifact ID (rid) and we thus must store their full
--- UUID.
---
-CREATE TABLE repo.shun(
-  uuid UNIQUE,          -- UUID of artifact to be shunned. Canonical form
-  mtime DATE,           -- When added.  seconds since 1970
-  scom TEXT             -- Optional text explaining why the shun occurred
-);
-
--- Artifacts that should not be pushed are stored in the "private"
--- table.  Private artifacts are omitted from the "unclustered" and
--- "unsent" tables.
---
-CREATE TABLE repo.private(rid INTEGER PRIMARY KEY);
-
--- An entry in this table describes a database query that generates a
--- table of tickets.
---
-CREATE TABLE repo.reportfmt(
-   rn INTEGER PRIMARY KEY,  -- Report number
-   owner TEXT,              -- Owner of this report format (not used)
-   title TEXT UNIQUE,       -- Title of this report
-   mtime DATE,              -- Last modified.  seconds since 1970
-   cols TEXT,               -- A color-key specification
-   sqlcode TEXT             -- An SQL SELECT statement for this report
-);
-
--- Some ticket content (such as the originators email address or contact
--- information) needs to be obscured to protect privacy.  This is achieved
--- by storing an SHA1 hash of the content.  For display, the hash is
--- mapped back into the original text using this table.  
---
--- This table contains sensitive information and should not be shared
--- with unauthorized users.
---
-CREATE TABLE repo.concealed(
-  hash TEXT PRIMARY KEY,    -- The SHA1 hash of content
-  mtime DATE,               -- Time created.  Seconds since 1970
-  content TEXT              -- Content intended to be concealed
-);
-
--- The application ID helps the unix "file" command to identify the
--- database as a fossil repository.
-PRAGMA repo.application_id=252006673;
- @endcode
- @see schema_repo1()
 */
 /* auto-generated code - edit at your own risk! (Good luck with that!) */
 static char const fsl_schema_repo1_cstr_a[] = {
@@ -43497,225 +44123,10 @@ char const * fsl_schema_repo1_cstr = fsl_schema_repo1_cstr_a;
 /* end of ./sql/repo-static.sql */
 /* end of file ./src/schema_repo1_cstr.c */
 /* start of file ./src/schema_repo2_cstr.c */
-/* Binary form of file ./sql/repo-transient.sql */
-/** @page page_schema_repo2_cstr Schema: repo-transient.sql
-@code
--- This file contains parts of the schema that can change from one
--- version to the next. The data stored in these tables is
--- reconstructed from the information in the main repo schema by the
--- "rebuild" operation.
+/** @page page_schema_repo2_cstr repo-transient.sql
 
--- Filenames
---
-CREATE TABLE repo.filename(
-  fnid INTEGER PRIMARY KEY,    -- Filename ID
-  name TEXT UNIQUE             -- Name of file page
-);
+Binary form of file ./sql/repo-transient.sql.
 
--- Linkages between check-ins, files created by each check-in, and
--- the names of those files.
---
--- Each entry represents a file that changed content from pid to fid
--- due to the check-in that goes from pmid to mid.  fnid is the name
--- of the file in the mid check-in.  If the file was renamed as part
--- of the mid check-in, then pfnid is the previous filename.
---
--- There can be multiple entries for (mid,fid) if the mid check-in was
--- a merge.  Entries with isaux==0 are from the primary parent.  Merge
--- parents have isaux set to true.
---
--- Field name mnemonics:
---    mid = Manifest ID.  (Each check-in is stored as a "Manifest")
---    fid = File ID.
---    pmid = Parent Manifest ID.
---    pid = Parent file ID.
---    fnid = File Name ID.
---    pfnid = Parent File Name ID.
---    isaux = pmid IS AUXiliary parent, not primary parent
---
--- pid==0    if the file is added by check-in mid.
--- pid==(-1) if the file exists in a merge parents but not in the primary
---           parent.  In other words, if the file file was added by merge.
---           (TODO: confirm if/where this is used in fossil and then make sure
---           libfossil does so, too.)
--- fid==0    if the file is removed by check-in mid.
---
-CREATE TABLE repo.mlink(
-  mid INTEGER,        -- Check-in that contains fid
-  fid INTEGER,        -- New file content RID. 0 if deleted
-  pmid INTEGER,       -- Check-in RID that contains pid
-  pid INTEGER,        -- Prev file content RID. 0 if new. -1 if from a merge
-  fnid INTEGER REFERENCES filename,   -- Name of the file
-  pfnid INTEGER,      -- Previous name. 0 if unchanged
-  mperm INTEGER,                      -- File permissions.  1==exec
-  isaux BOOLEAN DEFAULT 0             -- TRUE if pmid is the primary
-);
-CREATE INDEX repo.mlink_i1 ON mlink(mid);
-CREATE INDEX repo.mlink_i2 ON mlink(fnid);
-CREATE INDEX repo.mlink_i3 ON mlink(fid);
-CREATE INDEX repo.mlink_i4 ON mlink(pid);
-
--- Parent/child linkages between checkins
---
-CREATE TABLE repo.plink(
-  pid INTEGER REFERENCES blob,    -- Parent manifest
-  cid INTEGER REFERENCES blob,    -- Child manifest
-  isprim BOOLEAN,                 -- pid is the primary parent of cid
-  mtime DATETIME,                 -- the date/time stamp on cid.  Julian day.
-  baseid INTEGER REFERENCES blob, -- Baseline if cid is a delta manifest.
-  UNIQUE(pid, cid)
-);
-CREATE INDEX repo.plink_i2 ON plink(cid,pid);
-
--- A "leaf" checkin is a checkin that has no children in the same
--- branch.  The set of all leaves is easily computed with a join,
--- between the plink and tagxref tables, but it is a slower join for
--- very large repositories (repositories with 100,000 or more checkins)
--- and so it makes sense to precompute the set of leaves.  There is
--- one entry in the following table for each leaf.
---
-CREATE TABLE repo.leaf(rid INTEGER PRIMARY KEY);
-
--- Events used to generate a timeline
---
-CREATE TABLE repo.event(
-  type TEXT,                      -- Type of event: 'ci', 'w', 'e', 't', 'g'
-  mtime DATETIME,                 -- Time of occurrence. Julian day.
-  objid INTEGER PRIMARY KEY,      -- Associated record ID
-  tagid INTEGER,                  -- Associated ticket or wiki name tag
-  uid INTEGER REFERENCES user,    -- User who caused the event
-  bgcolor TEXT,                   -- Color set by 'bgcolor' property
-  euser TEXT,                     -- User set by 'user' property
-  user TEXT,                      -- Name of the user
-  ecomment TEXT,                  -- Comment set by 'comment' property
-  comment TEXT,                   -- Comment describing the event
-  brief TEXT,                     -- Short comment when tagid already seen
-  omtime DATETIME                 -- Original unchanged date+time, or NULL
-);
-CREATE INDEX repo.event_i1 ON event(mtime);
-
--- A record of phantoms.  A phantom is a record for which we know the
--- UUID but we do not (yet) know the file content.
---
-CREATE TABLE repo.phantom(
-  rid INTEGER PRIMARY KEY         -- Record ID of the phantom
-);
-
--- A record of orphaned delta-manifests.  An orphan is a delta-manifest
--- for which we have content, but its baseline-manifest is a phantom.
--- We have to track all orphan manifests so that when the baseline arrives,
--- we know to process the orphaned deltas.
-CREATE TABLE repo.orphan(
-  rid INTEGER PRIMARY KEY,        -- Delta manifest with a phantom baseline
-  baseline INTEGER                -- Phantom baseline of this orphan
-);
-CREATE INDEX repo.orphan_baseline ON orphan(baseline);
-
--- Unclustered records.  An unclustered record is a record (including
--- a cluster records themselves) that is not mentioned by some other
--- cluster.
---
--- Phantoms are usually included in the unclustered table.  A new cluster
--- will never be created that contains a phantom.  But another repository
--- might send us a cluster that contains entries that are phantoms to
--- us.
---
-CREATE TABLE repo.unclustered(
-  rid INTEGER PRIMARY KEY         -- Record ID of the unclustered file
-);
-
--- Records which have never been pushed to another server.  This is
--- used to reduce push operations to a single HTTP request in the
--- common case when one repository only talks to a single server.
---
-CREATE TABLE repo.unsent(
-  rid INTEGER PRIMARY KEY         -- Record ID of the phantom
-);
-
--- Each baseline or manifest can have one or more tags.  A tag
--- is defined by a row in the next table.
--- 
--- Wiki pages are tagged with "wiki-NAME" where NAME is the name of
--- the wiki page.  Tickets changes are tagged with "ticket-UUID" where 
--- UUID is the indentifier of the ticket.  Tags used to assign symbolic
--- names to baselines are branches are of the form "sym-NAME" where
--- NAME is the symbolic name.
---
-CREATE TABLE repo.tag(
-  tagid INTEGER PRIMARY KEY,       -- Numeric tag ID
-  tagname TEXT UNIQUE              -- Tag name.
-);
-INSERT INTO repo.tag VALUES(1, 'bgcolor');         -- FSL_TAGID_BGCOLOR
-INSERT INTO repo.tag VALUES(2, 'comment');         -- FSL_TAGID_COMMENT
-INSERT INTO repo.tag VALUES(3, 'user');            -- FSL_TAGID_USER
-INSERT INTO repo.tag VALUES(4, 'date');            -- FSL_TAGID_DATE
-INSERT INTO repo.tag VALUES(5, 'hidden');          -- FSL_TAGID_HIDDEN
-INSERT INTO repo.tag VALUES(6, 'private');         -- FSL_TAGID_PRIVATE
-INSERT INTO repo.tag VALUES(7, 'cluster');         -- FSL_TAGID_CLUSTER
-INSERT INTO repo.tag VALUES(8, 'branch');          -- FSL_TAGID_BRANCH
-INSERT INTO repo.tag VALUES(9, 'closed');          -- FSL_TAGID_CLOSED
-INSERT INTO repo.tag VALUES(10,'parent');          -- FSL_TAGID_PARENT
-INSERT INTO repo.tag VALUES(11,'note');            -- FSL_TAG_NOTE
--- arguable, to force auto-increment to start at 100:
--- INSERT INTO tag VALUES(99,'FSL_TAGID_MAX_INTERNAL');
-
--- Assignments of tags to baselines.  Note that we allow tags to
--- have values assigned to them.  So we are not really dealing with
--- tags here.  These are really properties.  But we are going to
--- keep calling them tags because in many cases the value is ignored.
---
-CREATE TABLE repo.tagxref(
-  tagid INTEGER REFERENCES tag,   -- The tag that was added or removed
-  tagtype INTEGER,                -- 0:-,cancel  1:+,single  2:*,propagate
-  srcid INTEGER REFERENCES blob,  -- Artifact of tag. 0 for propagated tags
-  origid INTEGER REFERENCES blob, -- check-in holding propagated tag
-  value TEXT,                     -- Value of the tag.  Might be NULL.
-  mtime TIMESTAMP,                -- Time of addition or removal. Julian day
-  rid INTEGER REFERENCE blob,     -- Artifact tag is applied to
-  UNIQUE(rid, tagid)
-);
-CREATE INDEX repo.tagxref_i1 ON tagxref(tagid, mtime);
-
--- When a hyperlink occurs from one artifact to another (for example
--- when a check-in comment refers to a ticket) an entry is made in
--- the following table for that hyperlink.  This table is used to
--- facilitate the display of "back links".
---
-CREATE TABLE repo.backlink(
-  target TEXT,           -- Where the hyperlink points to
-  srctype INT,           -- 0: check-in  1: ticket  2: wiki
-  srcid INT,             -- rid for checkin or wiki.  tkt_id for ticket.
-  mtime TIMESTAMP,       -- time that the hyperlink was added. Julian day.
-  UNIQUE(target, srctype, srcid)
-);
-CREATE INDEX repo.backlink_src ON backlink(srcid, srctype);
-
--- Each attachment is an entry in the following table.  Only
--- the most recent attachment (identified by the D card) is saved.
---
-CREATE TABLE repo.attachment(
-  attachid INTEGER PRIMARY KEY,   -- Local id for this attachment
-  isLatest BOOLEAN DEFAULT 0,     -- True if this is the one to use
-  mtime TIMESTAMP,                -- Last changed.  Julian day.
-  src TEXT,                       -- UUID of the attachment.  NULL to delete
-  target TEXT,                    -- Object attached to. Wikiname or Tkt UUID
-  filename TEXT,                  -- Filename for the attachment
-  comment TEXT,                   -- Comment associated with this attachment
-  user TEXT                       -- Name of user adding attachment
-);
-CREATE INDEX repo.attachment_idx1 ON attachment(target, filename, mtime);
-CREATE INDEX repo.attachment_idx2 ON attachment(src);
-
--- For tracking cherrypick merges
-CREATE TABLE repo.cherrypick(
-  parentid INT,
-  childid INT,
-  isExclude BOOLEAN DEFAULT false,
-  PRIMARY KEY(parentid, childid)
-) WITHOUT ROWID;
-CREATE INDEX repo.cherrypick_cid ON cherrypick(childid);
- @endcode
- @see schema_repo2()
 */
 /* auto-generated code - edit at your own risk! (Good luck with that!) */
 static char const fsl_schema_repo2_cstr_a[] = {
@@ -44208,87 +44619,10 @@ char const * fsl_schema_repo2_cstr = fsl_schema_repo2_cstr_a;
 /* end of ./sql/repo-transient.sql */
 /* end of file ./src/schema_repo2_cstr.c */
 /* start of file ./src/schema_ckout_cstr.c */
-/* Binary form of file ./sql/checkout.sql */
-/** @page page_schema_ckout_cstr Schema: checkout.sql
-@code
--- The VVAR table holds miscellanous information about the local database
--- in the form of name-value pairs.  This is similar to the VAR table
--- table in the repository except that this table holds information that
--- is specific to the local checkout.
---
--- Important Variables:
---
---     repository        Full pathname of the repository database
---     user-id           Userid to use
---
-CREATE TABLE ckout.vvar(
-  name TEXT PRIMARY KEY NOT NULL,  -- Primary name of the entry
-  value CLOB,                      -- Content of the named parameter
-  CHECK( typeof(name)='text' AND length(name)>=1 )
-);
+/** @page page_schema_ckout_cstr checkout.sql
 
--- Each entry in the vfile table represents a single file in the
--- current checkout.
---
--- The file.rid field is 0 for files or folders that have been
--- added but not yet committed.
---
--- Vfile.chnged is 0 for unmodified files, 1 for files that have
--- been edited or which have been subjected to a 3-way merge.
--- Vfile.chnged is 2 if the file has been replaced from a different
--- version by the merge and 3 if the file has been added by a merge.
--- Vfile.chnged is 4|5 is the same as 2|3, but the operation has been
--- done by an --integrate merge.  The difference between vfile.chnged==2|4
--- and a regular add is that with vfile.chnged==2|4 we know that the
--- current version of the file is already in the repository.
---
-CREATE TABLE ckout.vfile(
-  id INTEGER PRIMARY KEY,           -- ID of the checked out file
-  vid INTEGER REFERENCES blob,      -- The baseline this file is part of.
-  chnged INT DEFAULT 0,             -- 0:unchnged 1:edited 2:m-chng 3:m-add 4:i-chng 5:i-add
-  deleted BOOLEAN DEFAULT 0,        -- True if deleted
-  isexe BOOLEAN,                    -- True if file should be executable
-  islink BOOLEAN,                   -- True if file should be symlink
-  rid INTEGER,                      -- Originally from this repository record
-  mrid INTEGER,                     -- Based on this record due to a merge
-  mtime INTEGER,                    -- Mtime of file on disk. sec since 1970
-  pathname TEXT,                    -- Full pathname relative to root
-  origname TEXT,                    -- Original pathname. NULL if unchanged
-  mhash TEXT,                       -- Hash of mrid iff mrid!=rid. Added 2019-01-19.
-  UNIQUE(pathname,vid)
-);
+Binary form of file ./sql/checkout.sql.
 
--- This table holds a record of uncommitted merges in the local
--- file tree.  If a VFILE entry with id has merged with another
--- record, there is an entry in this table with (id,merge) where
--- merge is the RECORD table entry that the file merged against.
--- An id of 0 or <-3 here means the version record itself.  When
--- id==(-1) that is a cherrypick merge, id==(-2) that is a
--- backout merge and id==(-4) is a integrate merge.
-
-CREATE TABLE ckout.vmerge(
-  id INTEGER REFERENCES vfile,      -- VFILE entry that has been merged
-  merge INTEGER,                    -- Merged with this record
-  mhash TEXT                        -- SHA1/SHA3 hash for merge object
-);
-CREATE UNIQUE INDEX ckout.vmergex1 ON vmerge(id,mhash);
-
--- The following trigger will prevent older versions of Fossil that
--- do not know about the new vmerge.mhash column from updating the
--- vmerge table.  This must be done with a trigger, since legacy Fossil
--- uses INSERT OR IGNORE to update vmerge, and the OR IGNORE will cause
--- a NOT NULL constraint to be silently ignored.
-CREATE TRIGGER ckout.vmerge_ck1 AFTER INSERT ON vmerge
-WHEN new.mhash IS NULL BEGIN
-  SELECT raise(FAIL,
-  'trying to update a newer checkout with an older version of Fossil');
-END;
-
--- Identifier for this file type.
--- The integer is the same as 'FSLC'.
-PRAGMA ckout.application_id=252006674;
- @endcode
- @see schema_ckout()
 */
 /* auto-generated code - edit at your own risk! (Good luck with that!) */
 static char const fsl_schema_ckout_cstr_a[] = {
@@ -44479,42 +44813,10 @@ char const * fsl_schema_ckout_cstr = fsl_schema_ckout_cstr_a;
 /* end of ./sql/checkout.sql */
 /* end of file ./src/schema_ckout_cstr.c */
 /* start of file ./src/schema_ticket_cstr.c */
-/* Binary form of file ./sql/ticket.sql */
-/** @page page_schema_ticket_cstr Schema: ticket.sql
-@code
--- Template for the TICKET table
-CREATE TABLE repo.ticket(
-  -- Do not change any column that begins with tkt_
-  tkt_id INTEGER PRIMARY KEY,
-  tkt_uuid TEXT UNIQUE,
-  tkt_mtime DATE,
-  tkt_ctime DATE,
-  -- Add as many field as required below this line
-  type TEXT,
-  status TEXT,
-  subsystem TEXT,
-  priority TEXT,
-  severity TEXT,
-  foundin TEXT,
-  private_contact TEXT,
-  resolution TEXT,
-  title TEXT,
-  comment TEXT
-);
-CREATE TABLE repo.ticketchng(
-  -- Do not change any column that begins with tkt_
-  tkt_id INTEGER REFERENCES ticket,
-  tkt_rid INTEGER REFERENCES blob,
-  tkt_mtime DATE,
-  -- Add as many fields as required below this line
-  login TEXT,
-  username TEXT,
-  mimetype TEXT,
-  icomment TEXT
-);
-CREATE INDEX repo.ticketchng_idx1 ON ticketchng(tkt_id, tkt_mtime);
- @endcode
- @see schema_ticket()
+/** @page page_schema_ticket_cstr ticket.sql
+
+Binary form of file ./sql/ticket.sql.
+
 */
 /* auto-generated code - edit at your own risk! (Good luck with that!) */
 static char const fsl_schema_ticket_cstr_a[] = {
@@ -44563,32 +44865,10 @@ char const * fsl_schema_ticket_cstr = fsl_schema_ticket_cstr_a;
 /* end of ./sql/ticket.sql */
 /* end of file ./src/schema_ticket_cstr.c */
 /* start of file ./src/schema_ticket_reports_cstr.c */
-/* Binary form of file ./sql/ticket-reports.sql */
-/** @page page_schema_ticket_reports_cstr Schema: ticket-reports.sql
-@code
-INSERT INTO reportfmt(title,mtime,cols,sqlcode) 
-VALUES('All Tickets',julianday('1970-01-01'),'#ffffff Key:
-#f2dcdc Active
-#e8e8e8 Review
-#cfe8bd Fixed
-#bde5d6 Tested
-#cacae5 Deferred
-#c8c8c8 Closed','SELECT
-  CASE WHEN status IN (''Open'',''Verified'') THEN ''#f2dcdc''
-       WHEN status=''Review'' THEN ''#e8e8e8''
-       WHEN status=''Fixed'' THEN ''#cfe8bd''
-       WHEN status=''Tested'' THEN ''#bde5d6''
-       WHEN status=''Deferred'' THEN ''#cacae5''
-       ELSE ''#c8c8c8'' END AS ''bgcolor'',
-  substr(tkt_uuid,1,10) AS ''#'',
-  datetime(tkt_mtime) AS ''mtime'',
-  type,
-  status,
-  subsystem,
-  title
-FROM ticket');
- @endcode
- @see schema_ticket_reports()
+/** @page page_schema_ticket_reports_cstr ticket-reports.sql
+
+Binary form of file ./sql/ticket-reports.sql.
+
 */
 /* auto-generated code - edit at your own risk! (Good luck with that!) */
 static char const fsl_schema_ticket_reports_cstr_a[] = {
@@ -44629,19 +44909,10 @@ char const * fsl_schema_ticket_reports_cstr = fsl_schema_ticket_reports_cstr_a;
 /* end of ./sql/ticket-reports.sql */
 /* end of file ./src/schema_ticket_reports_cstr.c */
 /* start of file ./src/schema_forum_cstr.c */
-/* Binary form of file ./sql/forum.sql */
-/** @page page_schema_forum_cstr Schema: forum.sql
-@code
-CREATE TABLE repo.forumpost(
-  fpid INTEGER PRIMARY KEY,  -- BLOB.rid for the artifact
-  froot INT,                 -- fpid of the thread root
-  fprev INT,                 -- Previous version of this same post
-  firt INT,                  -- This post is in-reply-to
-  fmtime REAL                -- When posted.  Julian day
-);
-CREATE INDEX repo.forumthread ON forumpost(froot,fmtime);
- @endcode
- @see schema_forum()
+/** @page page_schema_forum_cstr forum.sql
+
+Binary form of file ./sql/forum.sql.
+
 */
 /* auto-generated code - edit at your own risk! (Good luck with that!) */
 static char const fsl_schema_forum_cstr_a[] = {
