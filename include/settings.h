@@ -74,11 +74,17 @@
 	_(pfx, DIFF_PLUS),					\
 	_(pfx, DIFF_CHUNK),					\
 
+#define VIEW_MODE_ENUM(pfx, _)					\
+	_(pfx, NONE),						\
+	_(pfx, VERT),						\
+	_(pfx, HRZN)
+
 #define ENUM_INFO(_)						\
 	_(fnc_opt_id, FNC, USER_OPTIONS)			\
 	_(line_attr, SLINE, LINE_ATTR_ENUM)			\
 	_(input_type, INPUT, INPUT_TYPE_ENUM)			\
-	_(line_type, LINE, LINE_TYPE_ENUM)
+	_(line_type, LINE, LINE_TYPE_ENUM)			\
+	_(view_mode, VIEW_SPLIT, VIEW_MODE_ENUM)
 
 #define GEN_ENUMS(name, pfx, info) GEN_ENUM(name, pfx, info)
 ENUM_INFO(GEN_ENUMS)
