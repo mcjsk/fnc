@@ -671,12 +671,20 @@ struct fnc_pathlist_entry {
 };
 TAILQ_HEAD(fnc_pathlist_head, fnc_pathlist_entry);
 
+struct index {
+	size_t		*lineno;
+	off_t		*offset;
+	uint32_t	 n;
+	uint32_t	 idx;
+};
+
 struct fnc_diff_view_state {
 	struct fnc_view			*timeline_view;
 	struct fnc_commit_artifact	*selected_commit;
 	struct fnc_pathlist_head	*paths;
 	fsl_buffer			 buf;
 	struct fnc_colours		 colours;
+	struct index			 index;
 	FILE				*f;
 	fsl_uuid_str			 id1;
 	fsl_uuid_str			 id2;
@@ -957,26 +965,23 @@ static int		 write_commit_meta(struct fnc_diff_view_state *);
 static int		 wrapline(char *, fsl_size_t ncols_avail,
 			    struct fnc_diff_view_state *, off_t *);
 static int		 add_line_offset(off_t **, size_t *, off_t);
-static int		 diff_commit(fsl_buffer *, struct fnc_commit_artifact *,
-			    int, int, int, struct fnc_pathlist_head *);
-static int		 diff_checkout(fsl_buffer *, fsl_id_t, int, int, int,
-			    struct fnc_pathlist_head *);
+static int		 diff_commit(struct fnc_diff_view_state *);
+static int		 diff_checkout(struct fnc_diff_view_state *);
 static int		 write_diff_meta(fsl_buffer *, const char *,
 			    fsl_uuid_str, const char *, fsl_uuid_str, int,
 			    enum fsl_ckout_change_e);
-static int		 diff_file(fsl_buffer *, fsl_buffer *, const char *,
-			    fsl_uuid_str, const char *, enum fsl_ckout_change_e,
-			    int, int, bool);
+static int		 diff_file(struct fnc_diff_view_state *, fsl_buffer *,
+			    const char *, fsl_uuid_str, const char *,
+			    enum fsl_ckout_change_e);
 static int		 fnc_diff_builder(fsl_dibu **, fsl_uuid_cstr,
 			    fsl_uuid_cstr, const char *, const char *, int,
 			    int, fsl_buffer *);
 static void		 fnc_free_diff_builder(fsl_dibu *);
 static int		 diff_non_checkin(fsl_buffer *,
 			    struct fnc_commit_artifact *, int, int, int);
-static int		 diff_file_artifact(fsl_buffer *, fsl_id_t,
-			    const fsl_card_F *, fsl_id_t, const fsl_card_F *,
-			    fsl_ckout_change_e, int, int, int,
-			    enum fnc_diff_type);
+static int		 diff_file_artifact(struct fnc_diff_view_state *,
+			    fsl_id_t, const fsl_card_F *, const fsl_card_F *,
+			    fsl_ckout_change_e);
 static int		 show_diff(struct fnc_view *);
 static int		 write_diff(struct fnc_view *, char *);
 static int		 match_line(const char *, regex_t *, size_t,
@@ -1095,6 +1100,7 @@ static int		 view_close_child(struct fnc_view *);
 static int		 close_tree_view(struct fnc_view *);
 static int		 close_timeline_view(struct fnc_view *);
 static int		 close_diff_view(struct fnc_view *);
+static void		 free_index(struct index *);
 static int		 view_resize(struct fnc_view *, enum view_mode);
 static bool		 screen_is_split(struct fnc_view *);
 static bool		 screen_is_shared(struct fnc_view *);
@@ -3033,9 +3039,12 @@ help(struct fnc_view *view)
 	    {"  0                ", "  ❬0❭             "},
 	    {"  C-e              ", "  ❬C-e❭           "},
 	    {"  C-y              ", "  ❬C-y❭           "},
+	    {"  C-n              ", "  ❬C-n❭           "},
+	    {"  C-p              ", "  ❬C-p❭           "},
 	    {"  l<Right>         ", "  ❬l❭❬→❭          "},
 	    {"  h<Left>          ", "  ❬h❭❬←❭          "},
 	    {"  b                ", "  ❬b❭             "},
+	    {"  F                ", "  ❬F❭             "},
 	    {"  i                ", "  ❬i❭             "},
 	    {"  L                ", "  ❬L❭             "},
 	    {"  v                ", "  ❬v❭             "},
@@ -3112,9 +3121,12 @@ help(struct fnc_view *view)
 	    "Scroll the view left to the beginning of the line",
 	    "Scroll the view down in the buffer",
 	    "Scroll the view up in the buffer",
+	    "Navigate to next file in the diff",
+	    "Navigate to previous file in the diff",
 	    "Scroll the view right",
 	    "Scroll the view left",
 	    "Open and populate branch view with all repository branches",
+	    "Open prompt to enter file number and navigate to file",
 	    "Toggle inversion of diff output",
 	    "Open prompt to enter line number and navigate to line",
 	    "Toggle verbosity of diff output",
@@ -4194,6 +4206,8 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 		s->sline = SLINE_MONO;
 	fsl_free(opt);
 
+	s->index.n = 0;
+	s->index.idx = 0;
 	s->maxx = 0;
 	s->paths = paths;
 	s->selected_commit = commit;
@@ -4253,6 +4267,7 @@ create_diff(struct fnc_diff_view_state *s)
 	FILE	*fout = NULL;
 	char	*line, *st0 = NULL, *st = NULL;
 	off_t	 lnoff = 0;
+	uint32_t idx = 0;
 	int	 rc = 0;
 
 	free(s->line_offsets);
@@ -4279,10 +4294,8 @@ create_diff(struct fnc_diff_view_state *s)
 	if (s->selected_commit->diff_type == FNC_DIFF_COMMIT)
 		rc = create_changeset(s->selected_commit);
 	else if (s->selected_commit->diff_type == FNC_DIFF_BLOB)
-		rc = diff_file_artifact(&s->buf, s->selected_commit->prid, NULL,
-		    s->selected_commit->rid, NULL, FSL_CKOUT_CHANGE_MOD,
-		    s->diff_flags, s->context, s->sbs,
-		    s->selected_commit->diff_type);
+		rc = diff_file_artifact(s, s->selected_commit->prid, NULL,
+		    NULL, FSL_CKOUT_CHANGE_MOD);
 	else if (s->selected_commit->diff_type == FNC_DIFF_WIKI)
 		rc = diff_non_checkin(&s->buf, s->selected_commit,
 		    s->diff_flags, s->context, s->sbs);
@@ -4325,11 +4338,9 @@ create_diff(struct fnc_diff_view_state *s)
 	 * file artifacts; the latter compares file artifact blobs only.
 	 */
 	if (s->selected_commit->diff_type == FNC_DIFF_COMMIT)
-		diff_commit(&s->buf, s->selected_commit, s->diff_flags,
-		    s->context, s->sbs, s->paths);
+		diff_commit(s);
 	else if (s->selected_commit->diff_type == FNC_DIFF_CKOUT)
-		diff_checkout(&s->buf, s->selected_commit->prid, s->diff_flags,
-		    s->context, s->sbs, s->paths);
+		diff_checkout(s);
 
 	/*
 	 * Parse the diff buffer line-by-line to record byte offsets of each
@@ -4338,18 +4349,23 @@ create_diff(struct fnc_diff_view_state *s)
 	st0 = fsl_strdup(fsl_buffer_str(&s->buf));
 	st = st0;
 	lnoff = (s->line_offsets)[s->nlines - 1];
+	s->index.lineno = fsl_malloc(s->index.n * sizeof(size_t));
 	while ((line = fnc_strsep(&st, "\n")) != NULL) {
-		int n = fprintf(s->f, "%s\n", line);
+		int lineno, n = fprintf(s->f, "%s\n", line);
 		s->maxx = MAX((int)s->maxx, n);
+		if (s->index.offset && idx < s->index.n &&
+		    lnoff == s->index.offset[idx]) {
+			lineno = s->nlines + (idx ? 1 : 0);
+			s->index.lineno[idx++] = lineno;
+		}
 		lnoff += n;
 		rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff);
 		if (rc)
 			goto end;
 	}
-
 	--s->nlines;  /* Don't count EOF '\n' */
 end:
-	free(st0);
+	fsl_free(st0);
 	fsl_buffer_clear(&s->buf);
 	if (s->f && fflush(s->f) != 0 && rc == 0)
 		rc = RC(FSL_RC_IO, "%s", "fflush");
@@ -4528,6 +4544,9 @@ write_commit_meta(struct fnc_diff_view_state *s)
 	fputc('\n', s->f);
 	++lnoff;
 	rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff);
+	s->index.offset = fsl_realloc(s->index.offset,
+	    (s->index.n + 1) * sizeof(size_t));
+	s->index.offset[s->index.n++] = lnoff;
 end:
 	free(st0);
 	free(line);
@@ -4608,8 +4627,7 @@ add_line_offset(off_t **line_offsets, size_t *nlines, off_t off)
  * both artifacts will be passed to diff_file_artifact() to be diffed.
  */
 static int
-diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
-    int context, int sbs, struct fnc_pathlist_head *paths)
+diff_commit(struct fnc_diff_view_state *s)
 {
 	fsl_cx			*const f = fcli_cx();
 	const fsl_card_F	*fc1 = NULL;
@@ -4619,7 +4637,8 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 	fsl_id_t		 id1;
 	int			 different = 0, rc = 0;
 
-	rc = fsl_deck_load_rid(f, &d2, commit->rid, FSL_SATYPE_CHECKIN);
+	rc = fsl_deck_load_rid(f, &d2, s->selected_commit->rid,
+	    FSL_SATYPE_CHECKIN);
 	if (rc)
 		goto end;
 	rc = fsl_deck_F_rewind(&d2);
@@ -4631,8 +4650,9 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 	 * canonical fnc, that do not have an "initial empty check-in", we
 	 * proceed with no parent version to diff against.
 	 */
-	if (commit->puuid) {
-		rc = fsl_sym_to_rid(f, commit->puuid, FSL_SATYPE_CHECKIN, &id1);
+	if (s->selected_commit->puuid) {
+		rc = fsl_sym_to_rid(f, s->selected_commit->puuid,
+		    FSL_SATYPE_CHECKIN, &id1);
 		if (rc)
 			goto end;
 		rc = fsl_deck_load_rid(f, &d1, id1, FSL_SATYPE_CHECKIN);
@@ -4650,10 +4670,10 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 		fsl_ckout_change_e	 change = FSL_CKOUT_CHANGE_NONE;
 		bool			 diff = true;
 
-		if (paths != NULL && !TAILQ_EMPTY(paths)) {
+		if (s->paths != NULL && !TAILQ_EMPTY(s->paths)) {
 			struct fnc_pathlist_entry *pe;
 			diff = false;
-			TAILQ_FOREACH(pe, paths, entry)
+			TAILQ_FOREACH(pe, s->paths, entry)
 				if (!fsl_strcmp(pe->path, fc1->name) ||
 				    !fsl_strcmp(pe->path, fc2->name) ||
 				    !fsl_strncmp(pe->path, fc1->name,
@@ -4682,28 +4702,25 @@ diff_commit(fsl_buffer *buf, struct fnc_commit_artifact *commit, int diff_flags,
 				fsl_deck_F_next(&d1, &fc1);
 			}
 			if (diff)
-				rc = diff_file_artifact(buf, id1, a,
-				    commit->rid, b, change, diff_flags,
-				    context, sbs, commit->diff_type);
+				rc = diff_file_artifact(s, id1, a, b, change);
 		} else if (!fsl_uuidcmp(fc1->uuid, fc2->uuid)) { /* No change */
 			fsl_deck_F_next(&d1, &fc1);
 			fsl_deck_F_next(&d2, &fc2);
 		} else {
 			change = FSL_CKOUT_CHANGE_MOD;
 			if (diff)
-				rc = diff_file_artifact(buf, id1, fc1,
-				    commit->rid, fc2, change, diff_flags,
-				    context, sbs, commit->diff_type);
+				rc = diff_file_artifact(s, id1, fc1, fc2,
+				    change);
 			fsl_deck_F_next(&d1, &fc1);
 			fsl_deck_F_next(&d2, &fc2);
 		}
 		if (rc == FSL_RC_RANGE) {
-			fsl_buffer_append(buf,
+			fsl_buffer_append(&s->buf,
 			    "\nDiff has too many changes\n", -1);
 			rc = 0;
 			fsl_cx_err_reset(f);
 		} else if (rc == FSL_RC_DIFF_BINARY) {
-			fsl_buffer_append(buf,
+			fsl_buffer_append(&s->buf,
 			    "\nBinary files cannot be diffed\n", -1);
 			rc = 0;
 			fsl_cx_err_reset(f);
@@ -4726,18 +4743,18 @@ end:
  * zero args—not two—supplied to fnc's diff command line interface.
  */
 static int
-diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
-    int sbs, struct fnc_pathlist_head *paths)
+diff_checkout(struct fnc_diff_view_state *s)
 {
 	fsl_cx		*const f = fcli_cx();
 	fsl_stmt	*st = NULL;
 	fsl_buffer	 sql, abspath, bminus;
 	fsl_uuid_str	 xminus = NULL;
-	fsl_id_t	 cid;
+	fsl_id_t	 cid, vid;
 	int		 rc = 0;
 	bool		 allow_symlinks;
 
 	abspath = bminus = sql = fsl_buffer_empty;
+	vid = s->selected_commit->prid;
 	fsl_ckout_version_info(f, &cid, NULL);
 	/* cid = fsl_config_get_id(f, FSL_CONFDB_CKOUT, 0, "checkout"); */
 	/* XXX Already done in cmd_diff(): Load vfile table with local state. */
@@ -4862,10 +4879,10 @@ diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
 		    "allow-symlinks");
 		if (!symlink != !(fsl_is_symlink(fsl_buffer_cstr(&abspath)) &&
 		    allow_symlinks)) {
-			rc = write_diff_meta(buf, path, xminus, path,
-			    NULL_DEVICE, diff_flags, change);
-			fsl_buffer_append(buf, "\nSymbolic links and regular "
-			    "files cannot be diffed\n", -1);
+			rc = write_diff_meta(&s->buf, path, xminus, path,
+			    NULL_DEVICE, s->diff_flags, change);
+			fsl_buffer_append(&s->buf,
+			    "\nSymbolic links cannot be diffed\n", -1);
 			if (rc)
 				goto yield;
 			continue;
@@ -4876,10 +4893,10 @@ diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
 				goto yield;
 		} else
 			fsl_buffer_clear(&bminus);
-		if (paths != NULL && !TAILQ_EMPTY(paths)) {
+		if (s->paths != NULL && !TAILQ_EMPTY(s->paths)) {
 			struct fnc_pathlist_entry *pe;
 			diff = false;
-			TAILQ_FOREACH(pe, paths, entry)
+			TAILQ_FOREACH(pe, s->paths, entry)
 				if (!fsl_strncmp(pe->path, path, pe->pathlen)
 				    || !fsl_strcmp(pe->path, path)) {
 					diff = true;
@@ -4887,20 +4904,19 @@ diff_checkout(fsl_buffer *buf, fsl_id_t vid, int diff_flags, int context,
 				}
 		}
 		if (diff)
-			rc = diff_file(buf, &bminus, path, xminus,
-			    fsl_buffer_cstr(&abspath), change, diff_flags,
-			    context, sbs);
+			rc = diff_file(s, &bminus, path, xminus,
+			    fsl_buffer_cstr(&abspath), change);
 		fsl_buffer_reuse(&bminus);
 		fsl_buffer_reuse(&abspath);
 		fsl_free(xminus);
 		xminus = NULL;
 		if (rc == FSL_RC_RANGE) {
-			fsl_buffer_append(buf,
+			fsl_buffer_append(&s->buf,
 			    "\nDiff has too many changes\n", -1);
 			rc = 0;
 			fsl_cx_err_reset(f);
 		} else if (rc == FSL_RC_DIFF_BINARY) {
-			fsl_buffer_append(buf,
+			fsl_buffer_append(&s->buf,
 			    "\nBinary files cannot be diffed\n", -1);
 			rc = 0;
 			fsl_cx_err_reset(f);
@@ -5001,9 +5017,8 @@ write_diff_meta(fsl_buffer *buf, const char *zminus, fsl_uuid_str xminus,
  * diff_flags, context, and sbs are the same parameters as diff_file_artifact()
  */
 static int
-diff_file(fsl_buffer *buf, fsl_buffer *bminus, const char *zminus,
-    fsl_uuid_str xminus, const char *abspath, enum fsl_ckout_change_e change,
-    int diff_flags, int context, bool sbs)
+diff_file(struct fnc_diff_view_state *s, fsl_buffer *bminus, const char *zminus,
+    fsl_uuid_str xminus, const char *abspath, enum fsl_ckout_change_e change)
 {
 	fsl_cx		*const f = fcli_cx();
 	fsl_dibu	*diffbld = NULL;
@@ -5070,21 +5085,25 @@ diff_file(fsl_buffer *buf, fsl_buffer *bminus, const char *zminus,
 	if (rc)
 		goto end;
 
-	rc = write_diff_meta(buf, zminus, xminus, zplus, fsl_buffer_str(&xplus),
-	    diff_flags, change);
+	s->index.offset = fsl_realloc(s->index.offset,
+	    (s->index.n + 1) * sizeof(size_t));
+	s->index.offset[s->index.n++] = s->buf.used;
+	rc = write_diff_meta(&s->buf, zminus, xminus, zplus,
+	    fsl_buffer_str(&xplus), s->diff_flags, change);
 	if (rc)
 		goto end;
 
 	rc = fnc_diff_builder(&diffbld, xminus, fsl_buffer_str(&xplus), zminus,
-	    zplus, context, diff_flags, buf);
+	    zplus, s->context, s->diff_flags, &s->buf);
 	if (rc)
 		goto end;
 
-	if FLAG_CHK(diff_flags, FSL_DIFF_BRIEF) {
+	if FLAG_CHK(s->diff_flags, FSL_DIFF_BRIEF) {
 		rc = fsl_buffer_compare(bminus, &bplus);
 		if (!rc)
-			rc = fsl_buffer_appendf(buf, "CHANGED -> %s\n", zminus);
-	} else if (FLAG_CHK(diff_flags, FSL_DIFF_VERBOSE) ||
+			rc = fsl_buffer_appendf(&s->buf, "CHANGED -> %s\n",
+			    zminus);
+	} else if (FLAG_CHK(s->diff_flags, FSL_DIFF_VERBOSE) ||
 	    (bminus->used && bplus.used))
 		rc = fsl_diff_v2(bminus, &bplus, diffbld);
 
@@ -5272,9 +5291,8 @@ end:
  *   sbs	 number of columns in which to display each side-by-side diff
  */
 static int
-diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
-    fsl_id_t vid2, const fsl_card_F *b, enum fsl_ckout_change_e change,
-    int diff_flags, int context, int sbs, enum fnc_diff_type diff_type)
+diff_file_artifact(struct fnc_diff_view_state *s, fsl_id_t vid1,
+    const fsl_card_F *a, const fsl_card_F *b, enum fsl_ckout_change_e change)
 {
 	fsl_cx		*const f = fcli_cx();
 	fsl_dibu	*diffbld = NULL;
@@ -5285,6 +5303,7 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
 	const char	*zplus = NULL, *zminus = NULL;
 	fsl_uuid_str	 xplus0 = NULL, xminus0 = NULL;
 	fsl_uuid_str	 xplus = NULL, xminus = NULL;
+	fsl_id_t	 vid2 = s->selected_commit->rid;
 	int		 rc = 0;
 
 	assert(vid1 != vid2);
@@ -5299,7 +5318,7 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
 			goto end;
 		zminus = a->name;
 		xminus = a->uuid;
-	} else if (diff_type == FNC_DIFF_BLOB) {
+	} else if (s->selected_commit->diff_type == FNC_DIFF_BLOB) {
 		rc = fsl_cx_prepare(f, &stmt,
 		    "SELECT name FROM filename, mlink "
 		    "WHERE filename.fnid=mlink.fnid AND mlink.fid = %d", vid1);
@@ -5329,7 +5348,7 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
 			goto end;
 		zplus = b->name;
 		xplus = b->uuid;
-	} else if (diff_type == FNC_DIFF_BLOB) {
+	} else if (s->selected_commit->diff_type == FNC_DIFF_BLOB) {
 		rc = fsl_cx_prepare(f, &stmt,
 		    "SELECT name FROM filename, mlink "
 		    "WHERE filename.fnid=mlink.fnid AND mlink.fid = %d", vid2);
@@ -5354,16 +5373,21 @@ diff_file_artifact(fsl_buffer *buf, fsl_id_t vid1, const fsl_card_F *a,
 		fsl_content_get(f, vid2, &fbuf2);
 	}
 
-	rc = write_diff_meta(buf, zminus, xminus, zplus, xplus, diff_flags,
-	    change);
+	if (s->buf.used) {
+		s->index.offset = fsl_realloc(s->index.offset,
+		    (s->index.n + 1) * sizeof(size_t));
+		s->index.offset[s->index.n++] = s->buf.used + s->index.offset[0];
+	}
+	rc = write_diff_meta(&s->buf, zminus, xminus, zplus, xplus,
+	    s->diff_flags, change);
 	if (rc)
 		goto end;
 
-	rc = fnc_diff_builder(&diffbld, xminus, xplus, zminus, zplus, context,
-	    diff_flags, buf);
+	rc = fnc_diff_builder(&diffbld, xminus, xplus, zminus, zplus,
+	    s->context, s->diff_flags, &s->buf);
 	if (rc)
 		goto end;
-	if (FLAG_CHK(diff_flags, FSL_DIFF_VERBOSE) || (a && b))
+	if (FLAG_CHK(s->diff_flags, FSL_DIFF_VERBOSE) || (a && b))
 		rc = fsl_diff_v2(&fbuf1, &fbuf2, diffbld);
 	if (rc)
 		RC(rc, "%s: fsl_diff_text_to_buffer\n"
@@ -5444,7 +5468,7 @@ write_diff(struct fnc_view *view, char *headln)
 		ln = s->gtl ? s->gtl : s->lineno + s->selected_line;
 		percent = 100.00 * ln / nlines;
 		pctlen = snprintf(pct, MAX_PCT_LEN, "%.*lf%%",
-		    ln >= nlines ? 0 : 2, percent);
+		    percent >= 99.99 ? 0 : 2, percent);
 		if (pctlen < 0)
 			return RC(FSL_RC_RANGE, "%s", "snprintf");
 		line = fsl_mprintf("[%d/%d] %s", ln, nlines, headln);
@@ -5743,6 +5767,30 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case 'h':
 		view->pos.col -= MIN(view->pos.col, 2);
 		break;
+	case CTRL('p'):
+		if (s->selected_commit->diff_type == FNC_DIFF_WIKI)
+			break;
+		if (!((size_t)s->lineno > s->index.lineno[s->index.n - 1])) {
+			if (s->index.idx == 0)
+				s->index.idx = s->index.n - 1;
+			else
+				--s->index.idx;
+		} else
+			s->index.idx = s->index.n - 1;
+		s->first_line_onscreen = s->index.lineno[s->index.idx];
+		s->selected_line = 1;
+		break;
+	case CTRL('n'):
+		if (s->selected_commit->diff_type == FNC_DIFF_WIKI)
+			break;
+		if (!((size_t)s->lineno < s->index.lineno[0])) {
+			if (++s->index.idx == s->index.n)
+				s->index.idx = 0;
+		} else
+			s->index.idx = 0;
+		s->first_line_onscreen = s->index.lineno[s->index.idx];
+		s->selected_line = 1;
+		break;
 	case CTRL('e'):
 		if (!s->eof) {
 			++s->first_line_onscreen;
@@ -5824,6 +5872,33 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case KEY_HOME:
 		s->selected_line = 1;
 		s->first_line_onscreen = 1;
+		break;
+	case 'F':
+		if (s->selected_commit->diff_type == FNC_DIFF_WIKI)
+			break;
+		fsl_buffer	 buf = fsl_buffer_empty;
+		struct input	 input;
+		char		*end = fsl_mprintf(", ..., %d: ", s->index.n);
+		size_t		 maxwidth = view->ncols - 12;
+		uint32_t	 i = 0;
+
+		fsl_buffer_append(&buf, "File ", -1);
+		while (++i <= s->index.n && buf.used < maxwidth)
+			fsl_buffer_appendf(&buf,
+			    "%d%s", i, (i + 1 < s->index.n ?
+			     buf.used + 6 < maxwidth ?
+			     ", " : end : (i < s->index.n ?
+			     " or " : ": ")));
+		input = (struct input){(int []){1, s->index.n},
+		    fsl_buffer_str(&buf), INPUT_NUMERIC, true};
+		rc = fnc_prompt_input(view, &input);
+		if (input.ret) {
+			s->index.idx = input.ret - 1;
+			s->first_line_onscreen = s->index.lineno[s->index.idx];
+			s->selected_line = 1;
+		}
+		fsl_buffer_clear(&buf);
+		fsl_free(end);
 		break;
 	case 'L': {
 		struct input input = {(int []){1, nlines}, "line: ",
@@ -5931,6 +6006,7 @@ reset_diff_view(struct fnc_view *view, bool stay)
 	int				 n, rc = FSL_RC_OK;
 
 	n = s->nlines;
+	free_index(&s->index);
 	show_diff_status(view);
 	rc = create_diff(s);
 	if (rc)
@@ -6079,7 +6155,19 @@ close_diff_view(struct fnc_view *view)
 	free_colours(&s->colours);
 	s->line_offsets = NULL;
 	s->nlines = 0;
+	free_index(&s->index);
 	return rc;
+}
+
+static void
+free_index(struct index *index)
+{
+	index->idx = 0;
+	index->n = 0;
+	fsl_free(index->lineno);
+	index->lineno = NULL;
+	fsl_free(index->offset);
+	index->offset = NULL;
 }
 
 static void
@@ -10419,10 +10507,10 @@ fnc_prompt_input(struct fnc_view *view, struct input *input)
 		rc = strtonumcheck(&n, input->buf, min, max);
 		if (rc == FSL_RC_MISUSE)
 			fnc_print_msg(view, "-- numeric input only --",
-			    false, true, true);
+			    true, true, true);
 		else if (rc == FSL_RC_RANGE || n < min || n > max)
 			fnc_print_msg(view, "-- line outside file range --",
-			    false, true, true);
+			    true, true, true);
 		else
 			input->ret = n;
 		rc = FSL_RC_OK;

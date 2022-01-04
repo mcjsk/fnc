@@ -507,6 +507,10 @@ screen.
 .It Cm C-y
 Scroll view one line upwards in the buffer.  Diff output moves downwards on the
 screen.
+.It Cm C-n
+Navigate to next file in the diff.
+.It Cm C-p
+Navigate to previous file in the diff.
 .It Cm C-f, Page-down, Space
 Scroll down one page of diff output.
 .It Cm C-b, Page-up
@@ -537,6 +541,8 @@ Open and populate branch view with all repository branches.
 Toggle coloured diff output. On supported terminals,
 .Nm
 will default to displaying changes and diff metadata in colour.
+.It Cm F
+Open prompt to enter file number and navigate to that file in the diff.
 .It Cm i
 Toggle inversion of diff output.
 .It Cm L
