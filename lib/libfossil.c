@@ -1024,6 +1024,10 @@ bool fsl_is_reserved_fn(const char *zFilename, fsl_int_t nameLen){
   }
 }
 
+void fsl_randomness(unsigned int n, void *tgt){
+  sqlite3_randomness((int)n, tgt);
+}
+
 #undef MARKER
 #if defined(_WIN32) || defined(WIN32)
 #undef isatty
@@ -17888,7 +17892,7 @@ int fsl_deck_I_set( fsl_deck * const mf, fsl_uuid_cstr uuid){
   return fsl_deck_sethex_impl(mf, uuid, 'I', uLen, &mf->I);
 }
 
-int fsl_deck_J_add( fsl_deck * const mf, char isAppend,
+int fsl_deck_J_add( fsl_deck * const mf, bool isAppend,
                     char const * field, char const * value){
   if(!field) return FSL_RC_MISUSE;
   else if(!*field) return FSL_RC_SYNTAX;
@@ -17906,10 +17910,18 @@ int fsl_deck_J_add( fsl_deck * const mf, char isAppend,
 
 
 int fsl_deck_K_set( fsl_deck * const mf, fsl_uuid_cstr uuid){
-  int const uLen = fsl_is_uuid(uuid);
-  return uLen
-    ? fsl_deck_sethex_impl(mf, uuid, 'K', uLen, &mf->K)
-    : FSL_RC_SYNTAX;
+  if(uuid){
+    int const uLen = fsl_is_uuid(uuid);
+    return uLen
+      ? fsl_deck_sethex_impl(mf, uuid, 'K', uLen, &mf->K)
+      : FSL_RC_SYNTAX;
+  }else{
+    char buf[FSL_STRLEN_SHA1+1];
+    unsigned char rnd[FSL_STRLEN_SHA1/20];
+    fsl_randomness(FSL_STRLEN_SHA1/2, rnd);
+    fsl_sha1_digest_to_base16(rnd, buf);
+    return fsl_deck_sethex_impl(mf, buf, 'K', FSL_STRLEN_SHA1, &mf->K);
+  }
 }
 
 int fsl_deck_L_set( fsl_deck * const mf, char const * v, fsl_int_t n){
@@ -20608,7 +20620,7 @@ static int fsl_deck_xlink_f_attachment(fsl_deck * const d, void * state){
   int rc;
   fsl_db * const db = fsl_cx_db_repo(d->f);
   fsl_buffer * const comment = fsl__cx_scratchpad(d->f);
-  const char isAdd = (d->A.src && *d->A.src) ? 1 : 0;
+  const bool isAdd = (d->A.src && *d->A.src) ? 1 : 0;
   char attachToType = 'w'
     /* Assume wiki until we know otherwise, keeping in mind that the
        d->A.tgt might not yet be in the blob table, in which case
@@ -20777,7 +20789,7 @@ static int fsl_deck_xlink_f_control(fsl_deck * const d, void * state){
      because fossil(1) has no mechanism for creating them.
   */
   for( i = 0; !rc && (i < li->used); ++i, prevTag = tag){
-    char isProp = 0, isAdd = 0, isCancel = 0;
+    bool isProp = 0, isAdd = 0, isCancel = 0;
     tag = (fsl_card_T const *)li->list[i];
     zUuid = tag->uuid;
     if(!zUuid /*tag on self*/) continue;
@@ -26250,6 +26262,135 @@ void fsl_dline_change_spans(const fsl_dline *pLeft, const fsl_dline *pRight,
 */
 #define DIFF_ALIGN_MX  1225
 
+/**
+   FSL_DIFF_SMALL_GAP=0 is a temporary(? as of 2022-01-04) patch for a
+   cosmetic-only (but unsightly) quirk of the diff engine where it
+   produces a pair of identical DELETE/INSERT lines. Richard's
+   preliminary solution for it is to remove the "small gap merging,"
+   but he notes (in fossil /chat) that he's not recommending this as
+   "the" fix.
+
+   PS: we colloquially know this as "the lineno diff" because it was first
+   reported in a diff which resulted in:
+
+```
+-  int     lineno;
++  int     lineno;
+```
+
+   (No, there are no whitespace changes there.)
+
+   To reiterate, though: this is not a "bug," in that it does not
+   cause incorrect results when applying the resulting unfified-diff
+   patches. It does, however, cause confusion for human users.
+
+
+   Here are two inputs which, when diffed, expose the lineno behavior:
+
+   #1:
+
+```
+struct fnc_diff_view_state {
+  int     first_line_onscreen;
+  int     last_line_onscreen;
+  int     diff_flags;
+  int     context;
+  int     sbs;
+  int     matched_line;
+  int     current_line;
+  int     lineno;
+  size_t     ncols;
+  size_t     nlines;
+  off_t    *line_offsets;
+  bool     eof;
+  bool     colour;
+  bool     showmeta;
+  bool     showln;
+};
+```
+
+   #2:
+
+```
+struct fnc_diff_view_state {
+  int     first_line_onscreen;
+  int     last_line_onscreen;
+  int     diff_flags;
+  int     context;
+  int     sbs;
+  int     matched_line;
+  int     selected_line;
+  int     lineno;
+  int     gtl;
+  size_t     ncols;
+  size_t     nlines;
+  off_t    *line_offsets;
+  bool     eof;
+  bool     colour;
+  bool     showmeta;
+  bool     showln;
+};
+```
+
+   Result without this patch:
+
+```
+Index: X.0
+==================================================================
+--- X.0
++++ X.1
+@@ -3,15 +3,16 @@
+   int     last_line_onscreen;
+   int     diff_flags;
+   int     context;
+   int     sbs;
+   int     matched_line;
++  int     selected_line;
+-  int     current_line;
+-  int     lineno;
++  int     lineno;
++  int     gtl;
+   size_t     ncols;
+   size_t     nlines;
+   off_t    *line_offsets;
+   bool     eof;
+   bool     colour;
+   bool     showmeta;
+   bool     showln;
+ };
+```
+
+    And with the patch:
+
+```
+Index: X.0
+==================================================================
+--- X.0
++++ X.1
+@@ -3,15 +3,16 @@
+   int     last_line_onscreen;
+   int     diff_flags;
+   int     context;
+   int     sbs;
+   int     matched_line;
+-  int     current_line;
++  int     selected_line;
+   int     lineno;
++  int     gtl;
+   size_t     ncols;
+   size_t     nlines;
+   off_t    *line_offsets;
+   bool     eof;
+   bool     colour;
+   bool     showmeta;
+   bool     showln;
+ };
+```
+
+*/
+#define FSL_DIFF_SMALL_GAP 0
+
+#if FSL_DIFF_SMALL_GAP
 /*
 ** R[] is an array of six integer, two COPY/DELETE/INSERT triples for a
 ** pair of adjacent differences.  Return true if the gap between these
@@ -26263,6 +26404,7 @@ static int smallGap2(const int *R, int ma, int mb){
   if( ma*mb>DIFF_ALIGN_MX ) return 0;
   return m<=2 || m<=(R[1]+R[2]+R[4]+R[5])/8;
 }
+#endif
 
 static unsigned short diff_opt_context_lines(fsl_dibu_opt const * opt){
   const unsigned short dflt = 5;
@@ -26751,7 +26893,8 @@ static int fdb__format(
       ma = R[r+i*3+1];   /* Lines on left but not on right */
       mb = R[r+i*3+2];   /* Lines on right but not on left */
 
-      /* Try merging the current block with subsequent blocks, if the
+#if FSL_DIFF_SMALL_GAP
+  /* Try merging the current block with subsequent blocks, if the
       ** subsequent blocks are nearby and their result isn't too big.
       */
       while( i<nr-1 && smallGap2(&R[r+i*3],ma,mb) ){
@@ -26760,6 +26903,7 @@ static int fdb__format(
         ma += R[r+i*3+1] + m;
         mb += R[r+i*3+2] + m;
       }
+#endif
 
       /* Try to find an alignment for the lines within this one block */
       rc = diffBlockAlignment(&A[a], ma, &B[b], mb, pOpt,
@@ -28200,6 +28344,7 @@ int fsl_dibu_factory( fsl_dibu_e type,
 #undef DTCL_BUFFER
 #undef blob_to_utf8_no_bom
 #undef DICOSTATE
+#undef FSL_DIFF_SMALL_GAP
 /* end of file ./src/diff2.c */
 /* start of file ./src/encode.c */
 /* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */ 
@@ -29909,7 +30054,7 @@ int fsl_file_tempname(fsl_buffer * const tgt, char const *zPrefix,
       rc = FSL_RC_RANGE;
       break;
     }
-    sqlite3_randomness(RandSize, zRand);
+    fsl_randomness(RandSize, zRand);
     for( i=0; i < RandSize; ++i ){
       zRand[i] = (char)zChars[ ((unsigned char)zRand[i])%(sizeof(zChars)-1) ];
     }

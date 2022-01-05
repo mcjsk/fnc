@@ -6049,6 +6049,14 @@ FSL_EXPORT unsigned char const *fsl_utf8_bom(unsigned int *pnByte);
 */
 FSL_EXPORT bool fsl_starts_with_bom_utf8(fsl_buffer const * const b, unsigned int *pBomSize);
 
+/**
+   Populates the first n bytes of tgt with random bytes. Note that n
+   must be 31 bits or less (2GB). The exact source of randomness is
+   not guaranteed by the API, but the implementation currently uses
+   sqlite3_randomness().
+*/
+FSL_EXPORT void fsl_randomness(unsigned int n, void *tgt);
+
 #if 0
 /**
    The UTF16 counterpart of fsl_looks_like_utf8(), with the addition that the
@@ -11454,13 +11462,15 @@ FSL_EXPORT int fsl_deck_I_set( fsl_deck * const mf, fsl_uuid_cstr uuid);
    not legal (see fsl_card_is_legal()), FSL_RC_OOM on allocation
    error.
 */
-FSL_EXPORT int fsl_deck_J_add( fsl_deck * const mf, char isAppend,
+FSL_EXPORT int fsl_deck_J_add( fsl_deck * const mf, bool isAppend,
                                char const * key, char const * value );
 
 /**
-   Semantically identical fsl_deck_B_set() but sets the K-card and
-   does not accept a NULL value.  uuid must be the UUID of the ticket
-   this change is being applied to.
+   Sets the K-card (ticket ID) on the given deck. If passed NULL, it
+   creates a new ticket ID (a 40-digit string of random hex bytes) and
+   returns FSL_RC_OOM if allocation of those bytes fails. If uuid is
+   not NULL then it must be a 40-byte lower-case hex string, the K-card
+   value of the ticket this change is being applied to.
 */
 FSL_EXPORT int fsl_deck_K_set( fsl_deck * const mf, fsl_uuid_cstr uuid);
 
@@ -13279,7 +13289,7 @@ struct fsl_branch_opt {
   /**
      If true, the branch will be marked as private.
   */
-  char isPrivate;
+  bool isPrivate;
 };
 typedef struct fsl_branch_opt fsl_branch_opt;
 #define fsl_branch_opt_empty_m {                \
