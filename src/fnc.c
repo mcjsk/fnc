@@ -931,8 +931,8 @@ static void		 centerprint(WINDOW *, int, int, int, const char *,
 			    chtype);
 static int		 tl_input_handler(struct fnc_view **, struct fnc_view *,
 			    int);
-static int		 move_tl_cursor_down(struct fnc_view *, bool);
-static void		 move_tl_cursor_up(struct fnc_view *, bool, bool);
+static int		 move_tl_cursor_down(struct fnc_view *, uint16_t);
+static void		 move_tl_cursor_up(struct fnc_view *, uint16_t, bool);
 static int		 timeline_scroll_down(struct fnc_view *, int);
 static void		 timeline_scroll_up(struct fnc_tl_view_state *, int);
 static void		 select_commit(struct fnc_tl_view_state *);
@@ -3013,6 +3013,8 @@ help(struct fnc_view *view)
 	    {"  j,<Down>         ", "  ❬↓❭❬j❭          "},
 	    {"  C-b,PgUp         ", "  ❬C-b❭❬PgUp❭     "},
 	    {"  C-f,PgDn         ", "  ❬C-f❭❬PgDn❭     "},
+	    {"  C-u,             ", "  ❬C-u❭           "},
+	    {"  C-d,             ", "  ❬C-d❭           "},
 	    {"  gg,Home          ", "  ❬gg❭❬Home❭      "},
 	    {"  G,End            ", "  ❬G❭❬End❭        "},
 	    {"  Tab              ", "  ❬TAB❭           "},
@@ -3093,8 +3095,10 @@ help(struct fnc_view *view)
 	    "Open in-app help",
 	    "Move selection cursor or page up one line",
 	    "Move selection cursor or page down one line",
-	    "Scroll up one page",
-	    "Scroll down one page",
+	    "Scroll view up one page",
+	    "Scroll view down one page",
+	    "Scroll view up one half page",
+	    "Scroll view down one half page",
 	    "Jump to first line or start of the view",
 	    "Jump to last line or end of the view",
 	    "Switch focus between open views",
@@ -3337,17 +3341,21 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 {
 	struct fnc_tl_view_state	*s = &view->state.timeline;
 	int				 rc = FSL_RC_OK;
+	uint16_t			 nscroll = view->nlines - 2;
 
 	switch (ch) {
 	case KEY_DOWN:
 	case 'j':
 	case '.':
 	case '>':
-		rc = move_tl_cursor_down(view, false);
+		rc = move_tl_cursor_down(view, 0);
 		break;
+	case CTRL('d'):
+		nscroll >>= 1;
+		/* FALL THROUGH */
 	case KEY_NPAGE:
 	case CTRL('f'): {
-		rc = move_tl_cursor_down(view, true);
+		rc = move_tl_cursor_down(view, nscroll);
 		break;
 	}
 	case KEY_END:
@@ -3361,9 +3369,12 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case ',':
 		move_tl_cursor_up(view, false, false);
 		break;
+	case CTRL('u'):
+		nscroll >>= 1;
+		/* FALL THROUGH */
 	case KEY_PPAGE:
 	case CTRL('b'):
-		move_tl_cursor_up(view, true, false);
+		move_tl_cursor_up(view, nscroll, false);
 		break;
 	case 'g':
 		if (!fnc_home(view))
@@ -3433,7 +3444,7 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 }
 
 static int
-move_tl_cursor_down(struct fnc_view *view, bool page)
+move_tl_cursor_down(struct fnc_view *view, uint16_t page)
 {
 	struct fnc_tl_view_state	*s = &view->state.timeline;
 	struct commit_entry		*first;
@@ -3457,21 +3468,19 @@ move_tl_cursor_down(struct fnc_view *view, bool page)
 	} else if (s->thread_cx.eotl) {
 		/* Last displayed commit is the end, jump to it. */
 		if (s->last_commit_onscreen->idx == s->commits.ncommits - 1)
-			s->selected_idx = s->last_commit_onscreen->idx -
-			    s->first_commit_onscreen->idx;
+			s->selected_idx += MIN(s->last_commit_onscreen->idx -
+			    s->selected_commit->idx, page + 1);
 		else  /* Scroll the page. */
-			rc = timeline_scroll_down(view,
-			    MIN(s->commits.ncommits -
-			    s->selected_commit->idx - 1, view->nlines - 2));
+			rc = timeline_scroll_down(view, MIN(page,
+			    s->commits.ncommits - s->selected_commit->idx - 1));
 	} else {
-		rc = timeline_scroll_down(view, view->nlines - 2);
+		rc = timeline_scroll_down(view, page);
 		if (rc)
 			return rc;
 		if (first == s->first_commit_onscreen && s->selected_idx <
 		    MIN(view->nlines - 2, s->commits.ncommits - 1)) {
 			/* End of timeline, no more commits; move cursor down */
-			s->selected_idx = MIN(s->commits.ncommits - 1,
-			    view->nlines - 2);
+			s->selected_idx = MIN(s->commits.ncommits - 1, page);
 		}
 		/*
 		 * If we've overshot (necessarily possible with horizontal
@@ -3488,7 +3497,7 @@ move_tl_cursor_down(struct fnc_view *view, bool page)
 }
 
 static void
-move_tl_cursor_up(struct fnc_view *view, bool page, bool end)
+move_tl_cursor_up(struct fnc_view *view, uint16_t page, bool home)
 {
 	struct fnc_tl_view_state	*s = &view->state.timeline;
 
@@ -3496,14 +3505,14 @@ move_tl_cursor_up(struct fnc_view *view, bool page, bool end)
 		return;
 
 	if ((page && TAILQ_FIRST(&s->commits.head) == s->first_commit_onscreen)
-	    || end)
-		s->selected_idx = 0;
+	    || home)
+		s->selected_idx = home ? 0 : MAX(0, s->selected_idx - page - 1);
 
-	if (!page && !end && s->selected_idx > 0)
+	if (!page && !home && s->selected_idx > 0)
 		--s->selected_idx;
 	else
-		timeline_scroll_up(s, end ? s->commits.ncommits : page ?
-		    view->nlines - 2 : 1);
+		timeline_scroll_up(s, home ?
+		    s->commits.ncommits : MAX(page, 1));
 
 	select_commit(s);
 	return;
@@ -5468,7 +5477,7 @@ write_diff(struct fnc_view *view, char *headln)
 		ln = s->gtl ? s->gtl : s->lineno + s->selected_line;
 		percent = 100.00 * ln / nlines;
 		pctlen = snprintf(pct, MAX_PCT_LEN, "%.*lf%%",
-		    percent >= 99.99 ? 0 : 2, percent);
+		    percent > 99.99 ? 0 : 2, percent);
 		if (pctlen < 0)
 			return RC(FSL_RC_RANGE, "%s", "snprintf");
 		line = fsl_mprintf("[%d/%d] %s", ln, nlines, headln);
@@ -5746,6 +5755,7 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	ssize_t				 linelen;
 	size_t				 linesz = 0;
 	int				 nlines, i = 0, rc = FSL_RC_OK;
+	uint16_t			 nscroll = view->nlines - 2;
 	bool				 tl_down = false;
 
 	nlines = s->nlines;
@@ -5821,37 +5831,46 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		else if (s->selected_line == 1 && s->first_line_onscreen > 1)
 			--s->first_line_onscreen;
 		break;
+	case CTRL('d'):
+		nscroll >>= 1;
+		/* FALL THROUGH */
 	case KEY_NPAGE:
 	case CTRL('f'):
 	case ' ':
 		if (s->eof && s->last_line_onscreen == nlines) {
-			s->selected_line += nlines - s->lineno;
+			uint16_t move = nlines - s->lineno;
+			s->selected_line += MIN(nscroll, move);
 			break;
 		}
-		while (!s->eof && i++ < view->nlines - 2) {
+		while (!s->eof && i++ < nscroll) {
 			linelen = getline(&line, &linesz, s->f);
 			++s->first_line_onscreen;
 			if (linelen == -1) {
-				if (feof(s->f)) {
-					s->selected_line = view->nlines - 2;
-					s->eof = true;
-				} else
-					RC(ferror(s->f) ?
+				if (!feof(s->f))
+					return RC(ferror(s->f) ?
 					    fsl_errno_to_rc(errno, FSL_RC_IO) :
 					    FSL_RC_IO, "%s", "getline");
+				if (s->selected_line > nscroll)
+					s->selected_line = view->nlines - 2;
+				else
+					s->selected_line = nscroll;
+				s->eof = true;
 				break;
 			}
 		}
 		fsl_free(line);
 		break;
+	case CTRL('u'):
+		nscroll >>= 1;
+		/* FALL THROUGH */
 	case KEY_PPAGE:
 	case CTRL('b'):
 		if (s->first_line_onscreen == 1) {
-			s->selected_line = 1;
+			uint16_t move = s->selected_line - 1;
+			s->selected_line -= MIN(nscroll, move);
 			break;
 		}
-		i = 0;
-		while (i++ < view->nlines - 2 && s->first_line_onscreen > 1)
+		while (i++ < nscroll && s->first_line_onscreen > 1)
 			--s->first_line_onscreen;
 		break;
 	case KEY_END:
@@ -5860,9 +5879,14 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			s->selected_line = nlines;
 			s->first_line_onscreen = 1;
 		} else {
-			s->selected_line = view->nlines - 2;
+			s->selected_line = nscroll;
 			s->first_line_onscreen = nlines - view->nlines + 3;
 		}
+		/*
+		 * XXX Assume user would expect file navigation (C-n/p) to
+		 * follow a jump to the end of the diff.
+		 */
+		s->index.idx = s->index.n - 1;
 		s->eof = true;
 		break;
 	case 'g':
@@ -5872,6 +5896,11 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case KEY_HOME:
 		s->selected_line = 1;
 		s->first_line_onscreen = 1;
+		/*
+		 * XXX Assume user would expect file navigation (C-n/p) to
+		 * reset after jumping home.
+		 */
+		s->index.idx = 0;
 		break;
 	case 'F':
 		if (s->selected_commit->diff_type == FNC_DIFF_WIKI)
@@ -5880,14 +5909,14 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		struct input	 input;
 		char		*end = fsl_mprintf(", ..., %d: ", s->index.n);
 		size_t		 maxwidth = view->ncols - 12;
-		uint32_t	 i = 0;
+		uint32_t	 idx = 0;
 
 		fsl_buffer_append(&buf, "File ", -1);
-		while (++i <= s->index.n && buf.used < maxwidth)
+		while (++idx <= s->index.n && buf.used < maxwidth)
 			fsl_buffer_appendf(&buf,
-			    "%d%s", i, (i + 1 < s->index.n ?
+			    "%d%s", idx, (idx + 1 < s->index.n ?
 			     buf.used + 6 < maxwidth ?
-			     ", " : end : (i < s->index.n ?
+			     ", " : end : (idx < s->index.n ?
 			     " or " : ": ")));
 		input = (struct input){(int []){1, s->index.n},
 		    fsl_buffer_str(&buf), INPUT_NUMERIC, true};
@@ -7415,7 +7444,8 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	struct fnc_view			*branch_view, *timeline_view;
 	struct fnc_tree_view_state	*s = &view->state.tree;
 	struct fnc_tree_entry		*te;
-	int				 n, start_col = 0, rc = 0;
+	int				 n, start_col = 0, rc = FSL_RC_OK;
+	uint16_t			 nscroll = view->nlines - 3;
 
 	switch (ch) {
 	case 'b':
@@ -7499,25 +7529,6 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		if (n > 0)
 			s->selected_idx = n - 1;
 		break;
-	case KEY_UP:
-	case 'k':
-		if (s->selected_idx > 0) {
-			--s->selected_idx;
-			break;
-		}
-		tree_scroll_up(s, 1);
-		break;
-	case KEY_PPAGE:
-	case CTRL('b'):
-		if (s->tree == s->root) {
-			if (&s->tree->entries[0] == s->first_entry_onscreen)
-				s->selected_idx = 0;
-		} else {
-			if (s->first_entry_onscreen == NULL)
-				s->selected_idx = 0;
-		}
-		tree_scroll_up(s, MAX(0, view->nlines - 3));
-		break;
 	case KEY_DOWN:
 	case 'j':
 		if (s->selected_idx < s->ndisplayed - 1) {
@@ -7529,6 +7540,17 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			break;	/* Reached last entry. */
 		tree_scroll_down(view, 1);
 		break;
+	case KEY_UP:
+	case 'k':
+		if (s->selected_idx > 0) {
+			--s->selected_idx;
+			break;
+		}
+		tree_scroll_up(s, 1);
+		break;
+	case CTRL('d'):
+		nscroll >>= 1;
+		/* FALL THROUGH */
 	case KEY_NPAGE:
 	case CTRL('f'):
 		if (get_tree_entry(s->tree, s->last_entry_onscreen->idx + 1)
@@ -7538,11 +7560,25 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			 * tree move cursor to it instead of scrolling the view.
 			 */
 			if (s->selected_idx < s->ndisplayed - 1)
-				s->selected_idx = s->ndisplayed - 1;
+				s->selected_idx += MIN(nscroll,
+				    s->ndisplayed - s->selected_idx - 1);
 			break;
 		}
-		tree_scroll_down(view, MIN(view->nlines - 3,
-		    s->tree->nentries - s->selected_entry->idx - 1));
+		tree_scroll_down(view, nscroll);
+		break;
+	case CTRL('u'):
+		nscroll >>= 1;
+		/* FALL THROUGH */
+	case KEY_PPAGE:
+	case CTRL('b'):
+		if (s->tree == s->root) {
+			if (&s->tree->entries[0] == s->first_entry_onscreen)
+				s->selected_idx -= MIN(s->selected_idx, nscroll);
+		} else {
+			if (s->first_entry_onscreen == NULL)
+				s->selected_idx -= MIN(s->selected_idx, nscroll);
+		}
+		tree_scroll_up(s, nscroll);
 		break;
 	case KEY_BACKSPACE:
 	case KEY_ENTER:
@@ -9105,7 +9141,8 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 {
 	struct fnc_view			*branch_view, *diff_view;
 	struct fnc_blame_view_state	*s = &view->state.blame;
-	int				 start_col = 0, rc = 0;
+	int				 start_col = 0, rc = FSL_RC_OK;
+	uint16_t			 nscroll = view->nlines - 2;
 
 	switch (ch) {
 	case '0':
@@ -9149,24 +9186,6 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			    (view->nlines - 3);
 		}
 		break;
-	case KEY_UP:
-	case 'k':
-		if (s->selected_line > 1)
-			--s->selected_line;
-		else if (s->selected_line == 1 && s->first_line_onscreen > 1)
-			--s->first_line_onscreen;
-		break;
-	case KEY_PPAGE:
-	case CTRL('b'):
-		if (s->first_line_onscreen == 1) {
-			s->selected_line = 1;
-			break;
-		}
-		if (s->first_line_onscreen > view->nlines - 2)
-			s->first_line_onscreen -= (view->nlines - 2);
-		else
-			s->first_line_onscreen = 1;
-		break;
 	case KEY_DOWN:
 	case 'j':
 		if (s->selected_line < view->nlines - 2 &&
@@ -9175,6 +9194,47 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			++s->selected_line;
 		else if (s->last_line_onscreen < s->blame.nlines)
 			++s->first_line_onscreen;
+		break;
+	case KEY_UP:
+	case 'k':
+		if (s->selected_line > 1)
+			--s->selected_line;
+		else if (s->selected_line == 1 && s->first_line_onscreen > 1)
+			--s->first_line_onscreen;
+		break;
+	case CTRL('d'):
+		nscroll >>= 1;
+		/* FALL THROUGH */
+	case KEY_NPAGE:
+	case CTRL('f'):
+	case ' ':
+		if (s->last_line_onscreen >= s->blame.nlines) {
+			if (s->selected_line >= MIN(s->blame.nlines,
+			    view->nlines - 2))
+				break;
+			s->selected_line += MIN(nscroll, s->last_line_onscreen -
+			    s->first_line_onscreen - s->selected_line + 1);
+			break;
+		}
+		if (s->last_line_onscreen + nscroll <= s->blame.nlines)
+			s->first_line_onscreen += nscroll;
+		else
+			s->first_line_onscreen =
+			    s->blame.nlines - (view->nlines - 3);
+		break;
+	case CTRL('u'):
+		nscroll >>= 1;
+		/* FALL THROUGH */
+	case KEY_PPAGE:
+	case CTRL('b'):
+		if (s->first_line_onscreen == 1) {
+			s->selected_line = MAX(1, s->selected_line - nscroll);
+			break;
+		}
+		if (s->first_line_onscreen > nscroll)
+			s->first_line_onscreen -= nscroll;
+		else
+			s->first_line_onscreen = 1;
 		break;
 	case 'L': {
 		struct input input = {(int []){1, s->blame.nlines}, "line: ",
@@ -9347,24 +9407,6 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			break;
 		break;
 	}
-	case KEY_NPAGE:
-	case CTRL('f'):
-	case ' ':
-		if (s->last_line_onscreen >= s->blame.nlines && s->selected_line
-		    >= MIN(s->blame.nlines, view->nlines - 2))
-			break;
-		if (s->last_line_onscreen >= s->blame.nlines &&
-		    s->selected_line < view->nlines - 2) {
-			s->selected_line = MIN(s->blame.nlines,
-			    view->nlines - 2);
-			break;
-		}
-		if (s->last_line_onscreen + view->nlines - 2 <= s->blame.nlines)
-			s->first_line_onscreen += view->nlines - 2;
-		else
-			s->first_line_onscreen =
-			    s->blame.nlines - (view->nlines - 3);
-		break;
 	case KEY_RESIZE:
 		if (s->selected_line > view->nlines - 2) {
 			s->selected_line = MIN(s->blame.nlines,
@@ -10034,7 +10076,8 @@ branch_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	struct fnc_branch_view_state	*s = &view->state.branch;
 	struct fnc_view			*tree_view;
 	struct fnc_branchlist_entry	*be;
-	int				 start_col = 0, n, rc = 0;
+	int				 start_col = 0, n, rc = FSL_RC_OK;
+	uint16_t			 nscroll = view->nlines - 1;
 
 	switch (ch) {
 	case 'c':
@@ -10128,21 +10171,28 @@ branch_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			break;
 		branch_scroll_down(view, 1);
 		break;
+	case CTRL('u'):
+		nscroll >>= 1;
+		/* FALL THROUGH */
 	case KEY_PPAGE:
 	case CTRL('b'):
 		if (s->first_branch_onscreen == TAILQ_FIRST(&s->branches))
-			s->selected = 0;
-		branch_scroll_up(s, MAX(0, view->nlines - 1));
+			s->selected -= MIN(nscroll, s->selected);
+		branch_scroll_up(s, nscroll);
 		break;
+	case CTRL('d'):
+		nscroll >>= 1;
+		/* FALL THROUGH */
 	case KEY_NPAGE:
 	case CTRL('f'):
 		if (TAILQ_NEXT(s->last_branch_onscreen, entries) == NULL) {
 			/* No more entries off-page; move cursor down. */
 			if (s->selected < s->ndisplayed - 1)
-				s->selected = s->ndisplayed - 1;
+				s->selected += MIN(nscroll,
+				    s->ndisplayed - s->selected - 1);
 			break;
 		}
-		branch_scroll_down(view, view->nlines - 1);
+		branch_scroll_down(view, nscroll);
 		break;
 	case CTRL('l'):
 	case 'R':

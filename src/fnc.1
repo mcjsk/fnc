@@ -357,9 +357,13 @@ Move selection cursor down the timeline.
 .It Cm Arrow-up, k, <, \&,
 Move selection cursor up the timeline.
 .It Cm C-f, Page-down
-Move selection cursor one page down the timeline.
+Scroll timeline view one page downwards in the buffer.
 .It Cm C-b, Page-up
-Move selection cursor one page up the timeline.
+Scroll timeline view one page upwards in the buffer.
+.It Cm C-d
+Scroll timeline view half a page downwards in the buffer.
+.It Cm C-u
+Scroll timeline view half a page upwards in the buffer.
 .It Cm G, End
 Move selection cursor to the last commit on the timeline (i.e., oldest commit
 in the repository).
@@ -512,9 +516,13 @@ Navigate to next file in the diff.
 .It Cm C-p
 Navigate to previous file in the diff.
 .It Cm C-f, Page-down, Space
-Scroll down one page of diff output.
+Scroll diff view one page downwards in the buffer.
 .It Cm C-b, Page-up
-Scroll up one page of diff output.
+Scroll diff view one page upwards in the buffer.
+.It Cm C-d
+Scroll diff view half a page downwards in the buffer.
+.It Cm C-u
+Scroll diff view half a page upwards in the buffer.
 .It Cm G, End
 Scroll to the end of the view (i.e., last line of diff output).
 .It Cm gg, Home
@@ -649,10 +657,14 @@ Move up a level to the parent directory.  This is a no-op when in the root tree.
 Move selection cursor one node down the tree.
 .It Cm Arrow-up, k
 Move selection cursor one node up the tree.
-.It Cm Page-down, C-f
-Move selection cursor one page down the tree.
-.It Cm Page-up, C-b
-Move selection cursor one page up the tree.
+.It Cm C-f, Page-down
+Scroll tree view one page downwards in the buffer.
+.It Cm C-b, Page-up
+Scroll tree view one page upwards in the buffer.
+.It Cm C-d
+Scroll tree view half a page downwards in the buffer.
+.It Cm C-u
+Scroll tree view half a page upwards in the buffer.
 .It Cm Home, gg
 Move selection cursor to the first node in the tree.
 .It Cm End, G
@@ -785,10 +797,14 @@ right on the screen.
 Scroll the view right to the end of the longest line in the file.
 .It Cm 0
 Scroll the view left to the beginning of the line.
-.It Cm Page-down, C-f
-Move selection cursor down one page.
-.It Cm Page-up, C-b
-Move selection cursor up one page.
+.It Cm C-f, Page-down
+Scroll blame view one page downwards in the buffer.
+.It Cm C-b, Page-up
+Scroll blame view one page upwards in the buffer.
+.It Cm C-d
+Scroll blame view half a page downwards in the buffer.
+.It Cm C-u
+Scroll blame view half a page upwards in the buffer.
 .It Cm Home, gg
 Move selection cursor to the first line in the file.
 .It Cm End, G
@@ -935,10 +951,14 @@ are as follows:
 Move selection cursor down one branch.
 .It Cm Arrow-up, k
 Move selection cursor up one branch.
-.It Cm Page-down, C-f
-Move selection cursor down one page.
-.It Cm Page-up, C-b
-Move selection cursor up one page.
+.It Cm C-f, Page-down
+Scroll branch view one page downwards in the buffer.
+.It Cm C-b, Page-up
+Scroll branch view one page upwards in the buffer.
+.It Cm C-d
+Scroll branch view half a page downwards in the buffer.
+.It Cm C-u
+Scroll branch view half a page upwards in the buffer.
 .It Cm Home, gg
 Move selection cursor to the first branch in the list.
 .It Cm End, G
