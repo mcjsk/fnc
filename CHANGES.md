@@ -1,3 +1,46 @@
+**fnc 0.7** 2022-01-09
+
+- factor out common make(1) and gmake build bits
+- make build depend on make file
+- make all commands compatible with `-R|--repository` (i.e., no checkout needed)
+- implement Vim-like smartcase for commands that filter repository results
+- improve timeline arg parsing for more informative output upon invalid input
+- plug small memory leak when the timeline command fails to initialise a view
+- fix database locking issue when opening multiple tree views from the timeline
+- add pledge(2) and unveil(2) support on OpenBSD builds
+- add (s)ort keymap (i.e., `--sort` CLI option counterpart) to the branch view
+- add (d)ate keymap to toggle display of last modified timestamp in tree view
+- allow blame of empty files rather than erroring out
+- fix NULL dereference UB when the ".." parent dir is selected in tree view
+- merge upstream fix when annotating files with shallow history
+- add support for configurable horizontal split view mode (timeline -> diff)
+- keep the last/first line in view when paging down/up to stay oriented
+- expand horizontal splitscreen support to include tree -> blame views
+- improve handling of cached commit builder statements
+- plug small memleak of file labels when traversing commits from the diff view
+- display message rather than error out when binary files are blamed
+- expand horizontal split coverage to include timeline -> tree views
+- implement '#' keymap to display line numbers in blame view
+- implement (L)ine keymap to navigate directly to the entered line in blame view
+- convert diff code to use upstream v2 API
+- keep lines on screen in view when using keymaps that modify diff content
+- reset diff search state when traversing commits from the diff view
+- apply upstream diff fix to render consecutive edited lines as one block
+- implement '#' keymap to display line numbers in diff view
+- improve `C-f/C-b` paging in the in-app help window
+- add user-defined option to configure search highlight colours
+- implement navigate to (L)ine keymap in diff view
+- enhance timeline and diff view headers
+- implement user-defined option to configure line selection cursor in diff view
+- implement Vim-like `C-e/C-y` keymaps to scroll down/up one line in diff view
+- implement horizontal scrolling in diff and blame views
+- improve view request handling and optimise new view initialisation
+- implement `C-n/C-p` keymap to navigate to the next/previous file in the diff
+- implement (F)ile keymap to navigate directly to a file in the diff
+- apply upstream diff v2 fix for rendering untouched lines as changed
+- implement Vim-like `C-d/C-u` keymaps to scroll the view down/up half a page
+- enhance search behaviour in all views
+
 **fnc 0.6** 2021-11-22
 
 - implement support for user-defined colours in tl, diff, tree and blame views
