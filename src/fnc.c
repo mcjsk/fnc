@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021 Mark Jamsek <mark@jamsek.com>
+ * Copyright (c) 2021, 2022 Mark Jamsek <mark@jamsek.com>
  * Copyright (c) 2013-2021 Stephan Beal <https://wanderinghorse.net>
  * Copyright (c) 2020 Stefan Sperling <stsp@openbsd.org>
  *
