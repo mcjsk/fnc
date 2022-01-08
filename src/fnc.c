@@ -889,8 +889,8 @@ struct fnc_view {
 	int	(*show)(struct fnc_view *);
 	int	(*input)(struct fnc_view **, struct fnc_view *, int);
 	int	(*close)(struct fnc_view *);
-	int	(*search_init)(struct fnc_view *);
-	int	(*search_next)(struct fnc_view *);
+	void	(*grep_init)(struct fnc_view *);
+	int	(*grep)(struct fnc_view *);
 };
 
 static volatile sig_atomic_t rec_sigwinch;
@@ -948,7 +948,7 @@ static int		 view_split_start_ln(int);
 static int		 make_splitscreen(struct fnc_view *);
 static int		 make_fullscreen(struct fnc_view *);
 static int		 view_search_start(struct fnc_view *);
-static int		 tl_search_init(struct fnc_view *);
+static void		 tl_grep_init(struct fnc_view *);
 static int		 tl_search_next(struct fnc_view *);
 static bool		 find_commit_match(struct fnc_commit_artifact *,
 			    regex_t *);
@@ -995,8 +995,10 @@ static int		 request_tl_commits(struct fnc_view *);
 static int		 reset_diff_view(struct fnc_view *, bool);
 static int		 set_selected_commit(struct fnc_diff_view_state *,
 			    struct commit_entry *);
-static int		 diff_search_init(struct fnc_view *);
-static int		 diff_search_next(struct fnc_view *);
+static void		 diff_grep_init(struct fnc_view *);
+static int		 find_next_match(struct fnc_view *);
+static void		 grep_set_view(struct fnc_view *, FILE **, off_t **,
+			    size_t *, int **, int **, int **, int **);
 static int		 view_close(struct fnc_view *);
 static int		 map_repo_path(char **);
 static int		 init_timeline_view(struct fnc_view **, int, int,
@@ -1032,7 +1034,7 @@ static int		 tree_input_handler(struct fnc_view **,
 static int		 blame_tree_entry(struct fnc_view **, int, int,
 			    struct fnc_tree_entry *, struct fnc_parent_trees *,
 			    fsl_uuid_str);
-static int		 tree_search_init(struct fnc_view *);
+static void		 tree_grep_init(struct fnc_view *);
 static int		 tree_search_next(struct fnc_view *);
 static int		 tree_entry_path(char **, struct fnc_parent_trees *,
 			    struct fnc_tree_entry *);
@@ -1062,8 +1064,7 @@ static int		 blame_cb(void *, fsl_annotate_opt const * const,
 static int		 draw_blame(struct fnc_view *);
 static int		 blame_input_handler(struct fnc_view **,
 			    struct fnc_view *, int);
-static int		 blame_search_init(struct fnc_view *);
-static int		 blame_search_next(struct fnc_view *);
+static void		 blame_grep_init(struct fnc_view *);
 static fsl_uuid_cstr	 get_selected_commit_id(struct fnc_blame_line *,
 			    int, int, int);
 static int		 fnc_commit_qid_alloc(struct fnc_commit_qid **,
@@ -1088,7 +1089,7 @@ static int		 browse_branch_tree(struct fnc_view **, int,
 static void		 branch_scroll_up(struct fnc_branch_view_state *, int);
 static int		 branch_scroll_down(struct fnc_view *, int);
 static int		 branch_search_next(struct fnc_view *);
-static int		 branch_search_init(struct fnc_view *);
+static void		 branch_grep_init(struct fnc_view *);
 static int		 match_branchlist_entry(struct fnc_branchlist_entry *,
 			    regex_t *);
 static int		 close_branch_view(struct fnc_view *);
@@ -1856,8 +1857,8 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path,
 	view->show = show_timeline_view;
 	view->input = tl_input_handler;
 	view->close = close_timeline_view;
-	view->search_init = tl_search_init;
-	view->search_next = tl_search_next;
+	view->grep_init = tl_grep_init;
+	view->grep = tl_search_next;
 
 	s->thread_cx.q = fsl_stmt_malloc();
 	rc = fsl_db_prepare(db, s->thread_cx.q, "%b", &sql);
@@ -2845,7 +2846,7 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 		if ((rc = pthread_mutex_lock(&fnc_mutex)))
 			return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
 			    "%s", "pthread_mutex_lock");
-		rc = view->search_next(view);
+		rc = view->grep(view);
 		return rc;
 	}
 
@@ -2904,18 +2905,18 @@ view_input(struct fnc_view **new, int *done, struct fnc_view *view,
 		rc = toggle_fullscreen(new, view);
 		break;
 	case '/':
-		if (view->search_init)
+		if (view->grep_init)
 			view_search_start(view);
 		else
 			rc = view->input(new, view, ch);
 		break;
 	case 'N':
 	case 'n':
-		if (view->started_search && view->search_next) {
+		if (view->started_search && view->grep) {
 			view->searching = (ch == 'n' ?
 			    SEARCH_FORWARD : SEARCH_REVERSE);
 			view->search_status = SEARCH_WAITING;
-			rc = view->search_next(view);
+			rc = view->grep(view);
 		} else
 			rc = view->input(new, view, ch);
 		break;
@@ -3887,12 +3888,12 @@ view_search_start(struct fnc_view *view)
 		return rc;
 
 	if (view->search_status == SEARCH_FOR_END) {
-		view->search_init(view);
+		view->grep_init(view);
 		view->started_search = true;
 		view->searching = SEARCH_FORWARD;
 		view->search_status = SEARCH_WAITING;
 		view->state.timeline.thread_cx.endjmp = true;
-		rc = view->search_next(view);
+		rc = view->grep(view);
 
 		return rc;
 	}
@@ -3902,27 +3903,23 @@ view_search_start(struct fnc_view *view)
 		return rc;
 
 	if (regcomp(&view->regex, input.buf, REG_EXTENDED | REG_NEWLINE) == 0) {
-		if ((rc = view->search_init(view))) {
-			regfree(&view->regex);
-			return rc;
-		}
+		view->grep_init(view);
 		view->started_search = true;
 		view->searching = SEARCH_FORWARD;
 		view->search_status = SEARCH_WAITING;
-		rc = view->search_next(view);
+		rc = view->grep(view);
 	}
 
 	return rc;
 }
 
-static int
-tl_search_init(struct fnc_view *view)
+static void
+tl_grep_init(struct fnc_view *view)
 {
-	struct fnc_tl_view_state	*s = &view->state.timeline;
+	struct fnc_tl_view_state *s = &view->state.timeline;
 
 	s->matched_commit = NULL;
 	s->search_commit = NULL;
-	return 0;
 }
 
 static int
@@ -4257,8 +4254,8 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	view->show = show_diff;
 	view->input = diff_input_handler;
 	view->close = close_diff_view;
-	view->search_init = diff_search_init;
-	view->search_next = diff_search_next;
+	view->grep_init = diff_grep_init;
+	view->grep = find_next_match;
 
 	return rc;
 }
@@ -6082,46 +6079,51 @@ set_selected_commit(struct fnc_diff_view_state *s, struct commit_entry *entry)
 	return 0;
 }
 
-static int
-diff_search_init(struct fnc_view *view)
+static void
+diff_grep_init(struct fnc_view *view)
 {
 	struct fnc_diff_view_state *s = &view->state.diff;
 
 	s->matched_line = 0;
-	return 0;
 }
 
 static int
-diff_search_next(struct fnc_view *view)
+find_next_match(struct fnc_view *view)
 {
-	struct fnc_diff_view_state	*s = &view->state.diff;
-	char				*line = NULL;
-	ssize_t				 linelen;
-	size_t				 linesz = 0;
-	int				 lineno;
+	FILE	*f = NULL;
+	off_t	*line_offsets = NULL;
+	ssize_t	 linelen;
+	size_t	 nlines = 0, linesz = 0;
+	int	*first, *last, *match, *selected;
+	int	 lineno;
+	char	*line = NULL;
+
+	first = last = match = selected = NULL;
+	grep_set_view(view, &f, &line_offsets, &nlines, &first, &last,
+	    &match, &selected);
 
 	if (view->searching == SEARCH_DONE) {
 		view->search_status = SEARCH_CONTINUE;
 		return 0;
 	}
 
-	if (s->matched_line) {
+	if (*match) {
 		if (view->searching == SEARCH_FORWARD)
-			lineno = s->matched_line + 1;
+			lineno = *match + 1;
 		else
-			lineno = s->matched_line - 1;
+			lineno = *match - 1;
 	} else {
 		if (view->searching == SEARCH_FORWARD)
 			lineno = 1;
 		else
-			lineno = s->nlines;
+			lineno = nlines;
 	}
 
 	while (1) {
 		off_t offset;
 
-		if (lineno <= 0 || (size_t)lineno > s->nlines) {
-			if (s->matched_line == 0) {
+		if (lineno <= 0 || (size_t)lineno > nlines) {
+			if (*match == 0) {
 				view->search_status = SEARCH_CONTINUE;
 				break;
 			}
@@ -6129,11 +6131,11 @@ diff_search_next(struct fnc_view *view)
 			if (view->searching == SEARCH_FORWARD)
 				lineno = 1;
 			else
-				lineno = s->nlines;
+				lineno = nlines;
 		}
 
-		offset = s->line_offsets[lineno - 1];
-		if (fseeko(s->f, offset, SEEK_SET) != 0) {
+		offset = line_offsets[lineno - 1];
+		if (fseeko(f, offset, SEEK_SET) != 0) {
 			fsl_free(line);
 			return RC(fsl_errno_to_rc(errno, FSL_RC_IO),
 			    "%s", "fseeko");
@@ -6142,13 +6144,13 @@ diff_search_next(struct fnc_view *view)
 		 * Expand tabs for accurate rm_so/rm_eo offsets, and save to
 		 * view->line so we don't have to expand when drawing matches.
 		 */
-		linelen = getline(&line, &linesz, s->f);
+		linelen = getline(&line, &linesz, f);
 		view->line.sz = expand_tab(view->line.buf,
 		    sizeof(view->line.buf), line, linelen);
 		if (linelen != -1 && regexec(&view->regex, view->line.buf, 1,
 		    &view->regmatch, 0) == 0) {
 			view->search_status = SEARCH_CONTINUE;
-			s->matched_line = lineno;
+			*match = lineno;
 			while (view->pos.col > view->regmatch.rm_so)
 				--view->pos.col;  /* Scroll till on-screen. */
 			break;
@@ -6160,12 +6162,45 @@ diff_search_next(struct fnc_view *view)
 	}
 	fsl_free(line);
 
-	if (s->matched_line) {
-		s->first_line_onscreen = s->matched_line;
-		s->selected_line = 1;
+	/*
+	 * If match is on current screen, move to it and highlight; else,
+	 * scroll view till matching line is ~1/3rd from the top and highlight.
+	 */
+	if (*match) {
+		if (*match >= *first && *match <= *last)
+			*selected = *match - *first + 1;
+		else {
+			*first = MAX(*match - view->nlines / 3, 1);
+			*selected = *match - *first + 1;
+		}
 	}
 
-	return 0;
+	return FSL_RC_OK;
+}
+
+static void
+grep_set_view(struct fnc_view *view, FILE **f, off_t **line_offsets,
+    size_t *nlines, int **first, int **last, int **match, int **selected)
+{
+	if (view->vid == FNC_VIEW_DIFF) {
+		struct fnc_diff_view_state *s = &view->state.diff;
+		*f = s->f;
+		*nlines = s->nlines;
+		*line_offsets = s->line_offsets;
+		*match = &s->matched_line;
+		*first = &s->first_line_onscreen;
+		*last = &s->last_line_onscreen;
+		*selected = &s->selected_line;
+	} else if (view->vid == FNC_VIEW_BLAME) {
+		struct fnc_blame_view_state *s = &view->state.blame;
+		*f = s->blame.f;
+		*nlines = s->blame.nlines;
+		*line_offsets = s->blame.line_offsets;
+		*match = &s->matched_line;
+		*first = &s->first_line_onscreen;
+		*last = &s->last_line_onscreen;
+		*selected = &s->selected_line;
+	}
 }
 
 static int
@@ -6770,8 +6805,8 @@ open_tree_view(struct fnc_view *view, const char *path, fsl_id_t rid)
 	view->show = show_tree_view;
 	view->input = tree_input_handler;
 	view->close = close_tree_view;
-	view->search_init = tree_search_init;
-	view->search_next = tree_search_next;
+	view->grep_init = tree_grep_init;
+	view->grep = tree_search_next;
 end:
 	if (rc)
 		close_tree_view(view);
@@ -7788,13 +7823,12 @@ end:
 	return rc;
 }
 
-static int
-tree_search_init(struct fnc_view *view)
+static void
+tree_grep_init(struct fnc_view *view)
 {
 	struct fnc_tree_view_state *s = &view->state.tree;
 
 	s->matched_entry = NULL;
-	return 0;
 }
 
 static int
@@ -7802,7 +7836,7 @@ tree_search_next(struct fnc_view *view)
 {
 	struct fnc_tree_view_state	*s = &view->state.tree;
 	struct fnc_tree_entry		*te = NULL;
-	int				 rc = 0;
+	int				 rc = FSL_RC_OK;
 
 	if (view->searching == SEARCH_DONE) {
 		view->search_status = SEARCH_CONTINUE;
@@ -7812,18 +7846,20 @@ tree_search_next(struct fnc_view *view)
 	if (s->matched_entry) {
 		if (view->searching == SEARCH_FORWARD) {
 			if (s->selected_entry)
-				te = &s->tree->entries[s->selected_entry->idx
-				    + 1];
+				te = get_tree_entry(s->tree,
+				    s->selected_entry->idx + 1);
 			else
 				te = &s->tree->entries[0];
 		} else {
 			if (s->selected_entry == NULL)
 				te = &s->tree->entries[s->tree->nentries - 1];
 			else
-				te = &s->tree->entries[s->selected_entry->idx
-				    - 1];
+				te = get_tree_entry(s->tree,
+				    s->selected_entry->idx - 1);
 		}
 	} else {
+		if (s->selected_entry)
+			te = s->selected_entry;
 		if (view->searching == SEARCH_FORWARD)
 			te = &s->tree->entries[0];
 		else
@@ -7849,14 +7885,23 @@ tree_search_next(struct fnc_view *view)
 		}
 
 		if (view->searching == SEARCH_FORWARD)
-			te = &s->tree->entries[te->idx + 1];
+			te = get_tree_entry(s->tree, te->idx + 1);
 		else
-			te = &s->tree->entries[te->idx - 1];
+			te = get_tree_entry(s->tree, te->idx - 1);
 	}
 
 	if (s->matched_entry) {
-		s->first_entry_onscreen = s->matched_entry;
-		s->selected_idx = 0;
+		int	idx = s->matched_entry->idx;
+		bool	parent = !s->first_entry_onscreen;
+
+		if (idx >= (parent ? 0 : s->first_entry_onscreen->idx) &&
+		    idx <= s->last_entry_onscreen->idx)
+			s->selected_idx = idx - (parent ? - 1 :
+			    s->first_entry_onscreen->idx);
+		else {
+			s->first_entry_onscreen = s->matched_entry;
+			s->selected_idx = 0;
+		}
 	}
 
 	return rc;
@@ -8544,8 +8589,8 @@ open_blame_view(struct fnc_view *view, char *path, fsl_uuid_str commit_id,
 	view->show = show_blame_view;
 	view->input = blame_input_handler;
 	view->close = close_blame_view;
-	view->search_init = blame_search_init;
-	view->search_next = blame_search_next;
+	view->grep_init = blame_grep_init;
+	view->grep = find_next_match;
 
 	return run_blame(view);
 }
@@ -9419,90 +9464,12 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	return rc;
 }
 
-static int
-blame_search_init(struct fnc_view *view)
+static void
+blame_grep_init(struct fnc_view *view)
 {
 	struct fnc_blame_view_state *s = &view->state.blame;
 
 	s->matched_line = 0;
-	return 0;
-}
-
-static int
-blame_search_next(struct fnc_view *view)
-{
-	struct fnc_blame_view_state	*s = &view->state.blame;
-	char				*line = NULL;
-	ssize_t				 linelen;
-	size_t				 linesz = 0;
-	int				 lineno;
-
-	if (view->searching == SEARCH_DONE) {
-		view->search_status = SEARCH_CONTINUE;
-		return 0;
-	}
-
-	if (s->matched_line) {
-		if (view->searching == SEARCH_FORWARD)
-			lineno = s->matched_line + 1;
-		else
-			lineno = s->matched_line - 1;
-	} else {
-		if (view->searching == SEARCH_FORWARD)
-			lineno = 1;
-		else
-			lineno = s->blame.nlines;
-	}
-
-	while (1) {
-		off_t offset;
-
-		if (lineno <= 0 || lineno > s->blame.nlines) {
-			if (s->matched_line == 0) {
-				view->search_status = SEARCH_CONTINUE;
-				break;
-			}
-
-			if (view->searching == SEARCH_FORWARD)
-				lineno = 1;
-			else
-				lineno = s->blame.nlines;
-		}
-
-		offset = s->blame.line_offsets[lineno - 1];
-		if (fseeko(s->blame.f, offset, SEEK_SET) != 0) {
-			fsl_free(line);
-			return RC(fsl_errno_to_rc(errno, FSL_RC_IO),
-			    "%s", "fseeko");
-		}
-		/*
-		 * Expand tabs for accurate rm_so/rm_eo offsets, and save to
-		 * view->line so we don't have to expand when drawing matches.
-		 */
-		linelen = getline(&line, &linesz, s->blame.f);
-		view->line.sz = expand_tab(view->line.buf,
-		    sizeof(view->line.buf), line, linelen);
-		if (linelen != -1 && regexec(&view->regex, view->line.buf, 1,
-		    &view->regmatch, 0) == 0) {
-			view->search_status = SEARCH_CONTINUE;
-			s->matched_line = lineno;
-			while (view->pos.col > view->regmatch.rm_so)
-				--view->pos.col;  /* Scroll till on-screen. */
-			break;
-		}
-		if (view->searching == SEARCH_FORWARD)
-			++lineno;
-		else
-			--lineno;
-	}
-	fsl_free(line);
-
-	if (s->matched_line) {
-		s->first_line_onscreen = s->matched_line;
-		s->selected_line = 1;
-	}
-
-	return 0;
 }
 
 static fsl_uuid_cstr
@@ -9734,8 +9701,8 @@ open_branch_view(struct fnc_view *view, int branch_flags, const char *glob,
 	view->show = show_branch_view;
 	view->input = branch_input_handler;
 	view->close = close_branch_view;
-	view->search_init = branch_search_init;
-	view->search_next = branch_search_next;
+	view->grep_init = branch_grep_init;
+	view->grep = branch_search_next;
 end:
 	if (rc)
 		fnc_free_branches(&s->branches);
@@ -10279,13 +10246,12 @@ branch_scroll_down(struct fnc_view *view, int maxscroll)
 	return FSL_RC_OK;
 }
 
-static int
-branch_search_init(struct fnc_view *view)
+static void
+branch_grep_init(struct fnc_view *view)
 {
 	struct fnc_branch_view_state *s = &view->state.branch;
 
 	s->matched_branch = NULL;
-	return 0;
 }
 
 static int
@@ -10347,11 +10313,17 @@ branch_search_next(struct fnc_view *view)
 	}
 
 	if (s->matched_branch) {
-		s->first_branch_onscreen = s->matched_branch;
-		s->selected = 0;
+		int idx = s->matched_branch->idx;
+		if (idx >= s->first_branch_onscreen->idx &&
+		    idx <= s->last_branch_onscreen->idx)
+			s->selected = idx - s->first_branch_onscreen->idx;
+		else {
+			s->first_branch_onscreen = s->matched_branch;
+			s->selected = 0;
+		}
 	}
 
-	return 0;
+	return FSL_RC_OK;
 }
 
 static int
