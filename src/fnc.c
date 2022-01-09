@@ -2362,6 +2362,9 @@ signal_tl_thread(struct fnc_view *view, int wait)
 		if (cx->eotl)
 			break;
 
+		if (view->mode == VIEW_SPLIT_HRZN)
+			cx->reset = true;
+
 		/* Wake timeline thread. */
 		if ((rc = pthread_cond_signal(&cx->commit_consumer)))
 			return RC(fsl_errno_to_rc(rc, FSL_RC_MISUSE),
@@ -3624,14 +3627,19 @@ static enum view_mode
 view_get_split(struct fnc_view *view, int *start_col, int *start_ln)
 {
 	char *mode = fnc_conf_getopt(FNC_VIEW_SPLIT_MODE, false);
+	enum view_mode vm;
 
-	if (!mode || mode[0] != 'h')
+	if (!mode || mode[0] != 'h') {
+		vm = VIEW_SPLIT_VERT;
 		*start_col = view_split_start_col(view->start_col);
+	}
 
-	if (!*start_col && (!mode || mode[0] != 'v'))
+	if (!*start_col && (!mode || mode[0] != 'v')) {
+		vm = VIEW_SPLIT_HRZN;
 		*start_ln = view_split_start_ln(view->lines);
+	}
 
-	return *start_col ? VIEW_SPLIT_VERT : VIEW_SPLIT_HRZN;
+	return vm;
 }
 
 /* Split view horizontally at *start_ln and offset view->state->selected line */
