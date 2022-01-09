@@ -1,8 +1,8 @@
 # README
 
-# fnc 0.6
+# fnc 0.7
 
-## An ncurses browser for [Fossil][0] repositories in the terminal.
+## An interactive ncurses browser for [Fossil][0] repositories.
 
 `fnc` uses [libfossil][1] to create a [`fossil ui`][2] experience in the
 terminal.
@@ -10,7 +10,7 @@ terminal.
 Tested and confirmed to run on the following amd64 systems (additional platforms
 noted inline):
 
-1. OpenBSD 6.8- and 6.9-release
+1. OpenBSD 6.8-, 6.9-, and 7.0-release
 2. macOS 10.15.7 (Catalina) and 11.5.2 (Big Sur)
 3. Linux Mint 20.2 (32- and 64-bit ARM)
 4. Ubuntu 18.04 running Linux kernel 5.11 (32-bit ARM)
@@ -20,6 +20,14 @@ noted inline):
 Alpha development notwithstanding, the `timeline`, `diff`, `tree`, `blame`, and
 `branch` commands are relatively stable; however, there is no commitment to
 refrain from breaking changes.
+
+# Install
+
+* **OpenBSD**
+  - `doas pkg_add fnc`
+* **macOS**
+  - `sudo port install fnc`
+* **[Download](/uv/download.html)** and install the binary on your path
 
 # Build
 
@@ -36,8 +44,8 @@ refrain from breaking changes.
 
 This will install the `fnc` executable and man page into `/usr/local/bin` and
 `/usr/local/share/man/man1`, respectively. Alternatively, cryptographically
-signed binaries for some of the abovementioned platforms are available to
-[download][3].
+signed tarballs of the source code and binaries for some of the abovementioned
+platforms are available to [download][3].
 
 # Doc
 
@@ -64,7 +72,7 @@ behaviour; or, if possible, (2) a shell script that contains all necessary
 ingredients to reproduce the problem.
 
 Patches are thoughtfully considered and can be sent to the [mailing list][12].
-While `diff -up` patches are preferred, `fossil patch create` and `fossil diff` 
+While `diff -up` patches are preferred, `fossil patch create` and `fossil diff`
 patches are also welcomed. Please ensure code conforms to the C99 standard,
 and complies with OpenBSD's KNF [style(9)][13]. Any patch containing
 user-visible code addition, modification, or deletion (i.e., code that impacts
@@ -73,13 +81,13 @@ by the change.
 
 # Screenshots
 
-![diff split screen](https://fnc.bsdbox.org/uv/resources/img/fnc-diff-splitscreen.png "fnc diff split screen")
-![diff renamed file](https://fnc.bsdbox.org/uv/resources/img/fnc-diff-full-file_renamed.png "fnc diff file renamed")
-![diff added file](https://fnc.bsdbox.org/uv/resources/img/fnc-diff-split-file_added.png "fnc diff file added")
-![diff removed file](https://fnc.bsdbox.org/uv/resources/img/fnc-diff-split-file-removed.png "fnc diff file removed")
-![blame split screen](https://fnc.bsdbox.org/uv/resources/img/fnc-blame-splitscreen.png "fnc blame split screen")
-![tree split screen](https://fnc.bsdbox.org/uv/resources/img/fnc-tree-splitscreen.png "fnc tree split screen")
-![branch split screen](https://fnc.bsdbox.org/uv/resources/img/fnc-branch-splitscreen.png "fnc branch split screen")
+![diff vsplit](https://fnc.bsdbox.org/uv/resources/img/fnc-diff-vsplit.png "diff vertical split")
+![diff hsplit renamed](https://fnc.bsdbox.org/uv/resources/img/fnc-diff-hsplit-renamed.png "diff horizontal split file renamed")
+![diff vsplit added](https://fnc.bsdbox.org/uv/resources/img/fnc-diff-vsplit-added.png "diff vertical split file added")
+![diff vsplit removed](https://fnc.bsdbox.org/uv/resources/img/fnc-diff-vsplit-removed.png "diff vertical split file removed")
+![blame vsplit](https://fnc.bsdbox.org/uv/resources/img/fnc-blame-vsplit.png "blame vertical split")
+![tree vsplit](https://fnc.bsdbox.org/uv/resources/img/fnc-tree-vsplit.png "tree vertical split")
+![branch hsplit](https://fnc.bsdbox.org/uv/resources/img/fnc-branch-hsplit.png "branch horizontal split")
 ![in-app help](https://fnc.bsdbox.org/uv/resources/img/fnc-inapp_help.png "fnc in-app help")
 ![timeline help](https://fnc.bsdbox.org/uv/resources/img/fnc-timeline-help.png "fnc timeline help")
 
@@ -87,7 +95,7 @@ by the change.
 
 **fnc** [fɪŋk]  
 *noun* (n.)  
-1. an ncurses browser for [Fossil][0] repositories in the terminal  
+1. an interactive ncurses browser for [Fossil][0] repositories  
 *verb* (v.)  
 2. to inform  
 etymology  
@@ -107,4 +115,3 @@ From the German word *Fink*, meaning "finch", a type of bird.
 [11]: https://fnc.bsdbox.org/ticket
 [12]: https://itac.bsdbox.org/listinfo/fnc
 [13]: https://man.openbsd.org/style.9
-
