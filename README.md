@@ -1,6 +1,6 @@
 # README
 
-# fnc 0.7
+# fnc 0.8
 
 ## An interactive ncurses browser for [Fossil][0] repositories.
 
