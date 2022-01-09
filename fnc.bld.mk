@@ -6,7 +6,7 @@
 CC ?=		cc
 PREFIX ?=	/usr/local
 MANDIR ?=	/share/man
-VERSION ?=	0.8
+VERSION ?=	0.9
 
 # FLAGS NEEDED TO BUILD SQLITE3
 SQLITE_CFLAGS =	${CFLAGS} -Wall -Werror -Wno-sign-compare -pedantic -std=c99 \
