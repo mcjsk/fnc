@@ -459,6 +459,12 @@ for details.
 Display diff command help and usage information then exit.
 .It Fl i , -invert
 Invert the difference between artifacts when displaying the diff.
+.It Fl q , -quiet
+Disable verbose output; that is, do not output complete content of newly added
+or deleted files, which are displayed by default.  Verbosity can also be
+toggled with the
+.Sy v
+key binding as documented below.
 .It Fl R , -repo Ar path
 Use the
 .Xr fossil 1
@@ -739,6 +745,12 @@ list of valid arguments this option accepts, see
 "Fossil's Check-in Names".
 .It Fl h , -help
 Display blame command help and usage information then exit.
+.It Fl l , -line Ar lineno
+Open annotated file at
+.Ar lineno .
+As documented below, once the file is loaded, the
+.Sy L
+key binding can be used to navigate to an arbitrary line in the file.
 .It Fl n , -limit Ar n
 Limit depth of blame history to
 .Ar n
@@ -910,7 +922,7 @@ branch view key binding as documented below.
 User-defined colours are also supported, see
 .Sx ENVIRONMENT
 for details.
-.It Fl c , -close
+.It Fl c , -closed
 Display only closed branches.
 .It Fl h , -help
 Display branch command help and usage information then exit.

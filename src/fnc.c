@@ -77,7 +77,7 @@
 #define MIN(_a, _b)	((_a) < (_b) ? (_a) : (_b))
 #define MAX(_a, _b)	((_a) > (_b) ? (_a) : (_b))
 #define ABS(_n)		((_n) >= 0 ? (_n) : -(_n))
-#if !defined(CTRL)
+#ifndef CTRL
 #define CTRL(key)	((key) & 037)	/* CTRL+<key> input. */
 #endif
 #define nitems(a)	(sizeof((a)) / sizeof((a)[0]))
@@ -113,10 +113,13 @@
 
 /* Portability macros. */
 #ifndef __OpenBSD__
-#ifndef HAVE_STRTONUM
-#  define strtonum(s, min, max, o) strtol(s, (char **)o, 10)
+# ifndef HAVE_STRTONUM  /* Use strtol and a range check to emulate strtonum. */
+#  define strtonum(s, min, max, o)	strtol(s, (char **)o, 10)
+#  define inrange(n, min, max)		(((n) >= (min)) && ((n) <= (max)))
 # endif /* HAVE_STRTONUM */
-#endif
+#else
+#  define inrange(n, min, max) true
+#endif /* OpenBSD */
 
 #ifndef __dead
 #define __dead	__attribute__((noreturn))
@@ -193,6 +196,9 @@ static struct fnc_setup {
 	const char	*glob;		/* Only load commits containing glob */
 	bool		 utc;		/* Display UTC sans user local time. */
 
+	/* Blame options. */
+	const char	*lineno;	/* Line to open blame view. */
+
 	/* Diff options. */
 	const char	*context;	/* Number of context lines. */
 	bool		 ws;		/* Ignore whitespace-only changes. */
@@ -219,7 +225,7 @@ static struct fnc_setup {
 	fcli_cliflag	  cliflags_timeline[13];	/* Timeline options. */
 	fcli_cliflag	  cliflags_diff[8];		/* Diff options. */
 	fcli_cliflag	  cliflags_tree[5];		/* Tree options. */
-	fcli_cliflag	  cliflags_blame[7];		/* Blame options. */
+	fcli_cliflag	  cliflags_blame[8];		/* Blame options. */
 	fcli_cliflag	  cliflags_branch[11];		/* Branch options. */
 	fcli_cliflag	  cliflags_config[5];		/* Config options. */
 } fnc_init = {
@@ -238,6 +244,7 @@ static struct fnc_setup {
 	NULL,		/* filter_type temp placeholder for filter_types cb. */
 	NULL,		/* glob filter defaults to off; all commits are shown */
 	false,		/* utc defaults to off (i.e., show user local time). */
+	NULL,		/* lineno default: open blame at the first line. */
 	NULL,		/* context defaults to five context lines. */
 	false,		/* ws defaults to acknowledge whitespace. */
 	false,		/* nocolour defaults to off (i.e., use diff colours). */
@@ -407,6 +414,8 @@ static struct fnc_setup {
 	    "https://fossil-scm.org/home/doc/trunk/www/checkin_names.wiki"),
 	    FCLI_FLAG_BOOL("h", "help", NULL,
 	    "Display blame command help and usage."),
+	    FCLI_FLAG("l", "line", "<lineno>", &fnc_init.lineno,
+	    "Open annotated file at <lineno>."),
 	    FCLI_FLAG("n", "limit", "<n>", &fnc_init.nrecords.zlimit,
 	    "Limit depth of blame history to <n> commits or seconds. Denote the"
 	    "\n    latter by postfixing 's' (e.g., 30s). Useful for large files"
@@ -782,6 +791,7 @@ struct fnc_blame_view_state {
 	struct fnc_commit_artifact	*selected_commit;
 	struct fnc_colours		 colours;
 	fsl_uuid_str			 commit_id;
+	const char			*lineno;
 	char				*path;
 	int				 first_line_onscreen;
 	int				 last_line_onscreen;
@@ -1053,7 +1063,7 @@ static int		 match_tree_entry(struct fnc_tree_entry *, regex_t *);
 static void		 fnc_object_tree_close(struct fnc_tree_object *);
 static void		 fnc_close_repository_tree(struct fnc_repository_tree *);
 static int		 open_blame_view(struct fnc_view *, char *,
-			    fsl_uuid_str, fsl_id_t, int);
+			    fsl_uuid_str, fsl_id_t, int, const char *);
 static int		 run_blame(struct fnc_view *);
 static int		 fnc_dump_buffer_to_file(off_t *, int *, off_t **,
 			    FILE *, fsl_buffer *);
@@ -6435,7 +6445,7 @@ usage_blame(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
 	    " usage: %s blame [-C|--no-colour] [-R path] [-c commit [-r]] "
-	    "[-h|--help] [-n n] path\n"
+	    "[-h|--help] [-l lineno] [-n n] path\n"
 	    "  e.g.: %s blame -c d34db33f src/foo.c\n\n" ,
 	    fcli_progname(), fcli_progname());
 }
@@ -6457,7 +6467,7 @@ usage_config(void)
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
 	    " usage: %s config [-R path] [-h|--help] [--ls] "
 	    "[setting [value|--unset]]\n"
-	    "  e.g.: %s config FNC_DIFF_COMMIT blue\n\n" ,
+	    "  e.g.: %s config FNC_COLOUR_COMMIT blue\n\n" ,
 	    fcli_progname(), fcli_progname());
 }
 
@@ -7821,7 +7831,7 @@ blame_tree_entry(struct fnc_view **new_view, int start_col, int start_ln,
 		goto end;
 	}
 
-	rc = open_blame_view(blame_view, path, commit_id, 0, 0);
+	rc = open_blame_view(blame_view, path, commit_id, 0, 0, NULL);
 	if (rc)
 		view_close(blame_view);
 	else
@@ -8545,7 +8555,8 @@ cmd_blame(fcli_command const *argv)
 		goto end;
 	}
 
-	rc = open_blame_view(view, path, commit_id, tip, nlimit);
+	rc = open_blame_view(view, path, commit_id, tip, nlimit,
+	    fnc_init.lineno);
 	if (rc)
 		goto end;
 	rc = view_loop(view);
@@ -8557,7 +8568,7 @@ end:
 
 static int
 open_blame_view(struct fnc_view *view, char *path, fsl_uuid_str commit_id,
-    fsl_id_t tip, int nlimit)
+    fsl_id_t tip, int nlimit, const char *lineno)
 {
 	struct fnc_blame_view_state	*s = &view->state.blame;
 	int				 rc = 0;
@@ -8586,6 +8597,7 @@ open_blame_view(struct fnc_view *view, char *path, fsl_uuid_str commit_id,
 	s->blame.nlimit = nlimit;
 	s->spin_idx = 0;
 	s->colour = !fnc_init.nocolour && has_colors();
+	s->lineno = lineno;
 
 	if (s->colour) {
 		STAILQ_INIT(&s->colours);
@@ -8681,6 +8693,14 @@ run_blame(struct fnc_view *view)
 	/* Don't include EOF \n in blame line count. */
 	if (blame->line_offsets[blame->nlines - 1] == blame->filesz)
 		--blame->nlines;
+
+	if (s->lineno) {
+		long ln;
+		rc = strtonumcheck(&ln, s->lineno, 1, blame->nlines);
+		if (rc)
+			goto end;
+		s->gtl = ln;
+	}
 
 	blame->lines = calloc(blame->nlines, sizeof(*blame->lines));
 	if (blame->lines == NULL) {
@@ -10495,21 +10515,22 @@ static int
 strtonumcheck(long *ret, const char *nstr, const int min, const int max)
 {
 	const char	*ptr;
-	int		 n;
+	long		 n;
 
 	ptr = NULL;
 	errno = 0;
 
+	/*
+	 * Ubuntu strtol has weird errno and return semantics compared to Unix
+	 * implementations so we get a range error for "all_alpha_char" strings.
+	 */
 	n = strtonum(nstr, min, max, &ptr);
-	if (errno == ERANGE)
-		return RC(FSL_RC_RANGE, "<n> out of range: -n|--limit=%s [%s]",
-		    nstr, ptr);
-	else if (errno != 0 || errno == EINVAL)
-		return RC(FSL_RC_MISUSE, "<n> not a number: -n|--limit=%s [%s]",
-		    nstr, ptr);
+	if (errno == EINVAL)
+		return RC(FSL_RC_MISUSE, "not a number: %s", nstr);
+	else if (errno != 0 || errno == ERANGE || !inrange(n, min, max))
+		return RC(FSL_RC_RANGE, "out of range: %s", nstr);
 	else if (ptr && *ptr != '\0')
-		return RC(FSL_RC_MISUSE,
-		    "invalid char in <n>: -n|--limit=%s [%s]", nstr, ptr);
+		return RC(FSL_RC_MISUSE, "invalid char: %s", nstr);
 
 	*ret = n;
 	return FSL_RC_OK;
