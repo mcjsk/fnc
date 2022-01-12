@@ -5944,7 +5944,7 @@ int fsl_ckout_filename_check( fsl_cx * const f, bool relativeToCwd,
     char const * zLocalRoot;
     char const * zFull;
     fsl_size_t nLocalRoot;
-    fsl_size_t nFull;
+    fsl_size_t nFull = 0;
     fsl_buffer * const full = fsl__cx_scratchpad(f);
     int (*xCmp)(char const *, char const *,fsl_size_t);
     bool endsWithSlash;
@@ -8874,7 +8874,6 @@ static int fcli_open(void){
     rc = fsl_repo_open( f, fcli.transient.repoDbArg );
   }
   else if(fcli.clientFlags.checkoutDir){
-    fsl_buffer dir = fsl_buffer_empty;
     char const * dirName = fcli.clientFlags.checkoutDir;
     FCLI_V3(("Trying to open checkout from [%s]...\n",
              dirName));
@@ -8889,7 +8888,6 @@ static int fcli_open(void){
                             dirName, rc, fsl_rc_cstr(rc));
       }
     }
-    fsl_buffer_reserve(&dir, 0);
     if(rc) return rc;
   }
   if(!rc){
@@ -23106,6 +23104,84 @@ int fsl__crosslink_begin(fsl_cx * const f){
   return rc;
 }
 
+int fsl_deck_foreach(fsl_cx * const f, fsl_satype_e type,
+                     fsl_deck_visitor_f visitor,
+                     void * visitorState){
+  int rc = 0;
+  fsl_stmt q = fsl_stmt_empty;
+  switch(type){
+    case FSL_SATYPE_CHECKIN:
+    case FSL_SATYPE_FORUMPOST:
+    case FSL_SATYPE_CONTROL:
+      rc = fsl_cx_prepare(f, &q,
+                          "SELECT objid FROM event WHERE type=%Q",
+                          fsl_satype_event_cstr(type));
+      break;
+    case FSL_SATYPE_WIKI:
+      rc = fsl_cx_prepare(f, &q,
+                          "SELECT x.rid AS mrid FROM tag t, tagxref x "
+                          "WHERE x.tagid=t.tagid "
+                          "AND t.tagname LIKE 'wiki-%%' "
+                          "AND TYPEOF(x.value+0)='integer'"
+                          // ^^^^ only 'wiki-%' tags which are wiki pages
+                          "ORDER BY x.mtime DESC");
+      break;
+    case FSL_SATYPE_TICKET:
+      rc = fsl_cx_prepare(f, &q,
+                          "SELECT rid FROM tagxref WHERE tagid IN "
+                          "(SELECT tagid FROM tag WHERE tagname LIKE "
+                          "'tkt-%%' AND LENGTH(tagname)=44) "
+                          "ORDER BY mtime");
+      break;
+    case FSL_SATYPE_TECHNOTE:
+      rc = fsl_cx_prepare(f, &q,
+                          "SELECT x.rid AS mrid FROM tag t, tagxref x "
+                          "WHERE x.tagid=t.tagid "
+                          "AND t.tagname LIKE 'event-%%' "
+                          // ^^^^ only 'wiki-%' tags which are wiki pages
+                          "ORDER BY x.mtime DESC");
+      break;
+#if 0
+    case FSL_SATYPE_ANY:
+      /* This case leads to confusion because ATTACHMENT records are
+         recorded in the timeline as the underlying type of record to
+         which the attachment is applied. e.g. an attachment on a wiki
+         page is listed as a 'w' event. */
+      rc = fsl_cx_prepare(f, &q,
+                          "SELECT objid FROM event WHERE type IN"
+                          "(%Q, %Q, %Q, %Q, %Q) /*%s()*/",
+                          fsl_satype_event_cstr(FSL_SATYPE_CHECKIN),
+                          fsl_satype_event_cstr(FSL_SATYPE_TICKET),
+                          fsl_satype_event_cstr(FSL_SATYPE_FORUMPOST),
+                          fsl_satype_event_cstr(FSL_SATYPE_WIKI),
+                          fsl_satype_event_cstr(FSL_SATYPE_CONTROL),
+                          __func__);
+      break;
+#endif
+    default:
+      return fsl_cx_err_set(f, FSL_RC_TYPE,
+                            "Artifact type [%s] is not currently "
+                            "supported by %s().",
+                            fsl_satype_cstr(type),
+                            __func__);
+  }
+  while(0==rc && (FSL_RC_STEP_ROW==fsl_stmt_step(&q))){
+    fsl_id_t const rid = fsl_stmt_g_id(&q, 0);
+    fsl_deck d = fsl_deck_empty;
+    rc = fsl_deck_load_rid(f, &d, rid, type);
+    if(0==rc){
+      rc = visitor(f, &d, visitorState);
+    }
+    fsl_deck_finalize(&d);
+    if(FSL_RC_BREAK==rc){
+      rc = 0;
+      break;
+    }
+  }
+  fsl_stmt_finalize(&q);
+  return rc;
+}
+
 #undef MARKER
 #undef AGE_FUDGE_WINDOW
 #undef AGE_ADJUST_INCREMENT
@@ -31201,7 +31277,7 @@ bool fsl_starts_with_bom_utf8(fsl_buffer const * const b,
 }
 
 bool fsl_invalid_utf8(fsl_buffer const * const b){
-  fsl_size_t n;
+  fsl_size_t n = 0;
   const unsigned char *z = (unsigned char *) fsl_buffer_cstr2(b, &n);
   unsigned char c; /* lead byte to be handled. */
   if( n==0 ) return false;  /* Empty file -> OK */
@@ -35096,15 +35172,15 @@ int fsl_repo_dir_names( fsl_cx * const f, fsl_id_t rid, fsl_list * const tgt,
 }
 
 /* UNTESTED */
-char fsl_repo_is_readonly(fsl_cx const * f){
-  if(!f || !f->dbMain) return 0;
+bool fsl_repo_is_readonly(fsl_cx const * f){
+  if(!f || !f->dbMain) return false;
   else{
     int const roleId = f->ckout.db.dbh ? FSL_DBROLE_MAIN : FSL_DBROLE_REPO
       /* If CKOUT is attached, it is the main DB and REPO is ATTACHed. */
       ;
     char const * zRole = fsl_db_role_name(roleId);
     assert(f->dbMain);
-    return sqlite3_db_readonly(f->dbMain->dbh, zRole) ? 1 : 0;
+    return sqlite3_db_readonly(f->dbMain->dbh, zRole) ? true : false;
   }
 }
 
@@ -36208,6 +36284,90 @@ int fsl_cidiff(fsl_cx * const f, fsl_cidiff_opt const * const opt){
 bool fsl_repo_forbids_delta_manifests(fsl_cx * const f){
   return fsl_config_get_bool(f, FSL_CONFDB_REPO, false,
                              "forbid-delta-manifests");
+}
+
+int fsl_tkt_id_to_rids(fsl_cx * const f, char const * tktId,
+                       fsl_id_t ** ridList){
+  fsl_db * const dbR = fsl_needs_repo(f);
+  if(!dbR) return FSL_RC_NOT_A_REPO;
+  fsl_stmt q = fsl_stmt_empty;
+  int rc;
+  fsl_id_t * rids = 0;
+  int const isFullId = fsl_is_uuid(tktId);
+  unsigned int n = 0;
+  if(FSL_STRLEN_SHA1<isFullId){
+    return fsl_cx_err_set(f, FSL_RC_RANGE,
+                          "Ticket ID is not valid. Expecting <=%d bytes of "
+                          "lower-case hex values.", FSL_STRLEN_SHA1);
+  }
+  rc = fsl_cx_transaction_begin(f);
+  if(rc) return rc;
+  if(isFullId){
+    // Expect an exact match...
+    assert(FSL_STRLEN_SHA1==isFullId);
+    rc = fsl_cx_prepare(f, &q,
+                        "SELECT b.rid, b.uuid FROM blob b, tagxref x, tag t "
+                        "WHERE t.tagname = 'tkt-'||%Q "
+                        "AND t.tagid=x.tagid AND x.rid=b.rid "
+                        "ORDER BY x.mtime, x.rowid",
+                        tktId);
+  }else{
+    /* Check for an ambiguous match of an ID prefix...
+     */
+    int32_t const c =
+      fsl_db_g_int32(dbR, -1,
+                     "SELECT COUNT(distinct tagname) FROM tag "
+                     "WHERE tagname GLOB 'tkt-'||%Q||'*'", tktId);
+    if(c<0){
+      rc = fsl_cx_uplift_db_error(f, dbR);
+      goto end;
+    }else if(0==c){
+      n = 0;
+      goto not_found;
+    }else if(c>1){
+      rc = fsl_cx_err_set(f, FSL_RC_AMBIGUOUS,
+                          "Ticket ID prefix is ambiguous: %s",
+                          tktId);
+      goto end;
+    }
+    rc = fsl_cx_prepare(f, &q,
+                        "SELECT b.rid, b.uuid FROM blob b, tagxref x, tag t "
+                        "WHERE t.tagname GLOB 'tkt-'||%Q||'*' "
+                        "AND t.tagid=x.tagid AND x.rid=b.rid "
+                        "ORDER BY x.mtime, x.rowid",
+                        tktId);
+  }
+  if(rc) return rc;
+  // Count how many we have to allocate for...
+  while(FSL_RC_STEP_ROW==fsl_stmt_step(&q)) ++n;
+  fsl_stmt_reset(&q);
+  not_found:
+  if(!n){
+    rc = fsl_cx_err_set(f, FSL_RC_NOT_FOUND,
+                        "No ticket found with ID%s %s.",
+                        isFullId ? "" : " prefix",
+                        tktId);
+    goto end;
+  }
+  // Populate the result list...
+  rids = (fsl_id_t*)fsl_malloc(sizeof(fsl_id_t)*(n+1));
+  if(!rids){
+    rc = FSL_RC_OOM;
+    goto end;
+  }
+  unsigned i = 0;
+  while(FSL_RC_STEP_ROW==fsl_stmt_step(&q)){
+    assert(i<n);
+    rids[i++] = fsl_stmt_g_id(&q, 0);
+  }
+  assert(i==n);
+  rids[i] = 0;
+  end:
+  if(0==rc) *ridList = rids;
+  else fsl_free(rids);
+  fsl_stmt_finalize(&q);
+  fsl_cx_transaction_end(f,false);
+  return rc;
 }
 
 #undef MARKER
@@ -43310,7 +43470,7 @@ static char const fsl_difftk_cstr_a[] = {
 32, 115, 101, 116, 32, 110, 68, 105, 102, 102, 115, 32, 48, 10, 32, 32, 115, 101, 116, 32, 
 110, 49, 32, 48, 10, 32, 32, 115, 101, 116, 32, 110, 50, 32, 48, 32, 32, 10, 32, 32, 
 97, 114, 114, 97, 121, 32, 115, 101, 116, 32, 119, 105, 100, 116, 104, 115, 32, 123, 116, 120, 
-116, 32, 51, 32, 108, 110, 32, 51, 32, 109, 107, 114, 32, 49, 125, 10, 32, 32, 119, 104, 
+116, 32, 51, 32, 108, 110, 32, 54, 32, 109, 107, 114, 32, 49, 125, 10, 32, 32, 119, 104, 
 105, 108, 101, 32, 123, 91, 115, 101, 116, 32, 108, 105, 110, 101, 32, 91, 103, 101, 116, 76, 
 105, 110, 101, 32, 36, 100, 105, 102, 102, 116, 120, 116, 32, 36, 78, 32, 105, 105, 93, 93, 
 32, 33, 61, 32, 45, 49, 125, 32, 123, 10, 32, 32, 32, 32, 115, 119, 105, 116, 99, 104, 

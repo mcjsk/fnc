@@ -10719,6 +10719,7 @@ FSL_EXPORT const fsl_card_F_list fsl_card_F_list_empty;
    @see fsl_deck_save()
    @see fsl_deck_A_set()
    @see fsl_deck_B_set()
+   @see fsl_deck_C_set()
    @see fsl_deck_D_set()
    @see fsl_deck_E_set()
    @see fsl_deck_F_add()
@@ -12409,8 +12410,11 @@ FSL_EXPORT int fsl_content_make_public(fsl_cx * const f, fsl_id_t rid);
    In such cases the APIs will translate FSL_RC_BREAK to 0 for
    result purposes, but will stop looping over whatever it is they
    are looping over.
+
+   Note that the passed-in deck "should" be const but is not because
+   iterating over a deck's F-cards requires non-const state.
 */
-typedef int (*fsl_deck_visitor_f)( fsl_cx * f, fsl_deck const * d,
+typedef int (*fsl_deck_visitor_f)( fsl_cx * const f, fsl_deck * const d,
                                    void * state );
 
 /**
@@ -13251,6 +13255,46 @@ FSL_EXPORT int fsl_card_F_list_reserve( fsl_card_F_list * li, uint32_t n );
    free the li pointer.
 */
 FSL_EXPORT void fsl_card_F_list_finalize( fsl_card_F_list * li );
+
+/**
+   Iterates over all artifacts in f's current repository of the given
+   type, passing each one to the given callback. If the callback
+   returns non-0, iteration stops and that code is propagated back to
+   the caller _unless_ the code is FSL_RC_BREAK, which means to stop
+   iteration and return 0.
+
+   The following artifact types are currently supported by this
+   operation:
+
+   FSL_SATYPE_CHECKIN, FSL_SATYPE_CONTROL, FSL_SATYPE_WIKI,
+   FSL_SATYPE_TICKET, FSL_SATYPE_TECHNOTE, FSL_SATYPE_FORUMPOST
+
+   (CLUSTER and ATTACHMENT are missing only because they're not(?)
+   readily findable without parsing every blob in the blob table.)
+
+   The decks are iterated over an an unspecified order except for:
+
+   - WIKI and TECHNOTE entries are visited from newest to oldest.
+
+   - TICKET entries are visited from oldest to newest to accommodate
+     reconstructing their aggregate state in the callback.
+
+   Each deck is finalized immediately after the callback returns, so the callback
+   must not hold any pointers to the deck or its contents.
+
+   Returns 0 on success or any number of error codes from lower levels,
+   including, but not limited to:
+
+   - FSL_RC_OOM on allocation error
+   - FSL_RC_NOT_A_REPO if f has no repository opened.
+   - FSL_RC_TYPE if the 2nd argument is invalid or if its type is
+     not supported (e.g. FSL_SATYPE_CLUSTER).
+   - FSL_RC_MISUSE if the 3rd argument is NULL.
+
+*/
+FSL_EXPORT int fsl_deck_foreach(fsl_cx * const f, fsl_satype_e type,
+                                fsl_deck_visitor_f visitor,
+                                void * visitorState);
 
 /**
    Holds options for use with fsl_branch_create().
@@ -14661,7 +14705,37 @@ FSL_EXPORT int fsl_repo_create(fsl_cx * f, fsl_repo_create_opt const * opt );
    Returns true if f has an opened repository database which is
    opened in read-only mode, else returns false.
 */
-FSL_EXPORT char fsl_repo_is_readonly(fsl_cx const * f);
+FSL_EXPORT bool fsl_repo_is_readonly(fsl_cx const * f);
+
+/**
+   Searches for a matching blob records for a fossil ticket ID. (A
+   ticket's ID is the value of its K-card.) The given ticket ID must
+   be a full-length ticket ID (40 characters of lower-case hex) or an
+   unambiguous prefix.
+
+   If at least one match is found, it returns 0 and updates the 3rd
+   argument: `*ridList` is assigned to an array of fsl_id_t
+   (`blob.rid` values) terminated by an entry with the value
+   0. Ownership of the array is passed to the caller, who must
+   eventually pass it to fsl_free(). The entries are ordered from
+   oldest to newest (based on their `tagxref.mtime` value).
+
+   On error it may return:
+
+   - FSL_RC_OOM on allocation error.
+   - FSL_RC_RANGE if the given ticket ID is longer than FSL_STRLEN_SHA1.
+   - FSL_RC_AMBIGUOUS if the ticket ID prefix would match multiple distinct
+     ticket IDs. This result is not possible if passed a full-length ticket
+     ID.
+   - FSL_RC_NOT_FOUND if no match is found.
+   - FSL_RC_NOT_A_REPO if f has no repository opened.
+   - Any number of db-related errors if something goes horribly wrong
+     in the db layer.
+
+   On error, the 3rd argument is not modified.
+*/
+FSL_EXPORT int fsl_tkt_id_to_rids(fsl_cx * const f, char const * tktId,
+                                  fsl_id_t ** ridList);
 
 #if defined(__cplusplus)
 } /*extern "C"*/
