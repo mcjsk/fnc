@@ -1,6 +1,6 @@
 **fnc 0.8** 2022-01-10
 
-- fix vertical split
+- fix vertical split view init regression from 0.7 when terminal < 120 cols wide 
 - fix DB lock when opening horizontal split that signals the timeline thread
 
 **fnc 0.7** 2022-01-09
