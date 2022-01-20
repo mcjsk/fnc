@@ -903,7 +903,7 @@ unidiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 				    "<span class=\"fsl-diff-hr\">%.*c</span>\n",
 				    80, '.');
 			else
-				rc = diff_outf(out, "%.80c\n", '.');
+				rc = diff_outf(out, "%.95c\n", '.');
 			if (!rc && html)
 				rc = diff_outf(out,
 				    "<span class=\"fsl-diff-chunk-%d\"></span>",

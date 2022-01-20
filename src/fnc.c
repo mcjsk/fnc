@@ -205,6 +205,7 @@ static struct fnc_setup {
 	bool		 nocolour;	/* Disable colour in diff output. */
 	bool		 quiet;		/* Disable verbose diff output. */
 	bool		 invert;	/* Toggle inverted diff output. */
+	bool		 showln;	/* Display line numbers in diff. */
 
 	/* Branch options. */
 	const char	*before;	/* Last branch change before date. */
@@ -223,7 +224,7 @@ static struct fnc_setup {
 	fcli_cliflag	  cliflags_global[3];		/* Global options. */
 	fcli_command	  cmd_args[7];			/* App commands. */
 	fcli_cliflag	  cliflags_timeline[13];	/* Timeline options. */
-	fcli_cliflag	  cliflags_diff[8];		/* Diff options. */
+	fcli_cliflag	  cliflags_diff[9];		/* Diff options. */
 	fcli_cliflag	  cliflags_tree[5];		/* Tree options. */
 	fcli_cliflag	  cliflags_blame[8];		/* Blame options. */
 	fcli_cliflag	  cliflags_branch[11];		/* Branch options. */
@@ -250,6 +251,7 @@ static struct fnc_setup {
 	false,		/* nocolour defaults to off (i.e., use diff colours). */
 	false,		/* quiet defaults to off (i.e., verbose diff is on). */
 	false,		/* invert diff defaults to off. */
+	false,		/* showln in diff defaults to off. */
 	NULL,		/* before defaults to any time. */
 	NULL,		/* after defaults to any time. */
 	NULL,		/* sort by MRU or open/closed (dflt: lexicographical) */
@@ -353,6 +355,9 @@ static struct fnc_setup {
 	    FCLI_FLAG_BOOL("i", "invert", &fnc_init.invert,
 	    "Invert difference between artifacts. Inversion can also be "
 	    "toggled\n    with the 'i' key binding in diff view."),
+	    FCLI_FLAG_BOOL("l", "line-numbers", &fnc_init.showln,
+	    "Show file line numbers in diff output.  Line numbers can also be "
+	    "toggled\n    with the 'N' key binding in diff view."),
 	    FCLI_FLAG_BOOL("q", "quiet", &fnc_init.quiet,
 	    "Disable verbose diff output; that is, do not output complete"
 	    " content\n    of newly added or deleted files. Verbosity can also"
@@ -966,7 +971,7 @@ static int		 init_diff_view(struct fnc_view **, int, int,
 			    struct fnc_commit_artifact *, struct fnc_view *);
 static int		 open_diff_view(struct fnc_view *,
 			    struct fnc_commit_artifact *, int, bool, bool, bool,
-			    struct fnc_view *, bool,
+			    bool, struct fnc_view *, bool,
 			    struct fnc_pathlist_head *);
 static void		 show_diff_status(struct fnc_view *);
 static int		 create_diff(struct fnc_diff_view_state *);
@@ -3059,6 +3064,7 @@ help(struct fnc_view *view)
 	    {"  F                ", "  ❬F❭             "},
 	    {"  i                ", "  ❬i❭             "},
 	    {"  L                ", "  ❬L❭             "},
+	    {"  N                ", "  ❬N❭             "},
 	    {"  v                ", "  ❬v❭             "},
 	    {"  w                ", "  ❬w❭             "},
 	    {"  -,_              ", "  ❬-❭❬_❭          "},
@@ -3143,6 +3149,7 @@ help(struct fnc_view *view)
 	    "Open prompt to enter file number and navigate to file",
 	    "Toggle inversion of diff output",
 	    "Open prompt to enter line number and navigate to line",
+	    "Toggle display of file line numbers",
 	    "Toggle verbosity of diff output",
 	    "Toggle ignore whitespace-only changes in diff",
 	    "Decrease the number of context lines",
@@ -4204,7 +4211,8 @@ init_diff_view(struct fnc_view **new_view, int start_col, int start_ln,
 		return RC(FSL_RC_ERROR, "%s", "view_open");
 
 	rc = open_diff_view(diff_view, commit, DEF_DIFF_CTX, fnc_init.ws,
-	    fnc_init.invert, !fnc_init.quiet, timeline_view, true, NULL);
+	    fnc_init.invert, !fnc_init.quiet, fnc_init.showln, timeline_view,
+	    true, NULL);
 	if (!rc)
 		*new_view = diff_view;
 
@@ -4213,7 +4221,7 @@ init_diff_view(struct fnc_view **new_view, int start_col, int start_ln,
 
 static int
 open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
-    int context, bool ignore_ws, bool invert, bool verbosity,
+    int context, bool ignore_ws, bool invert, bool verbosity, bool showln,
     struct fnc_view *timeline_view, bool showmeta,
     struct fnc_pathlist_head *paths)
 {
@@ -4240,6 +4248,7 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	verbosity ? FLAG_SET(s->diff_flags, FNC_DIFF_VERBOSE) : 0;
 	ignore_ws ? FLAG_SET(s->diff_flags, FNC_DIFF_IGNORE_ALLWS) : 0;
 	invert ? FLAG_SET(s->diff_flags, FNC_DIFF_INVERT) : 0;
+	showln ? FLAG_SET(s->diff_flags, FNC_DIFF_LINENO) : 0;
 	s->timeline_view = timeline_view;
 	s->colour = !fnc_init.nocolour && has_colors();
 	s->showmeta = showmeta;
@@ -5910,12 +5919,15 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	}
 	case 'c':
 	case 'i':
+	case 'N':
 	case 'v':
 	case 'w':
 		if (ch == 'c')
 			s->colour = !s->colour;
 		if (ch == 'i')
 			FLAG_TOG(s->diff_flags, FNC_DIFF_INVERT);
+		if (ch == 'N')
+			FLAG_TOG(s->diff_flags, FNC_DIFF_LINENO);
 		if (ch == 'v')
 			FLAG_TOG(s->diff_flags, FNC_DIFF_VERBOSE);
 		if (ch == 'w')
@@ -6352,8 +6364,8 @@ usage_diff(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
 	    " usage: %s diff [-C|--no-colour] [-R path] [-h|--help] "
-	    "[-i|--invert] [-q|--quiet] [-w|--whitespace] [-x|--context n] "
-	    "[artifact1 [artifact2]] [path ...]\n  "
+	    "[-i|--invert] [-l|--line-numbers] [-q|--quiet] [-w|--whitespace] "
+	    "[-x|--context n] [artifact1 [artifact2]] [path ...]\n  "
 	    "e.g.: %s diff --context 3 d34db33f c0ff33 src/*.c\n\n",
 	    fcli_progname(), fcli_progname());
 }
@@ -6578,7 +6590,8 @@ cmd_diff(fcli_command const *argv)
 	}
 
 	rc = open_diff_view(view, commit, context, fnc_init.ws,
-	    fnc_init.invert, !fnc_init.quiet, NULL, showmeta, &paths);
+	    fnc_init.invert, !fnc_init.quiet, fnc_init.showln, NULL,
+	    showmeta, &paths);
 	if (!rc)
 		rc = view_loop(view);
 end:
@@ -8104,7 +8117,8 @@ set_colours(struct fnc_colours *s, enum fnc_view_id vid)
 		static const char *regexp_diff[] = {
 		    "^((checkin|wiki|ticket|technote) "
 		    "[0-9a-f]|hash [+-] |\\[[+~>-]] |[+-]{3} )",
-		    "^user:", "^date:", "^tags:", "^-", "^\\+", "^@@"
+		    "^user:", "^date:", "^tags:", "^-|^[0-9 ]+ -",
+		    "^\\+|^[0-9 ]+ \\+", "^@@"
 		};
 		const int pairs_diff[][2] = {
 		    {FNC_COLOUR_DIFF_META, init_colour(FNC_COLOUR_DIFF_META)},
@@ -9386,8 +9400,8 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			break;
 		}
 		rc = open_diff_view(diff_view, commit, DEF_DIFF_CTX,
-		    fnc_init.ws, fnc_init.invert, !fnc_init.quiet, NULL, true,
-		    NULL);
+		    fnc_init.ws, fnc_init.invert, !fnc_init.quiet,
+		    fnc_init.showln, NULL, true, NULL);
 		s->selected_commit = commit;
 		if (rc) {
 			fnc_commit_artifact_close(commit);
