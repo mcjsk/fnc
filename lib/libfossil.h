@@ -2190,7 +2190,7 @@ FSL_EXPORT void fsl_list_swap( fsl_list * const lhs, fsl_list * const rhs );
     visitorState is the 4th argument passed to fsl_list_visit().
 
     Implementations must return 0 on success. Any other value causes
-    looping to stop and that value to be returned, but interpration
+    looping to stop and that value to be returned, but interpretation
     of the value is up to the caller (it might or might not be an
     error, depending on the context). Note that client code may use
     custom values, and is not strictly required to use FSL_RC_xxx
@@ -22848,130 +22848,6 @@ char const * fsl_cx_db_name_for_role(fsl_cx const * const f,
                                      fsl_size_t * len);
 
 /**
-   Flags for use with text-diff generation APIs,
-   e.g. fsl_diff_text().
-
-   Maintenance reminders:
-
-   - These values are holy and must not be changed without also
-     changing the corresponding code in diff.c.
-
-   - Where these entries semantically overlap with their fsl_diff2_flag_e
-     counterparts, they MUST have the same values because some internal APIs
-     are used by both of the diff APIs.
-
-   @deprecated Prefer fsl_diff2_flag_e and fsl_diff_v2() instead.
-*/
-enum fsl_diff_flag_e {
-/** Ignore end-of-line whitespace */
-FSL_DIFF_IGNORE_EOLWS = 0x01,
-/** Ignore end-of-line whitespace */
-FSL_DIFF_IGNORE_ALLWS = 0x03,
-/** Generate a side-by-side diff */
-FSL_DIFF_SIDEBYSIDE =   0x04,
-/** Missing shown as empty files */
-FSL_DIFF_VERBOSE =      0x08,
-/** Show filenames only. Not used in this impl! */
-FSL_DIFF_BRIEF =        0x10,
-/** Render HTML. */
-FSL_DIFF_HTML =         0x20,
-/** Show line numbers. */
-FSL_DIFF_LINENO =       0x40,
-/** Suppress optimizations (debug). */
-FSL_DIFF_NOOPT =        0x0100,
-/** Invert the diff (debug). */
-FSL_DIFF_INVERT =       0x0200,
-/* ACHTUNG: do not use 0x0400 because of semantic
-   collision with FSL_DIFF2_CONTEXT_ZERO */
-/** Only display if not "too big." */
-FSL_DIFF_NOTTOOBIG =    0x0800,
-/** Strip trailing CR */
-FSL_DIFF_STRIP_EOLCR =    0x1000,
-/**
-   This flag tells text-mode diff generation to add ANSI color
-   sequences to some output.  The colors are currently hard-coded
-   and non-configurable. This has no effect for HTML output, and
-   that flag trumps this one. It also currently only affects
-   unified diffs, not side-by-side.
-
-   Maintenance reminder: this one currently has no counterpart in
-   fossil(1), is not tracked in the same way, and need not map to an
-   internal flag value.
-*/
-FSL_DIFF_ANSI_COLOR =     0x2000
-};
-
-/**
-   Generates a textual diff from two text inputs and writes
-   it to the given output function.
-
-   pA and pB are the buffers to diff.
-
-   contextLines is the number of lines of context to output. This
-   parameter has a built-in limit of 2^16, and values larger than
-   that get truncated. A value of 0 is legal, in which case no
-   surrounding context is provided. A negative value translates to
-   some unspecified default value.
-
-   sbsWidth specifies the width (in characters) of the side-by-side
-   columns. If sbsWidth is not 0 then this function behaves as if
-   diffFlags contains the FSL_DIFF_SIDEBYSIDE flag. If sbsWidth is
-   negative, OR if diffFlags explicitly contains
-   FSL_DIFF_SIDEBYSIDE and sbsWidth is 0, then some default width
-   is used. This parameter has a built-in limit of 255, and values
-   larger than that get truncated to 255.
-
-   diffFlags is a mask of fsl_diff_flag_t values. Not all of the
-   fsl_diff_flag_t flags are yet [sup]ported.
-
-   The output is sent to out(outState,...). If out() returns non-0
-   during processing, processing stops and that result is returned
-   to the caller of this function.
-
-   Returns 0 on success, FSL_RC_OOM on allocation error,
-   FSL_RC_MISUSE if any arguments are invalid, FSL_RC_TYPE if any
-   of the content appears to be binary (contains embedded NUL
-   bytes), FSL_RC_RANGE if some range is exceeded (e.g. the maximum
-   number of input lines).
-
-   None of (pA, pB, out) may be NULL.
-
-   TODOs:
-
-   - Add a predicate function for outputing only matching
-   differences, analog to fossil(1)'s regex support (but more
-   flexible).
-
-   - Expose the raw diff-generation bits via the internal API
-   to facilitate/enable the creation of custom diff formats.
-
-   @see fsl_diff_v2()
-   @deprecated Prefer fsl_diff_v2() for new code.
-*/
-int fsl_diff_text(fsl_buffer const *pA, fsl_buffer const *pB,
-                  fsl_output_f out, void * outState,
-                  short contextLines, short sbsWidth,
-                  int diffFlags );
-
-/**
-   Functionally equivalent to:
-
-   ```
-   fsl_diff_text(pA, pB, fsl_output_f_buffer, pOut,
-   contextLines, sbsWidth, diffFlags);
-   ```
-
-   Except that it returns FSL_RC_MISUSE if !pOut.
-
-   @see fsl_diff_v2()
-   @deprecated Prefer fsl_diff_v2() for new code.
-*/
-int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
-                            fsl_buffer *pOut, short contextLines,
-                            short sbsWidth, int diffFlags );
-
-
-/**
    Equivalent to `fcli_setup_v2(argc,argv,fcli.cliFlags,fcli.appHelp)`.
 
    @see fcli_pre_setup()
@@ -22980,25 +22856,6 @@ int fsl_diff_text_to_buffer(fsl_buffer const *pA, fsl_buffer const *pB,
    @deprecated Its signature will change to fcli_setup_v2()'s at some point.
 */
 int fcli_setup(int argc, char const * const * argv );
-
-/** @internal
-
-   Performs the same job as fsl_diff_text() but produces the results
-   in the low-level form of an array of "copy/delete/insert triples."
-   This is primarily intended for internal use in other
-   library-internal algorithms, not for client code. Note all
-   FSL_DIFF_xxx flags apply to this form.
-
-   Returns 0 on success, any number of non-0 codes on error. On
-   success *outRaw will contain the resulting array, which must
-   eventually be fsl_free()'d by the caller. On error *outRaw is not
-   modified.
-
-   @deprecated Use fsl_diff_v2_raw() instead.
-*/
-int fsl__diff_text_raw(fsl_buffer const *p1, fsl_buffer const *p2,
-                       int diffFlags, int ** outRaw);
-
 
 /** @deprecated fsl_close_scm_dbs()
 
