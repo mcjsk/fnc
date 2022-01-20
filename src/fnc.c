@@ -3065,6 +3065,7 @@ help(struct fnc_view *view)
 	    {"  i                ", "  ❬i❭             "},
 	    {"  L                ", "  ❬L❭             "},
 	    {"  N                ", "  ❬N❭             "},
+	    {"  p                ", "  ❬p❭             "},
 	    {"  v                ", "  ❬v❭             "},
 	    {"  w                ", "  ❬w❭             "},
 	    {"  -,_              ", "  ❬-❭❬_❭          "},
@@ -3150,6 +3151,7 @@ help(struct fnc_view *view)
 	    "Toggle inversion of diff output",
 	    "Open prompt to enter line number and navigate to line",
 	    "Toggle display of file line numbers",
+	    "Toggle display of function name in chunk header",
 	    "Toggle verbosity of diff output",
 	    "Toggle ignore whitespace-only changes in diff",
 	    "Decrease the number of context lines",
@@ -4245,6 +4247,7 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	s->f = NULL;
 	s->context = context;
 	s->sbs = 0;
+	FLAG_SET(s->diff_flags, FNC_DIFF_PROTOTYPE);
 	verbosity ? FLAG_SET(s->diff_flags, FNC_DIFF_VERBOSE) : 0;
 	ignore_ws ? FLAG_SET(s->diff_flags, FNC_DIFF_IGNORE_ALLWS) : 0;
 	invert ? FLAG_SET(s->diff_flags, FNC_DIFF_INVERT) : 0;
@@ -5920,6 +5923,7 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case 'c':
 	case 'i':
 	case 'N':
+	case 'p':
 	case 'v':
 	case 'w':
 		if (ch == 'c')
@@ -5928,6 +5932,8 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			FLAG_TOG(s->diff_flags, FNC_DIFF_INVERT);
 		if (ch == 'N')
 			FLAG_TOG(s->diff_flags, FNC_DIFF_LINENO);
+		if (ch == 'p')
+			FLAG_TOG(s->diff_flags, FNC_DIFF_PROTOTYPE);
 		if (ch == 'v')
 			FLAG_TOG(s->diff_flags, FNC_DIFF_VERBOSE);
 		if (ch == 'w')

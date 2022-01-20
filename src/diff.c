@@ -42,7 +42,9 @@
 #ifndef nitems
 #define nitems(_a)	(sizeof((_a)) / sizeof((_a)[0]))
 #endif
+#define starts_with(_str, _pfx) (!fsl_strncmp(_str, _pfx, sizeof(_pfx) - 1))
 #define LENGTH(_ln)	((_ln)->n)  /* Length of a fsl_dline */
+
 
 /*
  * Column indices for struct sbsline.cols[]
@@ -198,6 +200,10 @@ fnc_diff_blobs(fsl_buffer const *blob1, fsl_buffer const *blob2,
 		 * Compute a context or side-by-side diff.
 		 */
 		struct diff_out_state dos = diff_out_state_empty;
+		if (flags & FNC_DIFF_PROTOTYPE) {
+			memset(&dos.proto, 0, sizeof(dos.proto));
+			dos.proto.file = blob1;
+		}
 		dos.out = out;
 		dos.state = state;
 		dos.ansi = !!(flags & FNC_DIFF_ANSI_COLOR);
@@ -437,6 +443,108 @@ diff_out(struct diff_out_state *const o, void const *src, fsl_int_t n)
 	return o->rc = n ?
 	    o->out(o->state, src, n < 0 ? strlen((char const *)src) : (size_t)n)
 	    : 0;
+}
+
+/*
+ * Starting from seek lines, copy n lines from src to dst. The seek starts
+ * from offset bytes into src->mem. This routine does _not_ modify src.
+ */
+int
+buffer_copy_lines_from(fsl_buffer *const dst, const fsl_buffer *const src,
+    fsl_size_t *offset, fsl_size_t seek, fsl_size_t n)
+{
+	const char *z = (const char *)src->mem;
+	fsl_size_t idx = *offset, ln = 0, start = 0;
+	int rc = FSL_RC_OK;
+
+	if (!n)
+		return rc;
+
+	while (idx < src->used) {
+		if (z[idx] == '\n') {
+			if (++ln == seek)
+				start = idx + 1;  /* skip leading '\n' */
+			if (ln == seek + n) {
+				++idx;
+				break;
+			}
+		}
+		++idx;
+	}
+
+	if (dst)  /* trim trailing when copying '\n' */
+		rc = fsl_buffer_append(dst, &src->mem[start], idx - start - 1);
+	*offset = start;
+	return rc;
+}
+
+/*
+ * Scan the diffed file os->proto->file from line pos preceding the start of
+ * the current chunk for the enclosing function in which the change resides.
+ * Return first match.
+ */
+char *
+match_chunk_function(struct diff_out_state *const os, uint32_t pos)
+{
+	fsl_buffer	 buf = fsl_buffer_empty;
+	const char	*line;
+	char		*spec = NULL;
+	fsl_size_t	 offset;
+	uint32_t	 last = os->proto.lastline;
+
+	os->proto.lastline = pos;
+	offset = os->proto.offset;  /* Begin seek from last match */
+
+	while (pos > 1 && pos > last) {
+		buffer_copy_lines_from(&buf, os->proto.file, &offset,
+		    pos - os->proto.lastmatch, 1);
+		line = fsl_buffer_cstr(&buf);
+		/*
+		 * GNU C and MSVC allow '$' in identifier names.
+		 * https://gcc.gnu.org/onlinedocs/gcc/Dollar-Signs.html
+		 * https://docs.microsoft.com/en-us/cpp/cpp/identifiers-cpp
+		 */
+		if (line) {
+			if (fsl_isalpha(line[0]) || line[0] == '_' ||
+			    line[0] == '$'){
+				if (starts_with(line, "private:")) {
+					if (!spec)
+						spec = " (private)";
+				} else if (starts_with(line, "protected:")) {
+					if (!spec)
+						spec = " (protected)";
+				} else if (starts_with(line, "public:")) {
+					if (!spec)
+						spec = " (public)";
+				} else {
+					/*
+					 * Don't exceed 80 cols: chunk header
+					 * consumes ~25, so cap signature at 55.
+					 */
+					char *sig = fsl_mprintf("%s%s", line,
+					    spec ? spec : "");
+					fsl_free(os->proto.signature);
+					os->proto.signature =
+					    fsl_mprintf("%.55s", sig);
+					/*
+					 * It's expensive to seek from the start
+					 * of the file for each chunk when
+					 * diffing large files, so save offset
+					 * and line index of this match.
+					 */
+					os->proto.lastmatch = pos;
+					os->proto.offset = offset;
+					fsl_free(sig);
+					fsl_buffer_clear(&buf);
+					return os->proto.signature;
+				}
+			}
+		}
+		offset = os->proto.offset; /* No match, revert to last offset */
+		fsl_buffer_clear(&buf);
+		--pos;
+	}
+	return os->proto.lastmatch > 0 ? os->proto.signature : NULL;
 }
 
 /*
@@ -810,10 +918,9 @@ unidiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 	int		 ntotal;	/* Total number of lines to output */
 	int		 skip;		/* Number of lines to skip */
 	int		 i, j, rc = FSL_RC_OK;
-	bool		 showsep = false;
-	int		 showln; /* Show line numbers */
-	int		 html;	 /* Render as HTML */
+	bool		 html, proto, showln, showsep = false;
 
+	proto = (flags & FNC_DIFF_PROTOTYPE);
 	showln = (flags & FNC_DIFF_LINENO);
 	html = (flags & FNC_DIFF_HTML);
 
@@ -936,6 +1043,13 @@ unidiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 			if (!rc) {
 				if (html)
 					rc = diff_outf(out, "</span>");
+
+				if (proto && li + skip > 1) {
+					char *f = match_chunk_function(out,
+					    (li + skip) - 1);
+					if (f != NULL)
+						rc = diff_outf(out, " %s", f);
+				}
 				if (!rc)
 					rc = diff_out(out, "\n", 1);
 			}
@@ -1015,6 +1129,7 @@ unidiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 				rc = unidiff_txt(out, ' ', &l[li + j], html, 0);
 		}
 	}  /* _big_ for() loop */
+	fsl_free(out->proto.signature);
 	return rc;
 }
 

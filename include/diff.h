@@ -29,6 +29,7 @@ enum fnc_diff_flag {
 	FNC_DIFF_NOTTOOBIG	= 1 <<  9,  /* og. 0x0800 */
 	FNC_DIFF_STRIP_EOLCR	= 1 << 10,  /* og. 0x1000 */
 	FNC_DIFF_ANSI_COLOR	= 1 << 11,  /* og. 0x2000 */
+	FNC_DIFF_PROTOTYPE	= 1 << 12
 #define FNC_DIFF_CONTEXT_EX	(((uint64_t)0x04) << 32)  /* Allow 0 context */
 #define FNC_DIFF_CONTEXT_MASK	((uint64_t)0x0000ffff)    /* Default context */
 #define FNC_DIFF_WIDTH_MASK	((uint64_t)0x00ff0000)    /* SBS column width */
@@ -39,18 +40,26 @@ struct diff_out_state {
 	void		*state;		/* State for this->out() */
 	int		 rc;		/* Error reporting */
 	char		 ansi;		/* ANSI colour code */
+	struct {
+		const fsl_buffer	*file;		/* Diffed file */
+		char			*signature;	/* Matching function */
+		uint32_t		 lastmatch;	/* Match line index */
+		uint32_t		 lastline;	/* Last line scanned */
+		fsl_size_t		 offset;	/* Match byte offset */
+	} proto;
 };
-static const struct diff_out_state diff_out_state_empty = { NULL, NULL, 0, 0 };
+static const struct diff_out_state diff_out_state_empty =
+    { NULL, NULL, 0, 0, { NULL, NULL, 0, 0, 0 } };
 
 struct sbsline {
 	struct diff_out_state	*output;
 	fsl_buffer		*cols[5];	/* Pointers to output columns */
 	const char		*tag;		/* <span> tag */
 	const char		*tag2;		/* <span> tag */
-	int			 idx;		/* Write tag before s_idx */
-	int			 end;		/* Close tag before e_idx */
-	int			 idx2;	/* Write tag2 before s2_idx */
-	int			 end2;	/* Close tag2 before e2_idx */
+	int			 idx;		/* Write tag before idx */
+	int			 end;		/* Close tag before end */
+	int			 idx2;		/* Write tag2 before idx2 */
+	int			 end2;		/* Close tag2 before end2 */
 	int			 width;		/* Max column width in diff */
 	bool			 esc;		/* Escape html characters */
 	void			*regex;		/* Colour matching lines */
@@ -68,6 +77,10 @@ int		 fnc_output_f_diff_out(void *, void const *, fsl_size_t);
 int		 diff_outf(struct diff_out_state *, char const *, ... );
 int		 diff_out(struct diff_out_state * const, void const *,
 		    fsl_int_t);
+char		*match_chunk_function(struct diff_out_state *const, uint32_t);
+int		 buffer_copy_lines_from(fsl_buffer *const,
+		    const fsl_buffer *const, fsl_size_t *, fsl_size_t,
+		    fsl_size_t);
 uint64_t	 fnc_diff_flags_convert(int);
 int		 diff_context_lines(uint64_t);
 int		 match_dline(fsl_dline *, fsl_dline *);

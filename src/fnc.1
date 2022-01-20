@@ -46,7 +46,7 @@
 .Op Ar path
 .Nm
 .Cm diff
-.Op Fl Cilqw
+.Op Fl CilPqw
 .Op Fl R Ar path
 .Op Fl x Ar number
 .Op Ar artifact1 Op Ar artifact2
@@ -405,8 +405,8 @@ on the timeline is consumed.
 .El
 .Tg di
 .It Cm diff Oo Fl C | -no-colour Oc Oo Fl h | -help Oc Oo Fl i | -invert Oc \
-Oo Fl l | -line-numbers Oc Oo Fl q | -quiet Oc Oo Fl R | -repo Ar path Oc \
-Oo Fl w | -whitespace Oc Oo Fl x | -context Ar n Oc \
+Oo Fl l | -line-numbers Oc Oo Fl P | -no-prototype Oc Oo Fl q | -quiet Oc \
+Oo Fl R | -repo Ar path Oc Oo Fl w | -whitespace Oc Oo Fl x | -context Ar n Oc \
 Oo Ar artifact1 Oo Ar artifact2 Oc Oc Op Ar path ...
 .Dl Pq alias: Cm di
 Display the differences between two repository artifacts, or between the local
@@ -462,6 +462,19 @@ Display diff command help and usage information then exit.
 Invert the difference between artifacts when displaying the diff.
 .It Fl l , -line-numbers
 Display file line numbers in diff output.
+.It Fl P , -no-prototype
+Disable chunk header display of which function or scope each change is in,
+which is enabled by default.  The heuristic will produce reliable results for
+all C-like languages
+.Pq e.g., Java, Python, JavaScript, Rust ;
+however, Lisps and non-source code
+.Pq e.g., Markdown, reStructuredText
+will return meaningless results.  This option can be toggled in-session with the
+.Sy p
+key binding as documented below.
+.Po Mutually exclusive with
+.Fl l , -line-numbers
+.Pc
 .It Fl q , -quiet
 Disable verbose output; that is, do not output complete content of newly added
 or deleted files, which are displayed by default.  Verbosity can also be
@@ -566,6 +579,10 @@ Toggle inversion of diff output.
 Open prompt to enter line number and navigate to line.
 .It Cm N
 Toggle display of file line numbers.
+.It Cm p
+In the diff chunk header, toggle display of which function each change is in;
+for example:
+.Sy @@ -2360,10 +2361,11 @@ draw_commits(struct fnc_view *view)
 .It Cm v
 Toggle verbosity of diff output. By default,
 .Nm
