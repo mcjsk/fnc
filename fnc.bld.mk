@@ -12,7 +12,6 @@ VERSION ?=	0.9
 SQLITE_CFLAGS =	${CFLAGS} -Wall -Werror -Wno-sign-compare -pedantic -std=c99 \
 		-DNDEBUG=1 \
 		-DSQLITE_DQS=0 \
-		-DSQLITE_THREADSAFE=0 \
 		-DSQLITE_DEFAULT_MEMSTATUS=0 \
 		-DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1 \
 		-DSQLITE_LIKE_DOESNT_MATCH_BLOBS \
@@ -57,11 +56,15 @@ lib/sqlite3.o: lib/sqlite3.c lib/sqlite3.h
 lib/libfossil.o: lib/libfossil.c lib/libfossil.h
 	${CC} ${FOSSIL_CFLAGS} -c $< -o $@
 
-src/fnc.o: src/fnc.c include/settings.h fnc.bld.mk
+src/diff.o: src/diff.c include/diff.h
 	${CC} ${FNC_CFLAGS} -c $< -o $@
 
-src/fnc: src/fnc.o lib/libfossil.o lib/sqlite3.o fnc.bld.mk
-	${CC} -o $@ src/fnc.o lib/libfossil.o lib/sqlite3.o ${FNC_LDFLAGS}
+src/fnc.o: src/fnc.c include/settings.h include/diff.h fnc.bld.mk
+	${CC} ${FNC_CFLAGS} -c $< -o $@
+
+src/fnc: src/fnc.o src/diff.o lib/libfossil.o lib/sqlite3.o fnc.bld.mk
+	${CC} -o $@ src/fnc.o src/diff.o lib/libfossil.o lib/sqlite3.o \
+	${FNC_LDFLAGS}
 
 install:
 	install -s -m 0755 src/fnc ${PREFIX}/bin/fnc

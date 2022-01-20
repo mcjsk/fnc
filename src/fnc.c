@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 2021, 2022 Mark Jamsek <mark@jamsek.com>
- * Copyright (c) 2013-2021 Stephan Beal <https://wanderinghorse.net>
  * Copyright (c) 2020 Stefan Sperling <stsp@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
@@ -70,6 +69,7 @@
 
 #include "libfossil.h"
 #include "settings.h"
+#include "diff.h"
 
 #define FNC_VERSION	VERSION  /* cf. Makefile */
 
@@ -205,6 +205,7 @@ static struct fnc_setup {
 	bool		 nocolour;	/* Disable colour in diff output. */
 	bool		 quiet;		/* Disable verbose diff output. */
 	bool		 invert;	/* Toggle inverted diff output. */
+	bool		 showln;	/* Display line numbers in diff. */
 
 	/* Branch options. */
 	const char	*before;	/* Last branch change before date. */
@@ -223,7 +224,7 @@ static struct fnc_setup {
 	fcli_cliflag	  cliflags_global[3];		/* Global options. */
 	fcli_command	  cmd_args[7];			/* App commands. */
 	fcli_cliflag	  cliflags_timeline[13];	/* Timeline options. */
-	fcli_cliflag	  cliflags_diff[8];		/* Diff options. */
+	fcli_cliflag	  cliflags_diff[9];		/* Diff options. */
 	fcli_cliflag	  cliflags_tree[5];		/* Tree options. */
 	fcli_cliflag	  cliflags_blame[8];		/* Blame options. */
 	fcli_cliflag	  cliflags_branch[11];		/* Branch options. */
@@ -250,6 +251,7 @@ static struct fnc_setup {
 	false,		/* nocolour defaults to off (i.e., use diff colours). */
 	false,		/* quiet defaults to off (i.e., verbose diff is on). */
 	false,		/* invert diff defaults to off. */
+	false,		/* showln in diff defaults to off. */
 	NULL,		/* before defaults to any time. */
 	NULL,		/* after defaults to any time. */
 	NULL,		/* sort by MRU or open/closed (dflt: lexicographical) */
@@ -353,6 +355,9 @@ static struct fnc_setup {
 	    FCLI_FLAG_BOOL("i", "invert", &fnc_init.invert,
 	    "Invert difference between artifacts. Inversion can also be "
 	    "toggled\n    with the 'i' key binding in diff view."),
+	    FCLI_FLAG_BOOL("l", "line-numbers", &fnc_init.showln,
+	    "Show file line numbers in diff output.  Line numbers can also be "
+	    "toggled\n    with the 'N' key binding in diff view."),
 	    FCLI_FLAG_BOOL("q", "quiet", &fnc_init.quiet,
 	    "Disable verbose diff output; that is, do not output complete"
 	    " content\n    of newly added or deleted files. Verbosity can also"
@@ -966,7 +971,7 @@ static int		 init_diff_view(struct fnc_view **, int, int,
 			    struct fnc_commit_artifact *, struct fnc_view *);
 static int		 open_diff_view(struct fnc_view *,
 			    struct fnc_commit_artifact *, int, bool, bool, bool,
-			    struct fnc_view *, bool,
+			    bool, struct fnc_view *, bool,
 			    struct fnc_pathlist_head *);
 static void		 show_diff_status(struct fnc_view *);
 static int		 create_diff(struct fnc_diff_view_state *);
@@ -983,10 +988,6 @@ static int		 write_diff_meta(fsl_buffer *, const char *,
 static int		 diff_file(struct fnc_diff_view_state *, fsl_buffer *,
 			    const char *, fsl_uuid_str, const char *,
 			    enum fsl_ckout_change_e);
-static int		 fnc_diff_builder(fsl_dibu **, fsl_uuid_cstr,
-			    fsl_uuid_cstr, const char *, const char *, int,
-			    int, fsl_buffer *);
-static void		 fnc_free_diff_builder(fsl_dibu *);
 static int		 diff_non_checkin(fsl_buffer *,
 			    struct fnc_commit_artifact *, int, int, int);
 static int		 diff_file_artifact(struct fnc_diff_view_state *,
@@ -3063,6 +3064,8 @@ help(struct fnc_view *view)
 	    {"  F                ", "  ❬F❭             "},
 	    {"  i                ", "  ❬i❭             "},
 	    {"  L                ", "  ❬L❭             "},
+	    {"  N                ", "  ❬N❭             "},
+	    {"  p                ", "  ❬p❭             "},
 	    {"  v                ", "  ❬v❭             "},
 	    {"  w                ", "  ❬w❭             "},
 	    {"  -,_              ", "  ❬-❭❬_❭          "},
@@ -3147,6 +3150,8 @@ help(struct fnc_view *view)
 	    "Open prompt to enter file number and navigate to file",
 	    "Toggle inversion of diff output",
 	    "Open prompt to enter line number and navigate to line",
+	    "Toggle display of file line numbers",
+	    "Toggle display of function name in chunk header",
 	    "Toggle verbosity of diff output",
 	    "Toggle ignore whitespace-only changes in diff",
 	    "Decrease the number of context lines",
@@ -4208,7 +4213,8 @@ init_diff_view(struct fnc_view **new_view, int start_col, int start_ln,
 		return RC(FSL_RC_ERROR, "%s", "view_open");
 
 	rc = open_diff_view(diff_view, commit, DEF_DIFF_CTX, fnc_init.ws,
-	    fnc_init.invert, !fnc_init.quiet, timeline_view, true, NULL);
+	    fnc_init.invert, !fnc_init.quiet, fnc_init.showln, timeline_view,
+	    true, NULL);
 	if (!rc)
 		*new_view = diff_view;
 
@@ -4217,7 +4223,7 @@ init_diff_view(struct fnc_view **new_view, int start_col, int start_ln,
 
 static int
 open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
-    int context, bool ignore_ws, bool invert, bool verbosity,
+    int context, bool ignore_ws, bool invert, bool verbosity, bool showln,
     struct fnc_view *timeline_view, bool showmeta,
     struct fnc_pathlist_head *paths)
 {
@@ -4241,9 +4247,11 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	s->f = NULL;
 	s->context = context;
 	s->sbs = 0;
-	verbosity ? FLAG_SET(s->diff_flags, FSL_DIFF_VERBOSE) : 0;
-	ignore_ws ? FLAG_SET(s->diff_flags, FSL_DIFF2_IGNORE_ALLWS) : 0;
-	invert ? FLAG_SET(s->diff_flags, FSL_DIFF2_INVERT) : 0;
+	FLAG_SET(s->diff_flags, FNC_DIFF_PROTOTYPE);
+	verbosity ? FLAG_SET(s->diff_flags, FNC_DIFF_VERBOSE) : 0;
+	ignore_ws ? FLAG_SET(s->diff_flags, FNC_DIFF_IGNORE_ALLWS) : 0;
+	invert ? FLAG_SET(s->diff_flags, FNC_DIFF_INVERT) : 0;
+	showln ? FLAG_SET(s->diff_flags, FNC_DIFF_LINENO) : 0;
 	s->timeline_view = timeline_view;
 	s->colour = !fnc_init.nocolour && has_colors();
 	s->showmeta = showmeta;
@@ -4645,7 +4653,7 @@ add_line_offset(off_t **line_offsets, size_t *nlines, off_t off)
  * files added (i.e., no F card counterpart in d1); (2) files deleted (i.e., no
  * F card counterpart in d2); (3) or otherwise the same file (i.e., F card
  * exists in both d1 and d2). In cases (1) and (2), we call diff_file_artifact()
- * to dump the complete content of the added/deleted file if FSL_DIFF_VERBOSE is
+ * to dump the complete content of the added/deleted file if FNC_DIFF_VERBOSE is
  * set, otherwise only diff metatadata will be output. In case (3), if the
  * hash (UUID) of each F card is the same, there are no changes; if different,
  * both artifacts will be passed to diff_file_artifact() to be diffed.
@@ -5007,7 +5015,7 @@ write_diff_meta(fsl_buffer *buf, const char *zminus, fsl_uuid_str xminus,
 		break;
 	}
 
-	if FLAG_CHK(diff_flags, FSL_DIFF2_INVERT) {
+	if FLAG_CHK(diff_flags, FNC_DIFF_INVERT) {
 		const char *tmp = minus;
 		minus = plus;
 		plus = tmp;
@@ -5016,14 +5024,14 @@ write_diff_meta(fsl_buffer *buf, const char *zminus, fsl_uuid_str xminus,
 		zplus = tmp;
 	}
 
-	if (!FLAG_CHK(diff_flags, (FSL_DIFF_SIDEBYSIDE | FSL_DIFF_BRIEF))) {
+	if (!FLAG_CHK(diff_flags, (FNC_DIFF_SIDEBYSIDE | FNC_DIFF_BRIEF))) {
 		rc = fsl_buffer_appendf(buf, "%sIndex: %s\n%.71c\n",
 		    buf->used ? "\n" : "", index, '=');
 		if (!rc)
 			rc = fsl_buffer_appendf(buf, "hash - %s\nhash + %s\n",
 			    minus, plus);
 	}
-	if (!rc && !FLAG_CHK(diff_flags, FSL_DIFF_BRIEF))
+	if (!rc && !FLAG_CHK(diff_flags, FNC_DIFF_BRIEF))
 		rc = fsl_buffer_appendf(buf, "--- %s\n+++ %s\n", zminus, zplus);
 
 	return rc;
@@ -5045,7 +5053,6 @@ diff_file(struct fnc_diff_view_state *s, fsl_buffer *bminus, const char *zminus,
     fsl_uuid_str xminus, const char *abspath, enum fsl_ckout_change_e change)
 {
 	fsl_cx		*const f = fcli_cx();
-	fsl_dibu	*diffbld = NULL;
 	fsl_buffer	 bplus = fsl_buffer_empty;
 	fsl_buffer	 xplus = fsl_buffer_empty;
 	const char	*zplus = NULL;
@@ -5117,74 +5124,19 @@ diff_file(struct fnc_diff_view_state *s, fsl_buffer *bminus, const char *zminus,
 	if (rc)
 		goto end;
 
-	rc = fnc_diff_builder(&diffbld, xminus, fsl_buffer_str(&xplus), zminus,
-	    zplus, s->context, s->diff_flags, &s->buf);
-	if (rc)
-		goto end;
-
-	if FLAG_CHK(s->diff_flags, FSL_DIFF_BRIEF) {
+	if FLAG_CHK(s->diff_flags, FNC_DIFF_BRIEF) {
 		rc = fsl_buffer_compare(bminus, &bplus);
 		if (!rc)
 			rc = fsl_buffer_appendf(&s->buf, "CHANGED -> %s\n",
 			    zminus);
-	} else if (FLAG_CHK(s->diff_flags, FSL_DIFF_VERBOSE) ||
+	} else if (FLAG_CHK(s->diff_flags, FNC_DIFF_VERBOSE) ||
 	    (bminus->used && bplus.used))
-		rc = fsl_diff_v2(bminus, &bplus, diffbld);
-
+		rc = fnc_diff_text_to_buffer(bminus, &bplus, &s->buf,
+		    s->context, s->sbs, s->diff_flags);
 end:
 	fsl_buffer_clear(&bplus);
 	fsl_buffer_clear(&xplus);
-	fnc_free_diff_builder(diffbld);
 	return rc;
-}
-
-static int
-fnc_diff_builder(fsl_dibu **ptr, fsl_uuid_cstr xminus, fsl_uuid_cstr xplus,
-    const char *zminus, const char *zplus, int context, int diff_flags,
-    fsl_buffer *buf)
-{
-	fsl_dibu			*diffbld = NULL;
-	fsl_dibu_opt			*diffopt = NULL;
-	struct fsl_dibu_opt_ansi	 ansiopt = {"", "", "", ""};
-	int				 rc = FSL_RC_OK;
-
-	*ptr = NULL;
-
-	diffopt = fsl_malloc(sizeof(fsl_dibu_opt));
-	if (diffopt == NULL)
-		return RC(FSL_RC_ERROR, "%s", "fsl_malloc");
-
-
-	FLAG_SET(diff_flags, FSL_DIFF2_CONTEXT_ZERO);
-	diffopt->ansiColor = ansiopt;
-	diffopt->hashLHS = xminus;
-	diffopt->hashRHS = xplus;
-	diffopt->nameLHS = zminus;
-	diffopt->nameRHS = zplus;
-	diffopt->diffFlags = diff_flags;
-	diffopt->contextLines = context;
-	diffopt->out = fsl_output_f_buffer;
-	diffopt->outState = buf;
-
-	rc = fsl_dibu_factory(FSL_DIBU_UNIFIED_TEXT, &diffbld);
-	if (!rc) {
-		diffbld->opt = diffopt;
-		diffbld->start = NULL;
-		*ptr = diffbld;
-	} else
-		fsl_free(diffopt);
-
-	return rc;
-}
-
-static void
-fnc_free_diff_builder(fsl_dibu *diffbld)
-{
-	if (diffbld) {
-		if (diffbld->opt)
-			fsl_free(diffbld->opt);
-		diffbld->finalize(diffbld);
-	}
 }
 
 /*
@@ -5197,7 +5149,6 @@ diff_non_checkin(fsl_buffer *buf, struct fnc_commit_artifact *commit,
     int diff_flags, int context, int sbs)
 {
 	fsl_cx		*const f = fcli_cx();
-	fsl_dibu	*diffbld = NULL;
 	fsl_buffer	 wiki = fsl_buffer_empty;
 	fsl_buffer	 pwiki = fsl_buffer_empty;
 	fsl_id_t	 prid = 0;
@@ -5281,13 +5232,8 @@ diff_non_checkin(fsl_buffer *buf, struct fnc_commit_artifact *commit,
 		goto end;
 	fsl_buffer_append(&pwiki, d->W.mem, d->W.used);
 
-	rc = fnc_diff_builder(&diffbld, NULL, NULL, NULL, NULL, context,
-	    diff_flags, buf);
-	if (rc)
-		goto end;
-	rc = fsl_diff_v2(&pwiki, &wiki, diffbld);
-	if (rc)
-		goto end;
+	rc = fnc_diff_text_to_buffer(&pwiki, &wiki, buf, context, sbs,
+	    diff_flags);
 
 	/* If a technote, provide the full content after its diff. */
 	if (d->type == FSL_SATYPE_TECHNOTE)
@@ -5297,7 +5243,6 @@ end:
 	fsl_buffer_clear(&wiki);
 	fsl_buffer_clear(&pwiki);
 	fsl_deck_finalize(d);
-	fnc_free_diff_builder(diffbld);
 	return rc;
 }
 
@@ -5319,7 +5264,6 @@ diff_file_artifact(struct fnc_diff_view_state *s, fsl_id_t vid1,
     const fsl_card_F *a, const fsl_card_F *b, enum fsl_ckout_change_e change)
 {
 	fsl_cx		*const f = fcli_cx();
-	fsl_dibu	*diffbld = NULL;
 	fsl_stmt	 stmt = fsl_stmt_empty;
 	fsl_buffer	 fbuf1 = fsl_buffer_empty;
 	fsl_buffer	 fbuf2 = fsl_buffer_empty;
@@ -5407,14 +5351,11 @@ diff_file_artifact(struct fnc_diff_view_state *s, fsl_id_t vid1,
 	if (rc)
 		goto end;
 
-	rc = fnc_diff_builder(&diffbld, xminus, xplus, zminus, zplus,
-	    s->context, s->diff_flags, &s->buf);
+	if (FLAG_CHK(s->diff_flags, FNC_DIFF_VERBOSE) || (a && b))
+		rc = fnc_diff_text_to_buffer(&fbuf1, &fbuf2, &s->buf,
+		    s->context, s->sbs, s->diff_flags);
 	if (rc)
-		goto end;
-	if (FLAG_CHK(s->diff_flags, FSL_DIFF_VERBOSE) || (a && b))
-		rc = fsl_diff_v2(&fbuf1, &fbuf2, diffbld);
-	if (rc)
-		RC(rc, "%s: fsl_diff_text_to_buffer\n"
+		RC(rc, "%s: fnc_diff_text_to_buffer\n"
 		    " -> %s [%s]\n -> %s [%s]", fsl_rc_cstr(rc),
 		    a ? a->name : NULL_DEVICE, a ? a->uuid : NULL_DEVICE,
 		    b ? b->name : NULL_DEVICE, b ? b->uuid : NULL_DEVICE);
@@ -5425,7 +5366,6 @@ end:
 	fsl_free(xplus0);
 	fsl_buffer_clear(&fbuf1);
 	fsl_buffer_clear(&fbuf2);
-	fnc_free_diff_builder(diffbld);
 	return rc;
 }
 
@@ -5982,16 +5922,22 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	}
 	case 'c':
 	case 'i':
+	case 'N':
+	case 'p':
 	case 'v':
 	case 'w':
 		if (ch == 'c')
 			s->colour = !s->colour;
 		if (ch == 'i')
-			FLAG_TOG(s->diff_flags, FSL_DIFF2_INVERT);
+			FLAG_TOG(s->diff_flags, FNC_DIFF_INVERT);
+		if (ch == 'N')
+			FLAG_TOG(s->diff_flags, FNC_DIFF_LINENO);
+		if (ch == 'p')
+			FLAG_TOG(s->diff_flags, FNC_DIFF_PROTOTYPE);
 		if (ch == 'v')
-			FLAG_TOG(s->diff_flags, FSL_DIFF_VERBOSE);
+			FLAG_TOG(s->diff_flags, FNC_DIFF_VERBOSE);
 		if (ch == 'w')
-			FLAG_TOG(s->diff_flags, FSL_DIFF2_IGNORE_ALLWS);
+			FLAG_TOG(s->diff_flags, FNC_DIFF_IGNORE_ALLWS);
 		rc = reset_diff_view(view, true);
 		break;
 	case '-':
@@ -6424,8 +6370,8 @@ usage_diff(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
 	    " usage: %s diff [-C|--no-colour] [-R path] [-h|--help] "
-	    "[-i|--invert] [-q|--quiet] [-w|--whitespace] [-x|--context n] "
-	    "[artifact1 [artifact2]] [path ...]\n  "
+	    "[-i|--invert] [-l|--line-numbers] [-q|--quiet] [-w|--whitespace] "
+	    "[-x|--context n] [artifact1 [artifact2]] [path ...]\n  "
 	    "e.g.: %s diff --context 3 d34db33f c0ff33 src/*.c\n\n",
 	    fcli_progname(), fcli_progname());
 }
@@ -6650,7 +6596,8 @@ cmd_diff(fcli_command const *argv)
 	}
 
 	rc = open_diff_view(view, commit, context, fnc_init.ws,
-	    fnc_init.invert, !fnc_init.quiet, NULL, showmeta, &paths);
+	    fnc_init.invert, !fnc_init.quiet, fnc_init.showln, NULL,
+	    showmeta, &paths);
 	if (!rc)
 		rc = view_loop(view);
 end:
@@ -8176,7 +8123,8 @@ set_colours(struct fnc_colours *s, enum fnc_view_id vid)
 		static const char *regexp_diff[] = {
 		    "^((checkin|wiki|ticket|technote) "
 		    "[0-9a-f]|hash [+-] |\\[[+~>-]] |[+-]{3} )",
-		    "^user:", "^date:", "^tags:", "^-", "^\\+", "^@@"
+		    "^user:", "^date:", "^tags:", "^-|^[0-9 ]+ -",
+		    "^\\+|^[0-9 ]+ \\+", "^@@"
 		};
 		const int pairs_diff[][2] = {
 		    {FNC_COLOUR_DIFF_META, init_colour(FNC_COLOUR_DIFF_META)},
@@ -9458,8 +9406,8 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			break;
 		}
 		rc = open_diff_view(diff_view, commit, DEF_DIFF_CTX,
-		    fnc_init.ws, fnc_init.invert, !fnc_init.quiet, NULL, true,
-		    NULL);
+		    fnc_init.ws, fnc_init.invert, !fnc_init.quiet,
+		    fnc_init.showln, NULL, true, NULL);
 		s->selected_commit = commit;
 		if (rc) {
 			fnc_commit_artifact_close(commit);
