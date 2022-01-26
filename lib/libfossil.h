@@ -3923,8 +3923,10 @@ struct fsl_dline {
   /** Number of bytes of z which belong to this line. */
   unsigned short n;
   // All members after this point are strictly for internal use only.
-  /** Indent of the line. Only !=0 with certain options. */
+  /** Index of first non-space char. */
   unsigned short indent;
+  /** Number of bytes without leading/trailing space. */
+  unsigned short nw;
   /** Hash of the line. Lower X bits are the length. */
   uint64_t h;
   /** 1+(Index of next line with same the same hash) */
@@ -4082,8 +4084,8 @@ typedef struct fsl_dibu fsl_dibu;
 struct fsl_dibu {
   /**
      Config info, owned by higher-level routines. Every diff builder
-     requires one of these. Builders are prohibited from modifying
-     these but the diff driver will.
+     requires one of these but not all options are relevant for all
+     builders.
 
      Note that the diff driver may make a bitwise copy of this object
      and use _that_ one for the actual diff generation. That is,
@@ -4092,12 +4094,12 @@ struct fsl_dibu {
      order to implement diff inversion (swapping the LHS/RHS of a
      diff).)
   */
-  fsl_dibu_opt * opt;
+  fsl_dibu_opt const * opt;
   /**
      Can optionally be set by factory functions to some internal
      opaque value, so that non-member routines specific to that type can determine
      whether any given builder is of the proper type.
-   */
+  */
   void const * typeID;
   /**
      If not NULL, this is called once per pass per diff to give the
@@ -14310,7 +14312,7 @@ FSL_EXPORT int fsl_repo_rebuild(fsl_cx * const f, fsl_rebuild_opt const * const 
    On error it may return FSL_RC_NOT_A_REPO, FSL_RC_OOM, or any number
    of db-side error codes.
 */
-FSL_EXPORT int fsl_branch_of_rid(fsl_cx * const f, fsl_int_t rid,
+FSL_EXPORT int fsl_branch_of_rid(fsl_cx * const f, fsl_id_t rid,
                                  bool doFallback, char ** zOut );
 
 /** Convenience typedef and obligatory forward declaration. */
@@ -17223,14 +17225,18 @@ FSL_EXPORT int fsl_ckout_file_content(fsl_cx * const f, bool relativeToCwd,
    - FSL_RC_NOT_A_CKOUT.
 
    - FSL_RC_NOT_FOUND if the filename cannot be resolved in the
-     requested version or cannot be stat()'d.
+     requested version or cannot be stat()'d. This can happen if,
+     e.g. fc's file has been renamed, but not yet checked in, in the
+     current checkout. A _potential_ TODO is to check for a
+     (`vfile.origname=fc->name`) record and use `vfile.pathname` for
+     the stat() call.
 
    - FSL_RC_OOM.
 */
 FSL_EXPORT int fsl_card_F_ckout_mtime(fsl_cx * const f, fsl_id_t vid,
                                       fsl_card_F const * const fc,
-                                      fsl_time_t * repoMtime,
-                                      fsl_time_t * localMtime);
+                                      fsl_time_t * const repoMtime,
+                                      fsl_time_t * const localMtime);
 
 /**
    File change types for use with fsl_merge_state::fileChangeType.
@@ -18633,10 +18639,12 @@ struct fsl__mcache {
   fsl_deck decks[4];
 };
 
-/** Convenience typedef. */
+/** @internal
+  Convenience typedef. */
 typedef struct fsl__mcache fsl__mcache;
 
-/** Initialized-with-defaults fsl__mcache structure, intended for
+/** @internal
+    Initialized-with-defaults fsl__mcache structure, intended for
     const-copy initialization. */
 #define fsl__mcache_empty_m { \
   0,0,0,                      \
@@ -18645,12 +18653,14 @@ typedef struct fsl__mcache fsl__mcache;
    fsl_deck_empty_m, fsl_deck_empty_m}\
 }
 
-/** Initialized-with-defaults fsl__mcache structure, intended for
-    non-const copy initialization. */
+/**@internal
+  Initialized-with-defaults fsl__mcache structure, intended for
+  non-const copy initialization. */
 extern const fsl__mcache fsl__mcache_empty;
 
 
-/* The fsl_cx class is documented in main public header. */
+/* The fsl_cx class is documented in main public header. ALL of its
+   members are to be considered private/internal. */
 struct fsl_cx {
   /**
      A pointer to the "main" db handle. Exactly which db IS the
@@ -20273,7 +20283,7 @@ int fsl__ckout_symlink_create(fsl_cx * const f, char const *zTgtFile,
                               char const * zLinkFile);
 
 
-/**
+/** @internal
    Compute all file name changes that occur going from check-in iFrom
    to check-in iTo. Requires an opened repository.
 
@@ -20301,10 +20311,10 @@ int fsl__find_filename_changes(fsl_cx * const f,
                                uint32_t *pnChng,
                                fsl_id_t **aiChng);
 
-/**
+/**  @internal
    Bitmask of file change types for use with
    fsl__is_locally_modified().
- */
+*/
 enum fsl__localmod_e {
 /** Sentinel value. */
 FSL__LOCALMOD_NONE = 0,
@@ -20474,7 +20484,6 @@ int fsl__crosslink_begin(fsl_cx * const f);
 */
 int fsl__crosslink_end(fsl_cx * const f, int resultCode);
 
-
 /** @internal
 
    Searches the current repository database for a fingerprint and
@@ -20504,9 +20513,9 @@ int fsl__crosslink_end(fsl_cx * const f, int resultCode);
    @see fsl_ckout_fingerprint_check()
 */
 int fsl__repo_fingerprint_search(fsl_cx * const f, fsl_id_t rcvid,
-                                char ** zOut);
+                                 char ** zOut);
 
-/**
+/** @internal
    State for running a raw diff.
 
    @see fsl__diff_all()
@@ -20539,17 +20548,19 @@ struct fsl__diff_cx {
   /** Predicate for comparing LHS/RHS lines for equivalence. */
   int (*cmpLine)(const fsl_dline * const, const fsl_dline *const);
 };
-/**
+/** @internal
    Convenience typeef.
 */
 typedef struct fsl__diff_cx fsl__diff_cx;
-/** Initialized-with-defaults fsl__diff_cx structure, intended for
+/** @internal
+    Initialized-with-defaults fsl__diff_cx structure, intended for
     const-copy initialization. */
 #define fsl__diff_cx_empty_m {\
   NULL,0,0,NULL,0,NULL,0,fsl_dline_cmp \
 }
-/** Initialized-with-defaults fsl__diff_cx structure, intended for
-    non-const copy initialization. */
+/** @internal
+   Initialized-with-defaults fsl__diff_cx structure, intended for
+   non-const copy initialization. */
 extern const fsl__diff_cx fsl__diff_cx_empty;
 
 /** @internal
@@ -20573,14 +20584,14 @@ extern const fsl__diff_cx fsl__diff_cx_empty;
 int fsl__diff_all(fsl__diff_cx * const p);
 
 /** @internal */
-void fsl__diff_optimize(fsl__diff_cx * const p);
-
-/** @internal */
 void fsl__diff_cx_clean(fsl__diff_cx * const cx);
+
+
 
 /** @internal
 
-    Undocumented. For internal debugging only.
+    Undocumented. For internal debugging only. The 2nd argument is
+    intended to be __FILE__ and the 3rd is intended to be __LINE__.
 */
 void fsl__dump_triples(fsl__diff_cx const * const p,
                        char const * zFile, int ln );
@@ -20595,6 +20606,47 @@ void fsl__dump_triples(fsl__diff_cx const * const p,
 */
 int fsl__shunned_remove(fsl_cx * const f);
 
+/** @internal
+
+   This function is, as of this writing, only exposed via a header file
+   for the sake of fnc, which still relies on it after we moved the
+   "v1" diff code out of this library and into fnc.
+
+   Attempt to shift insertion or deletion blocks so that they begin and
+   end on lines that are pure whitespace.  In other words, try to transform
+   this:
+
+   ```
+        int func1(int x){
+           return x*10;
+       +}
+       +
+       +int func2(int x){
+       +   return x*20;
+        }
+  
+        int func3(int x){
+           return x/5;
+        }
+   ```
+
+   Into one of these:
+  
+   ```
+        int func1(int x){              int func1(int x){
+           return x*10;                   return x*10;
+        }                              }
+       +
+       +int func2(int x){             +int func2(int x){
+       +   return x*20;               +   return x*20;
+       +}                             +}
+                                      +
+        int func3(int x){              int func3(int x){
+           return x/5;                    return x/5;
+        }                              }
+   ```
+*/
+void fsl__diff_optimize(fsl__diff_cx * const p);
 
 /** @internal
 
