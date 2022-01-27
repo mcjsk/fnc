@@ -4577,7 +4577,7 @@ write_commit_meta(struct fnc_diff_view_state *s)
 	++lnoff;
 	rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff);
 	s->index.offset = fsl_realloc(s->index.offset,
-	    (s->index.n + 1) * sizeof(size_t));
+	    (s->index.n + 1) * sizeof(off_t));
 	s->index.offset[s->index.n++] = lnoff;
 end:
 	free(st0);
@@ -5117,7 +5117,7 @@ diff_file(struct fnc_diff_view_state *s, fsl_buffer *bminus, const char *zminus,
 		goto end;
 
 	s->index.offset = fsl_realloc(s->index.offset,
-	    (s->index.n + 1) * sizeof(size_t));
+	    (s->index.n + 1) * sizeof(off_t));
 	s->index.offset[s->index.n++] = s->buf.used;
 	rc = write_diff_meta(&s->buf, zminus, xminus, zplus,
 	    fsl_buffer_str(&xplus), s->diff_flags, change);
@@ -5343,8 +5343,9 @@ diff_file_artifact(struct fnc_diff_view_state *s, fsl_id_t vid1,
 
 	if (s->buf.used) {
 		s->index.offset = fsl_realloc(s->index.offset,
-		    (s->index.n + 1) * sizeof(size_t));
-		s->index.offset[s->index.n++] = s->buf.used + s->index.offset[0];
+		    (s->index.n + 1) * sizeof(off_t));
+		s->index.offset[s->index.n++] = s->buf.used +
+		    s->index.offset[0];
 	}
 	rc = write_diff_meta(&s->buf, zminus, xminus, zplus, xplus,
 	    s->diff_flags, change);
