@@ -10663,18 +10663,20 @@ fnc_make_sql_glob(char **op, char **glob, const char *str, bool fold)
  * Read permissions for the below unveil() calls are self-evident; we need
  * to read the repository and ckout databases, and ckout dir for most all fnc
  * operations. Write and create permissions are briefly listed inline, but we
- * effectively veil the entire fs except the repo db, ckout dir, and /tmp.
+ * effectively veil the entire fs except the repo db, ckout, and /tmp dirs.
+ * The create permissions for the repository and checkout dirs are (perhaps
+ * unintuitively) needed as fossil(1) creates temporary journal files in both.
  */
 static int
 init_unveil(const char *repodb, const char *ckoutdir, bool cfg)
 {
-	/* w repo db for 'fnc config' command: fnc_conf_setopt(). */
+	/* wc repo db for 'fnc config' command: fnc_conf_setopt(). */
 	if (unveil(repodb, cfg ? "rwc" : "rw") == -1)
 		return RC(fsl_errno_to_rc(errno, FSL_RC_ACCESS),
 		    "unveil(%s, \"rw\")", repodb);
 
-	/* w .fslckout for fsl_ckout_changes_scan() in cmd_diff(). */
-	if (unveil(ckoutdir, "rw") == -1)
+	/* wc .fslckout for fsl_ckout_changes_scan() in cmd_diff(). */
+	if (unveil(ckoutdir, "rwc") == -1)
 		return RC(fsl_errno_to_rc(errno, FSL_RC_ACCESS),
 		    "unveil(%s, \"rw\")", ckoutdir);
 
