@@ -461,7 +461,10 @@ Display diff command help and usage information then exit.
 .It Fl i , -invert
 Invert the difference between artifacts when displaying the diff.
 .It Fl l , -line-numbers
-Display file line numbers in diff output.
+Display file line numbers in diff output.  As documented below, this option can
+be toggled with the
+.Sy L
+diff view key binding.
 .It Fl P , -no-prototype
 Disable chunk header display of which function or scope each change is in,
 which is enabled by default.  The heuristic will produce reliable results for
@@ -565,6 +568,8 @@ Decrease the number of context lines shown in diff output.
 Increase the number of context lines shown in diff output.
 .It Cm #
 Toggle display of diff view line numbers.
+.It Cm @
+Open prompt to enter line number and navigate to that line in the view.
 .It Cm b
 Open and populate branch view with all repository branches.
 .It Cm c
@@ -576,9 +581,7 @@ Open prompt to enter file number and navigate to that file in the diff.
 .It Cm i
 Toggle inversion of diff output.
 .It Cm L
-Open prompt to enter line number and navigate to line.
-.It Cm N
-Toggle display of file line numbers.
+Toggle display of file line numbers in the diff.
 .It Cm p
 In the diff chunk header, toggle display of which function each change is in;
 for example:
@@ -771,7 +774,7 @@ Display blame command help and usage information then exit.
 Open annotated file at
 .Ar lineno .
 As documented below, once the file is loaded, the
-.Sy L
+.Sy @
 key binding can be used to navigate to an arbitrary line in the file.
 .It Fl n , -limit Ar n
 Limit depth of blame history to
@@ -849,6 +852,8 @@ Display the
 of the commit corresponding to the currently selected line.
 .It Cm #
 Toggle display of file line numbers.
+.It Cm @
+Open prompt to enter line number and navigate to that line in the file.
 .It Cm B, Backspace
 Reload the previous blamed version of the file.
 .It Cm b
@@ -858,8 +863,6 @@ selected line.
 Toggle coloured output. On supported terminals,
 .Nm
 will default to displaying the blamed file in colour.
-.It Cm L
-Open prompt to enter line number and navigate to line.
 .It Cm p
 Blame the version of the file corresponding to the parent of the commit in
 the currently selected line.

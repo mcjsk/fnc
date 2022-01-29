@@ -3052,6 +3052,7 @@ help(struct fnc_view *view)
 	    {""}, /* Diff */
 	    {"  Space            ", "  ❬Space❭         "},
 	    {"  #                ", "  ❬#❭             "},
+	    {"  @                ", "  ❬@❭             "},
 	    {"  $                ", "  ❬$❭             "},
 	    {"  0                ", "  ❬0❭             "},
 	    {"  C-e              ", "  ❬C-e❭           "},
@@ -3064,7 +3065,6 @@ help(struct fnc_view *view)
 	    {"  F                ", "  ❬F❭             "},
 	    {"  i                ", "  ❬i❭             "},
 	    {"  L                ", "  ❬L❭             "},
-	    {"  N                ", "  ❬N❭             "},
 	    {"  p                ", "  ❬p❭             "},
 	    {"  v                ", "  ❬v❭             "},
 	    {"  w                ", "  ❬w❭             "},
@@ -3085,11 +3085,11 @@ help(struct fnc_view *view)
 	    {"  Space            ", "  ❬Space❭         "},
 	    {"  Enter            ", "  ❬Enter❭         "},
 	    {"  #                ", "  ❬#❭             "},
+	    {"  @                ", "  ❬@❭             "},
 	    {"  $                ", "  ❬$❭             "},
 	    {"  0                ", "  ❬0❭             "},
 	    {"  l<Right>         ", "  ❬l❭❬→❭          "},
 	    {"  h<Left>          ", "  ❬h❭❬←❭          "},
-	    {"  L                ", "  ❬L❭             "},
 	    {"  b                ", "  ❬b❭             "},
 	    {"  p                ", "  ❬p❭             "},
 	    {"  B                ", "  ❬B❭             "},
@@ -3138,6 +3138,7 @@ help(struct fnc_view *view)
 	    "Diff",
 	    "Scroll down one page of diff output",
 	    "Toggle display of diff view line numbers",
+	    "Open prompt to enter line number and navigate to line",
 	    "Scroll the view right to the end of the longest line",
 	    "Scroll the view left to the beginning of the line",
 	    "Scroll the view down in the buffer",
@@ -3149,7 +3150,6 @@ help(struct fnc_view *view)
 	    "Open and populate branch view with all repository branches",
 	    "Open prompt to enter file number and navigate to file",
 	    "Toggle inversion of diff output",
-	    "Open prompt to enter line number and navigate to line",
 	    "Toggle display of file line numbers",
 	    "Toggle display of function name in chunk header",
 	    "Toggle verbosity of diff output",
@@ -3171,11 +3171,11 @@ help(struct fnc_view *view)
 	    "Scroll down one page",
 	    "Display the diff of the commit corresponding to the selected line",
 	    "Toggle display of file line numbers",
+	    "Open prompt to enter line number and navigate to line",
 	    "Scroll the view right to the end of the longest line",
 	    "Scroll the view left to the beginning of the line",
 	    "Scroll the view right",
 	    "Scroll the view left",
-	    "Open prompt to enter line number and navigate to line",
 	    "Blame the version of the file found in the selected line's commit",
 	    "Blame the version of the file found in the selected line's parent "
 	    "commit",
@@ -5885,7 +5885,7 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		fsl_buffer_clear(&buf);
 		fsl_free(end);
 		break;
-	case 'L': {
+	case '@': {
 		struct input input = {(int []){1, nlines}, "line: ",
 		    INPUT_NUMERIC, true};
 		rc = fnc_prompt_input(view, &input);
@@ -5923,21 +5923,26 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	}
 	case 'c':
 	case 'i':
-	case 'N':
+	case 'L':
 	case 'p':
 	case 'v':
 	case 'w':
 		if (ch == 'c')
 			s->colour = !s->colour;
-		if (ch == 'i')
+		/* Lipvw key maps don't apply to tag or ticket artifacts. */
+		if (*s->selected_commit->type == 't' &&
+		    (s->selected_commit->type[1] == 'a' ||
+		     s->selected_commit->type[1] == 'i'))
+			break;
+		else if (ch == 'i')
 			FLAG_TOG(s->diff_flags, FNC_DIFF_INVERT);
-		if (ch == 'N')
+		else if (ch == 'L')
 			FLAG_TOG(s->diff_flags, FNC_DIFF_LINENO);
-		if (ch == 'p')
+		else if (ch == 'p')
 			FLAG_TOG(s->diff_flags, FNC_DIFF_PROTOTYPE);
-		if (ch == 'v')
+		else if (ch == 'v')
 			FLAG_TOG(s->diff_flags, FNC_DIFF_VERBOSE);
-		if (ch == 'w')
+		else if (ch == 'w')
 			FLAG_TOG(s->diff_flags, FNC_DIFF_IGNORE_ALLWS);
 		rc = reset_diff_view(view, true);
 		break;
@@ -9258,7 +9263,7 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		else
 			s->first_line_onscreen = 1;
 		break;
-	case 'L': {
+	case '@': {
 		struct input input = {(int []){1, s->blame.nlines}, "line: ",
 		    INPUT_NUMERIC, true};
 		rc = fnc_prompt_input(view, &input);
