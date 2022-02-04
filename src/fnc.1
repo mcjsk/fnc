@@ -46,7 +46,7 @@
 .Op Ar path
 .Nm
 .Cm diff
-.Op Fl CilPqw
+.Op Fl CilPqsw
 .Op Fl R Ar path
 .Op Fl x Ar number
 .Op Ar artifact1 Op Ar artifact2
@@ -406,8 +406,8 @@ on the timeline is consumed.
 .Tg di
 .It Cm diff Oo Fl C | -no-colour Oc Oo Fl h | -help Oc Oo Fl i | -invert Oc \
 Oo Fl l | -line-numbers Oc Oo Fl P | -no-prototype Oc Oo Fl q | -quiet Oc \
-Oo Fl R | -repo Ar path Oc Oo Fl w | -whitespace Oc Oo Fl x | -context Ar n Oc \
-Oo Ar artifact1 Oo Ar artifact2 Oc Oc Op Ar path ...
+Oo Fl R | -repo Ar path Oc Oo Fl s | -sbs Oc Oo Fl w | -whitespace Oc \
+Oo Fl x | -context Ar n Oc Oo Ar artifact1 Oo Ar artifact2 Oc Oc Op Ar path ...
 .Dl Pq alias: Cm di
 Display the differences between two repository artifacts, or between the local
 changes on disk and a given commit.  If neither
@@ -503,6 +503,11 @@ and
 are invalid
 .Sy artifact
 operands.
+.It Fl s , -sbs
+Display a side-by-side formatted diff.  As documented below, this option can
+also be toggled in-session with the
+.Sy s
+key binding.
 .It Fl w , -whitespace
 Ignore whitespace-only changes when displaying the diff.
 .It Fl x , -context Ar n
@@ -586,6 +591,8 @@ Toggle display of file line numbers in the diff.
 In the diff chunk header, toggle display of which function each change is in;
 for example:
 .Sy @@ -2360,10 +2361,11 @@ draw_commits(struct fnc_view *view)
+.It Cm S
+Toggle display of a side-by-side formatted diff.
 .It Cm v
 Toggle verbosity of diff output. By default,
 .Nm
@@ -1146,6 +1153,12 @@ Metadata displayed in the diff view.  If not defined, the default value is
 .It Ev FNC_COLOUR_DIFF_TAGS
 The tag field displayed in the diff view.  If not defined, the default value is
 .Qq magenta .
+.It Ev FNC_COLOUR_DIFF_SBS_EDIT
+Changed
+.Pq i.e., not added or removed
+lines in the diff view when displaying side-by-side diffs.  If not defined, the
+default value is
+.Qq red .
 .It Ev FNC_COLOUR_TREE_DIR
 Directory entries displayed in the tree view.  If not defined, the default value
 is

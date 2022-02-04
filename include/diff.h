@@ -15,6 +15,7 @@
  */
 
 #include "libfossil.h"
+#include "settings.h"
 
 enum fnc_diff_flag {
 	FNC_DIFF_IGNORE_EOLWS	= 0x01,
@@ -32,12 +33,14 @@ enum fnc_diff_flag {
 	FNC_DIFF_PROTOTYPE	= 1 << 12
 #define FNC_DIFF_CONTEXT_EX	(((uint64_t)0x04) << 32)  /* Allow 0 context */
 #define FNC_DIFF_CONTEXT_MASK	((uint64_t)0x0000ffff)    /* Default context */
-#define FNC_DIFF_WIDTH_MASK	((uint64_t)0x00ff0000)    /* SBS column width */
+#define FNC_DIFF_WIDTH_MASK	((uint64_t)0x0fff0000)    /* SBS column width */
 };
 
 struct diff_out_state {
 	fsl_output_f	 out;		/* Output callback */
 	void		*state;		/* State for this->out() */
+	enum line_type	*lines;		/* Diff line type (e.g., minus, plus) */
+	uint32_t	*idx;		/* Index into this->lines */
 	int		 rc;		/* Error reporting */
 	char		 ansi;		/* ANSI colour code */
 	struct {
@@ -49,7 +52,7 @@ struct diff_out_state {
 	} proto;
 };
 static const struct diff_out_state diff_out_state_empty =
-    { NULL, NULL, 0, 0, { NULL, NULL, 0, 0, 0 } };
+    { NULL, NULL, NULL, 0, 0, 0, { NULL, NULL, 0, 0, 0 } };
 
 struct sbsline {
 	struct diff_out_state	*output;
@@ -68,11 +71,13 @@ struct sbsline {
 int		 fnc_diff_text_raw(fsl_buffer const *, fsl_buffer const *,
 		    int, int **);
 int		 fnc_diff_text_to_buffer(fsl_buffer const *, fsl_buffer const *,
-		    fsl_buffer *, short, short, int );
+		    fsl_buffer *, enum line_type **, uint32_t *, short, short,
+		    int );
 int		 fnc_diff_text(fsl_buffer const *, fsl_buffer const *,
 		    fsl_output_f, void *, short, short, int );
 int		 fnc_diff_blobs(fsl_buffer const *, fsl_buffer const *,
-		    fsl_output_f, void *, uint16_t, short, int, int **);
+		    fsl_output_f, void *, enum line_type **, uint32_t *,
+		    uint16_t, short, int, int **);
 int		 fnc_output_f_diff_out(void *, void const *, fsl_size_t);
 int		 diff_outf(struct diff_out_state *, char const *, ... );
 int		 diff_out(struct diff_out_state * const, void const *,
@@ -93,6 +98,9 @@ int		 unidiff_txt( struct diff_out_state *const, char, fsl_dline *,
 		    int, void *);
 int		 sbsdiff(fsl__diff_cx *, struct diff_out_state *, void *,
 		    uint16_t, uint64_t);
+int		 alloc_lines_and_width(fsl__diff_cx *, int *, uint16_t,
+		    uint32_t, enum line_type **);
+unsigned short	 etcount(const char *str, unsigned short n);
 int		 sbsdiff_width(uint64_t);
 int		 sbsdiff_separator(struct sbsline *, int, int);
 int		 sbsdiff_lineno(struct sbsline *, int, int);

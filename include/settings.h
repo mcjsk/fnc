@@ -36,6 +36,7 @@
 	_(pfx, COLOUR_DIFF_PLUS),				\
 	_(pfx, COLOUR_DIFF_CHUNK),				\
 	_(pfx, COLOUR_DIFF_TAGS),				\
+	_(pfx, COLOUR_DIFF_SBS_EDIT),				\
 	_(pfx, COLOUR_TREE_LINK),				\
 	_(pfx, COLOUR_TREE_DIR),				\
 	_(pfx, COLOUR_TREE_EXEC),				\
@@ -59,6 +60,7 @@
 	_(pfx, NUMERIC)
 
 #define LINE_TYPE_ENUM(pfx, _)					\
+	_(pfx, BLANK),						\
 	_(pfx, TIMELINE_HEADER),				\
 	_(pfx, TIMELINE_COMMIT),				\
 	_(pfx, DIFF_HEADER),					\
@@ -72,7 +74,10 @@
 	_(pfx, DIFF_META),					\
 	_(pfx, DIFF_MINUS),					\
 	_(pfx, DIFF_PLUS),					\
+	_(pfx, DIFF_EDIT),					\
+	_(pfx, DIFF_CONTEXT),					\
 	_(pfx, DIFF_CHUNK),					\
+	_(pfx, DIFF_SEPARATOR)
 
 #define VIEW_MODE_ENUM(pfx, _)					\
 	_(pfx, NONE),						\

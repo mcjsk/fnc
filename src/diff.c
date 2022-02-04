@@ -39,12 +39,16 @@
 
 #include "diff.h"
 
-#ifndef nitems
 #define nitems(_a)	(sizeof((_a)) / sizeof((_a)[0]))
-#endif
+#define MIN(_a, _b)	((_a) < (_b) ? (_a) : (_b))
+#define MAX(_a, _b)	((_a) > (_b) ? (_a) : (_b))
 #define starts_with(_str, _pfx) (!fsl_strncmp(_str, _pfx, sizeof(_pfx) - 1))
 #define LENGTH(_ln)	((_ln)->n)  /* Length of a fsl_dline */
-
+#define UTF_CONT(_ch)	(((_ch) & 0xc0) == 0x80)
+#define FLAG_SET(f, b)	((f) |= (b))
+#define FLAG_CHK(f, b)	((f) & (b))
+#define FLAG_TOG(f, b)	((f) ^= (b))
+#define FLAG_CLR(f, b)	((f) &= ~(b))
 
 /*
  * Column indices for struct sbsline.cols[]
@@ -86,24 +90,26 @@ int
 fnc_diff_text_raw(fsl_buffer const *blob1, fsl_buffer const *blob2,
     int flags, int **out)
 {
-	return fnc_diff_blobs(blob1, blob2, NULL, NULL, 0, 0, flags, out);
+	return fnc_diff_blobs(blob1, blob2, NULL, NULL, NULL, NULL, 0, 0,
+	    flags, out);
 }
 
 int
 fnc_diff_text_to_buffer(fsl_buffer const *blob1, fsl_buffer const *blob2,
-    fsl_buffer *out, short context, short sbswidth, int flags)
+    fsl_buffer *out, enum line_type **lines, uint32_t *nlines, short context,
+    short sbswidth, int flags)
 {
 	return (blob1 && blob2 && out) ?
-	    fnc_diff_blobs(blob1, blob2, fsl_output_f_buffer, out, context,
-	    sbswidth, flags, NULL) : FSL_RC_MISUSE;
+	    fnc_diff_blobs(blob1, blob2, fsl_output_f_buffer, out, lines,
+	    nlines, context, sbswidth, flags, NULL) : FSL_RC_MISUSE;
 }
 
 int
 fnc_diff_text(fsl_buffer const *blob1, fsl_buffer const *blob2,
     fsl_output_f out, void *state, short context, short sbswidth, int flags)
 {
-	return fnc_diff_blobs(blob1, blob2, out, state, context, sbswidth,
-	    flags, NULL );
+	return fnc_diff_blobs(blob1, blob2, out, state, NULL, NULL,
+	    context, sbswidth, flags, NULL);
 }
 
 /*
@@ -125,8 +131,9 @@ fnc_diff_text(fsl_buffer const *blob1, fsl_buffer const *blob2,
  */
 int
 fnc_diff_blobs(fsl_buffer const *blob1, fsl_buffer const *blob2,
-    fsl_output_f out, void *state, /* void *regex, */ uint16_t context,
-    short sbswidth, int flags, int **rawdata)
+    fsl_output_f out, void *state, enum line_type **lines, uint32_t *nlines,
+    /* void *regex, */ uint16_t context, short sbswidth, int flags,
+    int **rawdata)
 {
 	fsl__diff_cx	c = fsl__diff_cx_empty;
 	int		rc;
@@ -139,14 +146,7 @@ fnc_diff_blobs(fsl_buffer const *blob1, fsl_buffer const *blob2,
 	else if (context & ~FSL__LINE_LENGTH_MASK)
 		context = FSL__LINE_LENGTH_MASK;
 
-	/* Encode SBS width. */
-	if (sbswidth < 0 || (!sbswidth && (FNC_DIFF_SIDEBYSIDE & flags)))
-		sbswidth = 80;
-	if (sbswidth)
-		flags |= FNC_DIFF_SIDEBYSIDE;
-	flags |= ((int)(sbswidth & 0xFF)) << 16;
-
-	if (flags & FNC_DIFF_INVERT) {
+	if (FLAG_CHK(flags, FNC_DIFF_INVERT)) {
 		fsl_buffer const *tmp = blob1;
 		blob1 = blob2;
 		blob2 = tmp;
@@ -174,14 +174,14 @@ fnc_diff_blobs(fsl_buffer const *blob1, fsl_buffer const *blob2,
 	/* fsl__dump_triples(&c, __FILE__, __LINE__); */  /* DEBUG */
 	if (rc)
 		goto end;
-	if ((flags & FNC_DIFF_NOTTOOBIG)) {
+	if (FLAG_CHK(flags, FNC_DIFF_NOTTOOBIG)) {
 		int i, m, n;
 		int *a = c.aEdit;
 		int mx = c.nEdit;
 
 		for (i = m = n = 0; i < mx; i += 3) {
 			m += a[i];
-			n += a[i+1] + a[i+2];
+			n += a[i + 1] + a[i + 2];
 		}
 		if (!n || n > 10000) {
 			rc = FSL_RC_RANGE;
@@ -190,24 +190,42 @@ fnc_diff_blobs(fsl_buffer const *blob1, fsl_buffer const *blob2,
 		}
 	}
 	/* fsl__dump_triples(&c, __FILE__, __LINE__); */  /* DEBUG */
-	if (!(flags & FNC_DIFF_NOOPT))
+	if (!FLAG_CHK(flags, FNC_DIFF_NOOPT))
 		fsl__diff_optimize(&c);
 	/* fsl__dump_triples(&c, __FILE__, __LINE__); */  /* DEBUG */
 
+	/*
+	 * For SBS diffs, compute total number of lines and set file column
+	 * width to the longest line in the diff and encode result in flags.
+	 * XXX I'm ambivalent about converting unified diffs to the line_type
+	 * interface as it's extra allocations for no immediate gain but creates
+	 * opportunities to do cool things; leave it till we want to do them?
+	 */
+	if ((!sbswidth && FLAG_CHK(flags, FNC_DIFF_SIDEBYSIDE)) ||
+	    sbswidth < 0) {
+		flags |= ((int)(sbswidth & 0xFFFF)) << 8;
+		FLAG_SET(flags, FNC_DIFF_SIDEBYSIDE);
+		rc = alloc_lines_and_width(&c, &flags, context, *nlines, lines);
+		if (rc)
+			goto end;
+	}
+
 	if (out) {
 		/*
-		 * XXX Missing regex support.
 		 * Compute a context or side-by-side diff.
+		 * XXX Missing regex support.
 		 */
 		struct diff_out_state dos = diff_out_state_empty;
-		if (flags & FNC_DIFF_PROTOTYPE) {
+		if (FLAG_CHK(flags, FNC_DIFF_PROTOTYPE)) {
 			memset(&dos.proto, 0, sizeof(dos.proto));
 			dos.proto.file = blob1;
 		}
 		dos.out = out;
 		dos.state = state;
-		dos.ansi = !!(flags & FNC_DIFF_ANSI_COLOR);
-		if (flags & FNC_DIFF_SIDEBYSIDE)
+		dos.lines = *lines;
+		dos.idx = nlines;
+		dos.ansi = !!(FLAG_CHK(flags, FNC_DIFF_ANSI_COLOR));
+		if (FLAG_CHK(flags, FNC_DIFF_SIDEBYSIDE))
 			rc = sbsdiff(&c, &dos, NULL /*regex*/, context, flags);
 		else
 			rc = unidiff(&c, &dos, NULL /*regex*/, context, flags);
@@ -221,6 +239,108 @@ end:
 	fsl_free(c.aTo);
 	fsl_free(c.aEdit);
 	return rc;
+}
+
+/*
+ * Iterate copy elements in the c->aEdit 3-tuple to compute start and end lines,
+ * including surrounding ctxt, of each chunk in the diff. Add result to nlines,
+ * allocate the total and assign to *lines, which must be disposed of by the
+ * caller. For SBS diffs, find the longest line and encode the length in *flags.
+ */
+int
+alloc_lines_and_width(fsl__diff_cx *c, int *flags, uint16_t ctxt,
+    uint32_t nlines, enum line_type **lines)
+{
+	int		i, j, k;
+	int		endl, endr, start; /* Start and end of l+r chunks */
+	uint32_t	n = 0;		   /* Number of lines in the diff */
+	unsigned short	sz, sbswidth;	   /* Size of each line and max width */
+
+	j = endl = endr = start = 0;
+	k = c->nEdit;
+	sbswidth = (*flags & FNC_DIFF_SIDEBYSIDE) ? sbsdiff_width(*flags) : 0;
+
+	/* Find minimal copy/delete/insert triples. */
+	while (k > 2 && c->aEdit[k - 1] == 0 && c->aEdit[k - 2] == 0)
+		k -= 3;
+
+	/*
+	 * c[0] = first line in the diff and we accumulate each c[n += 3] to
+	 * find the start of the next change (after adding any insertions);
+	 * that is, each copy element by itself does not correspond to a line.
+	 */
+	do {
+		int e, e2, s;
+
+		/*
+		 * Compute number of lines in both the left and right chunk.
+		 * Both chunks will have the _same_ start line, but may have
+		 * distinct end lines.
+		 */
+		start += c->aEdit[j];		  /* Chunk start line */
+		endl = endr = start;
+		endl += MAX(c->aEdit[j + 1], 0);  /* End of left side chunk */
+		endr += MAX(c->aEdit[j + 2], 0);  /* End of right side chunk */
+		s = MAX(start - ctxt, 0);	  /* Include leading ctxt */
+		e = MIN(endl + ctxt, c->nFrom);	  /* L include trailing ctxt */
+		e2 = MIN(endr + ctxt, c->nTo);	  /* R include trailing ctxt */
+		n += MAX(MAX(e, e2) - s + ctxt + 2, 0); /* Max lines in chunk */
+
+		/*
+		 * Now find the longest line. We'll make both the left and right
+		 * columns the width of the longest line from either side.
+		 * XXX Consider keeping max width of both sides to make each
+		 * column only as wide as its longest line; we can set a min
+		 * default in diffs with added/removed files.
+		 */
+		for (i = s; sbswidth && (i < e || i < e2); ++i) {
+			if (i < e) {
+				/* Left side line length */
+				sz = c->aFrom[i].n;
+				if (sz > sbswidth)
+					sbswidth = etcount(c->aFrom[i].z, sz);
+			}
+			if (i < e2) {
+				/* Right side line length */
+				sz = c->aTo[i].n;
+				if (sz > sbswidth)
+					sbswidth = etcount(c->aTo[i].z, sz);
+			}
+		}
+		if (i >= c->nFrom && i >= c->nTo)
+			break;
+
+		/* Account for insertions before adding lines to next chunk. */
+		start += c->aEdit[j + 2];
+	} while ((j += 3) < k - 3);
+
+	*flags |= ((int)(sbswidth & 0xFFF)) << 16;  /* Encode max width */
+
+	*lines = fsl_realloc(*lines, (nlines + n) * sizeof(enum line_type *));
+	memset((*lines + nlines), 0, sizeof(enum line_type *) * n);
+
+	return *lines ? FSL_RC_OK : FSL_RC_ERROR;
+}
+
+/*
+ * Convert str byte size n to actual column width by expanding tabs and
+ * accounting for unicode continuation bytes. Return the result.
+ */
+unsigned short
+etcount(const char *str, unsigned short n)
+{
+	unsigned short c = 0;
+
+	while (str && str[c] != '\n') {
+		/* Expand tabs */
+		if (str[c] == '\t')
+			n += 8 - (c % 8);
+		if (UTF_CONT(str[c]))
+			--n;
+		++c;
+	}
+
+	return n;
 }
 
 /*
@@ -479,25 +599,25 @@ buffer_copy_lines_from(fsl_buffer *const dst, const fsl_buffer *const src,
 }
 
 /*
- * Scan the diffed file os->proto->file from line pos preceding the start of
+ * Scan the diffed file dst->proto->file from line pos preceding the start of
  * the current chunk for the enclosing function in which the change resides.
  * Return first match.
  */
 char *
-match_chunk_function(struct diff_out_state *const os, uint32_t pos)
+match_chunk_function(struct diff_out_state *const dst, uint32_t pos)
 {
 	fsl_buffer	 buf = fsl_buffer_empty;
 	const char	*line;
 	char		*spec = NULL;
 	fsl_size_t	 offset;
-	uint32_t	 last = os->proto.lastline;
+	uint32_t	 last = dst->proto.lastline;
 
-	os->proto.lastline = pos;
-	offset = os->proto.offset;  /* Begin seek from last match */
+	dst->proto.lastline = pos;
+	offset = dst->proto.offset;  /* Begin seek from last match */
 
 	while (pos > 1 && pos > last) {
-		buffer_copy_lines_from(&buf, os->proto.file, &offset,
-		    pos - os->proto.lastmatch, 1);
+		buffer_copy_lines_from(&buf, dst->proto.file, &offset,
+		    pos - dst->proto.lastmatch, 1);
 		line = fsl_buffer_cstr(&buf);
 		/*
 		 * GNU C and MSVC allow '$' in identifier names.
@@ -523,8 +643,8 @@ match_chunk_function(struct diff_out_state *const os, uint32_t pos)
 					 */
 					char *sig = fsl_mprintf("%s%s", line,
 					    spec ? spec : "");
-					fsl_free(os->proto.signature);
-					os->proto.signature =
+					fsl_free(dst->proto.signature);
+					dst->proto.signature =
 					    fsl_mprintf("%.55s", sig);
 					/*
 					 * It's expensive to seek from the start
@@ -532,19 +652,20 @@ match_chunk_function(struct diff_out_state *const os, uint32_t pos)
 					 * diffing large files, so save offset
 					 * and line index of this match.
 					 */
-					os->proto.lastmatch = pos;
-					os->proto.offset = offset;
+					dst->proto.lastmatch = pos;
+					dst->proto.offset = offset;
 					fsl_free(sig);
 					fsl_buffer_clear(&buf);
-					return os->proto.signature;
+					return dst->proto.signature;
 				}
 			}
 		}
-		offset = os->proto.offset; /* No match, revert to last offset */
+		/* No match, revert to last offset. */
+		offset = dst->proto.offset;
 		fsl_buffer_clear(&buf);
 		--pos;
 	}
-	return os->proto.lastmatch > 0 ? os->proto.signature : NULL;
+	return dst->proto.lastmatch > 0 ? dst->proto.signature : NULL;
 }
 
 /*
@@ -556,11 +677,10 @@ match_chunk_function(struct diff_out_state *const os, uint32_t pos)
  *   flags	Flags controlling the diff
  */
 int
-sbsdiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
+sbsdiff(fsl__diff_cx *cx, struct diff_out_state *dst, void *regex,
     uint16_t context, uint64_t flags)
 {
 	fsl_dline	*l, *r;		/* Left and right side of diff */
-	fsl_buffer	 unesc = fsl_buffer_empty;
 	fsl_buffer	 sbscols[5] = {
 			    fsl_buffer_empty_m, fsl_buffer_empty_m,
 			    fsl_buffer_empty_m, fsl_buffer_empty_m,
@@ -577,11 +697,13 @@ sbsdiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 	int		 ntotal;	/* Total number of lines to output */
 	int		 skip;		/* Number of lines to skip */
 	int		 i, j, rc = FSL_RC_OK;
+	uint32_t	*idx = dst->idx;
+	enum line_type	*lines = dst->lines;
 	bool		 showsep = false;
 
 	li = ri = 0;
 	memset(&s, 0, sizeof(s));
-	s.output = out;
+	s.output = dst;
 	s.width = sbsdiff_width(flags);
 	s.regex = regex;
 	s.idx = -1;
@@ -591,14 +713,14 @@ sbsdiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 	l = cx->aFrom;
 	r = cx->aTo;
 	c = cx->aEdit;
-	s.esc = (flags & FNC_DIFF_HTML);
+	s.esc = FLAG_CHK(flags, FNC_DIFF_HTML);
 
 	if (s.esc)
 		for (i = SBS_LLINE; i <= SBS_RTEXT; i++)
 			s.cols[i] = &sbscols[i];
 	else
 		for (i = SBS_LLINE; i <= SBS_RTEXT; i++)
-			s.cols[i] = &unesc;
+			s.cols[i] = (fsl_buffer *)dst->state;
 
 	while (max_ci > 2 && c[max_ci-1] == 0 && c[max_ci - 2] == 0)
 		max_ci -= 3;
@@ -642,13 +764,36 @@ sbsdiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 		 * For the current block comprising nc triples, figure out
 		 * how many lines to skip.
 		 */
-		if (c[ci] > context)
+		/* if (c[ci] > context) */
+		/* 	skip = c[ci] - context; */
+		/* else */
+		/* 	skip = 0; */
+		if (c[ci] > context) {
+			nleft = nright = context;
 			skip = c[ci] - context;
-		else
+		} else {
+			nleft = nright = c[ci];
 			skip = 0;
+		}
+		for (i = 0; i < nc; ++i) {
+			nleft += c[ci + i * 3 + 1];
+			nright += c[ci + i * 3 + 2];
+		}
+		if (c[ci + nc * 3] > context) {
+			nleft += context;
+			nright += context;
+		} else {
+			nleft += c[ci + nc * 3];
+			nright += c[ci + nc * 3];
+		}
+		for (i = 1; i < nc; ++i) {
+			nleft += c[ci + i * 3];
+			nright += c[ci + i * 3];
+		}
 
-		/* Draw the separator between blocks */
+		/* Draw separator between blocks except the first. */
 		if (showsep) {
+			lines[(*idx)++] = LINE_DIFF_SEPARATOR;
 			if (s.esc) {
 				char ln[10];
 				fsl_snprintf(ln, sizeof(ln), "%d",
@@ -670,7 +815,7 @@ sbsdiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 					goto end;
 				rc = sbsdiff_separator(&s, s.width, SBS_RTEXT);
 			} else
-				rc = diff_outf(out, "%.*c\n",
+				rc = diff_outf(s.output, "%.*c\n",
 				    s.width * 2 + 16, '.');
 			if (rc)
 				goto end;
@@ -698,6 +843,7 @@ sbsdiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 				rc = sbsdiff_lineno(&s, ri + j, SBS_RLINE);
 			if (!rc)
 				rc = sbsdiff_txt(&s, &r[ri + j], SBS_RTEXT);
+			lines[(*idx)++] = LINE_DIFF_CONTEXT;
 		}
 		if (rc)
 			goto end;
@@ -729,7 +875,7 @@ sbsdiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 				rc = FSL_RC_OOM;
 				goto end;
 			}
-			for (j = 0; !rc && nleft + nright > 0; j++) {
+			for (j = 0; !rc && nleft + nright > 0; j++, (*idx)++) {
 				char tag[30] = "<span class=\"fsl-diff-";
 				switch (alignment[j]) {
 				case 1:
@@ -741,6 +887,7 @@ sbsdiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 					fsl_strlcat(tag, "rm\">", sizeof(tag));
 					s.tag = tag;
 					s.end = LENGTH(&l[li]);
+					lines[*idx] = LINE_DIFF_MINUS;
 					rc = sbsdiff_txt(&s, &l[li], SBS_LTEXT);
 					if (rc)
 						goto end_align;
@@ -772,6 +919,7 @@ sbsdiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 					fsl_strlcat(tag, "add\">", sizeof(tag));
 					s.tag = tag;
 					s.end = LENGTH(&r[ri]);
+					lines[*idx] = LINE_DIFF_PLUS;
 					rc = sbsdiff_txt(&s, &r[ri], SBS_RTEXT);
 					if (rc)
 						goto end_align;
@@ -803,6 +951,7 @@ sbsdiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 					rc = sbsdiff_txt(&s, &l[li], SBS_LTEXT);
 					if (rc)
 						goto end_align;
+					lines[*idx] = LINE_DIFF_EDIT;
 					rc = sbsdiff_marker(&s, " | ", "|");
 					if (rc)
 						goto end_align;
@@ -829,12 +978,13 @@ end_align:
 				goto end;
 			if (i < nc - 1) {
 				ntotal = c[ci + i * 3 + 3];
-				for (j = 0; !rc && j < ntotal; j++) {
+				for (j = 0; !rc && j < ntotal; j++, (*idx)++) {
 					rc = sbsdiff_lineno(&s, li + j,
 					    SBS_LLINE);
 					s.idx = s.end = -1;
 					if (rc)
 						goto end;
+					lines[*idx] = LINE_DIFF_CONTEXT;
 					rc = sbsdiff_txt(&s, &l[li + j],
 					    SBS_LTEXT);
 					if (rc)
@@ -846,6 +996,7 @@ end_align:
 					    SBS_RLINE);
 					if (rc)
 						goto end;
+					lines[*idx] = LINE_DIFF_CONTEXT;
 					rc = sbsdiff_txt(&s, &r[ri + j],
 					    SBS_RTEXT);
 					if (rc)
@@ -861,15 +1012,17 @@ end_align:
 		ntotal = c[ci + nc * 3];
 		if (ntotal > context)
 			ntotal = context;
-		for (j = 0; !rc && j < ntotal; j++) {
+		for (j = 0; !rc && j < ntotal; j++, (*idx)++) {
 			rc = sbsdiff_lineno(&s, li + j, SBS_LLINE);
 			s.idx = s.end = -1;
+			lines[*idx] = LINE_DIFF_CONTEXT;
 			if (!rc)
 				rc = sbsdiff_txt(&s, &l[li + j], SBS_LTEXT);
 			if (!rc)
 				rc = sbsdiff_marker(&s, "   ", "");
 			if (!rc)
 				rc = sbsdiff_lineno(&s, ri + j, SBS_RLINE);
+			lines[*idx] = LINE_DIFF_CONTEXT;
 			if (!rc)
 				rc = sbsdiff_txt(&s, &r[ri + j], SBS_RTEXT);
 			if (rc)
@@ -880,18 +1033,16 @@ end_align:
 	assert(!rc);
 
 	if (s.esc && (s.cols[SBS_LLINE]->used > 0)) {
-		rc = diff_out(out, "<table class=\"fsl-sbsdiff-cols\"><tr>\n",
+		rc = diff_out(dst, "<table class=\"fsl-sbsdiff-cols\"><tr>\n",
 		    -1);
 		for (i = SBS_LLINE; !rc && i <= SBS_RTEXT; i++)
-			rc = sbsdiff_column(out, s.cols[i], i);
+			rc = sbsdiff_column(dst, s.cols[i], i);
 		if (!rc)
-			rc = diff_out(out, "</tr></table>\n", -1);
-	} else if (unesc.used)
-		rc = out->out(out->state, unesc.mem, unesc.used);
+			rc = diff_out(dst, "</tr></table>\n", -1);
+	}
 end:
 	for (i = 0; i < (int)nitems(sbscols); ++i)
 		fsl_buffer_clear(&sbscols[i]);
-	fsl_buffer_clear(&unesc);
 	return rc;
 }
 
@@ -904,7 +1055,7 @@ end:
  *   flags	Flags controlling the diff
  */
 int
-unidiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
+unidiff(fsl__diff_cx *cx, struct diff_out_state *dst, void *regex,
     uint16_t context, uint64_t flags)
 {
 	fsl_dline	*l, *r;		/* Left and right side of diff */
@@ -920,9 +1071,9 @@ unidiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 	int		 i, j, rc = FSL_RC_OK;
 	bool		 html, proto, showln, showsep = false;
 
-	proto = (flags & FNC_DIFF_PROTOTYPE);
-	showln = (flags & FNC_DIFF_LINENO);
-	html = (flags & FNC_DIFF_HTML);
+	proto = FLAG_CHK(flags, FNC_DIFF_PROTOTYPE);
+	showln = FLAG_CHK(flags, FNC_DIFF_LINENO);
+	html = FLAG_CHK(flags, FNC_DIFF_HTML);
 
 	l = cx->aFrom;
 	r = cx->aTo;
@@ -1006,13 +1157,13 @@ unidiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 			if (!showsep)
 				showsep = 1;  /* Don't show a top divider */
 			else if (html)
-				rc = diff_outf(out,
+				rc = diff_outf(dst,
 				    "<span class=\"fsl-diff-hr\">%.*c</span>\n",
 				    80, '.');
 			else
-				rc = diff_outf(out, "%.95c\n", '.');
+				rc = diff_outf(dst, "%.95c\n", '.');
 			if (!rc && html)
-				rc = diff_outf(out,
+				rc = diff_outf(dst,
 				    "<span class=\"fsl-diff-chunk-%d\"></span>",
 				    chunks);
 		} else {
@@ -1020,11 +1171,11 @@ unidiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 			char const *ansi2 = "";
 			char const *ansi3 = "";
 			if (html)
-				rc = diff_outf(out,
+				rc = diff_outf(dst,
 				    "<span class=\"fsl-diff-lineno\">");
 #if 0
 			/* Turns out this just confuses the output */
-			else if (out->ansi) {
+			else if (dst->ansi) {
 				ansi1 = ANSI_DIFF_RM(0);
 				ansi2 = ANSI_DIFF_ADD(0);
 				ansi3 = ANSI_RESET;
@@ -1037,21 +1188,21 @@ unidiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 			 * would be confused and may reject the diff.
 			 */
 			if (!rc)
-				rc = diff_outf(out,"@@ %s-%d,%d %s+%d,%d%s @@",
+				rc = diff_outf(dst,"@@ %s-%d,%d %s+%d,%d%s @@",
 				    ansi1, nleft ? li+skip+1 : 0, nleft, ansi2,
 				    nright ? ri+skip+1 : 0, nright, ansi3);
 			if (!rc) {
 				if (html)
-					rc = diff_outf(out, "</span>");
+					rc = diff_outf(dst, "</span>");
 
 				if (proto && li + skip > 1) {
-					char *f = match_chunk_function(out,
+					char *f = match_chunk_function(dst,
 					    (li + skip) - 1);
 					if (f != NULL)
-						rc = diff_outf(out, " %s", f);
+						rc = diff_outf(dst, " %s", f);
 				}
 				if (!rc)
-					rc = diff_out(out, "\n", 1);
+					rc = diff_out(dst, "\n", 1);
 			}
 		}
 		if (rc)
@@ -1063,9 +1214,10 @@ unidiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 		ntotal = c[ci] - skip;
 		for (j = 0; !rc && j < ntotal; j++) {
 			if (showln)
-				rc = unidiff_lineno(out, li+j+1, ri+j+1, html);
+				rc = unidiff_lineno(dst,
+				    li + j + 1, ri + j + 1, html);
 			if (!rc)
-				rc = unidiff_txt(out, ' ', &l[li+j], html, 0);
+				rc = unidiff_txt(dst, ' ', &l[li + j], html, 0);
 		}
 		if (rc)
 			return rc;
@@ -1077,10 +1229,10 @@ unidiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 			ntotal = c[ci + i * 3 + 1];
 			for (j = 0; !rc && j < ntotal; j++) {
 				if (showln)
-					rc = unidiff_lineno(out, li + j + 1, 0,
+					rc = unidiff_lineno(dst, li + j + 1, 0,
 					    html);
 				if (!rc)
-					rc = unidiff_txt(out, '-', &l[li + j],
+					rc = unidiff_txt(dst, '-', &l[li + j],
 					    html, regex);
 			}
 			if (rc)
@@ -1089,10 +1241,10 @@ unidiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 			ntotal = c[ci + i * 3 + 2];
 			for (j = 0; !rc && j < ntotal; j++) {
 				if (showln)
-					rc = unidiff_lineno(out, 0, ri + j + 1,
+					rc = unidiff_lineno(dst, 0, ri + j + 1,
 					    html);
 				if (!rc)
-					rc = unidiff_txt(out, '+', &r[ri + j],
+					rc = unidiff_txt(dst, '+', &r[ri + j],
 					    html, regex);
 			}
 			if (rc)
@@ -1102,11 +1254,11 @@ unidiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 				ntotal = c[ci + i * 3 + 3];
 				for (j = 0; !rc && j < ntotal; j++) {
 					if (showln)
-						rc = unidiff_lineno(out,
+						rc = unidiff_lineno(dst,
 						    li + j + 1, ri + j + 1,
 						    html);
 					if (!rc)
-						rc = unidiff_txt(out, ' ',
+						rc = unidiff_txt(dst, ' ',
 						    &l[li + j], html, 0);
 				}
 				if (rc)
@@ -1123,13 +1275,13 @@ unidiff(fsl__diff_cx *cx, struct diff_out_state *out, void *regex,
 			ntotal = context;
 		for (j = 0; !rc && j < ntotal; j++) {
 			if (showln)
-				rc = unidiff_lineno(out, li + j + 1, ri + j + 1,
+				rc = unidiff_lineno(dst, li + j + 1, ri + j + 1,
 				    html);
 			if (!rc)
-				rc = unidiff_txt(out, ' ', &l[li + j], html, 0);
+				rc = unidiff_txt(dst, ' ', &l[li + j], html, 0);
 		}
 	}  /* _big_ for() loop */
-	fsl_free(out->proto.signature);
+	fsl_free(dst->proto.signature);
 	return rc;
 }
 
@@ -1139,7 +1291,7 @@ diff_context_lines(uint64_t flags)
 {
 	int n = flags & FNC_DIFF_CONTEXT_MASK;
 
-	if (!n && !(flags & FNC_DIFF_CONTEXT_EX))
+	if (!n && !FLAG_CHK(flags, FNC_DIFF_CONTEXT_EX))
 		n = 5;
 
 	return n;
@@ -1152,7 +1304,7 @@ diff_context_lines(uint64_t flags)
 int
 sbsdiff_width(uint64_t flags)
 {
-	int w = (flags & FNC_DIFF_WIDTH_MASK) / (FNC_DIFF_CONTEXT_MASK + 1);
+	int w = (flags & FNC_DIFF_WIDTH_MASK - 0xf) / FNC_DIFF_CONTEXT_MASK;
 
 	if (!w)
 		w = 80;
@@ -1162,7 +1314,7 @@ sbsdiff_width(uint64_t flags)
 
 /* Append a separator line of length len to column col. */
 int
-sbsdiff_separator(struct sbsline *out, int len, int col)
+sbsdiff_separator(struct sbsline *dst, int len, int col)
 {
 	char ch = '.';
 
@@ -1171,7 +1323,7 @@ sbsdiff_separator(struct sbsline *out, int len, int col)
 		ch = ' ';
 	}
 
-	return fsl_buffer_appendf(out->cols[col],
+	return fsl_buffer_appendf(dst->cols[col],
 	    "<span class=\"fsl-diff-hr\">%.*c</span>\n", len, ch);
 }
 
@@ -1182,28 +1334,28 @@ sbsdiff_separator(struct sbsline *out, int len, int col)
 int
 fsl_output_f_diff_out(void *state, void const *src, fsl_size_t n)
 {
-	struct diff_out_state *const os = (struct diff_out_state *)state;
+	struct diff_out_state *const dst = (struct diff_out_state *)state;
 
-	return os->rc = os->out(os->state, src, n);
+	return dst->rc = dst->out(dst->state, src, n);
 }
 
 int
-diff_outf(struct diff_out_state *os, char const *fmt, ...)
+diff_outf(struct diff_out_state *dst, char const *fmt, ...)
 {
 	va_list va;
 
 	va_start(va,fmt);
-	fsl_appendfv(fsl_output_f_diff_out, os, fmt, va);
+	fsl_appendfv(fsl_output_f_diff_out, dst, fmt, va);
 	va_end(va);
 
-	return os->rc;
+	return dst->rc;
 }
 
 /* Append a column to the final output blob. */
 int
-sbsdiff_column(struct diff_out_state *os, fsl_buffer const *content, int col)
+sbsdiff_column(struct diff_out_state *dst, fsl_buffer const *content, int col)
 {
-	return diff_outf(os,
+	return diff_outf(dst,
 	    "<td><div class=\"fsl-diff-%s-col\">\n"
 	    "<pre>\n"
 	    "%b</pre>\n"
@@ -1213,78 +1365,77 @@ sbsdiff_column(struct diff_out_state *os, fsl_buffer const *content, int col)
 }
 
 /*
- * Write the text of dline into column col of out.
- *
- * If outputting HTML, write the full line.  Otherwise, only write the
- * width characters.  Translate tabs into spaces.  Add newlines if col
- * is SBS_RTEXT.  Translate HTML characters if esc is true.  Pad the
- * rendering to width bytes if col is SBS_LTEXT and esc is false.
+ * Write the text of dline into column col of SBS diff dst. If outputting HTML,
+ * write the full line; otherwise, only write up to dst->width characters.
+ * Expand tabs to spaces, and add newlines if col is SBS_RTEXT. Translate HTML
+ * characters if esc is true. Pad with spaces to dst->width bytes if col is
+ * SBS_LTEXT and esc is false.
  *
  * This comment contains multibyte unicode characters (�, �, �) in order
  * to test the ability of the diff code to handle such characters.
  */
 int
-sbsdiff_txt(struct sbsline *out, fsl_dline *dline, int col)
+sbsdiff_txt(struct sbsline *dst, fsl_dline *dline, int col)
 {
-	fsl_buffer	*o = out->cols[col];
+	fsl_buffer	*o = dst->cols[col];
 	const char	*str = dline->z;
 	int		 n = dline->n;
 	int		 i;	/* Number of input characters consumed */
 	int		 pos;	/* Cursor position */
-	int		 w = out->width;
+	int		 w = dst->width;
 	int		 rc = FSL_RC_OK;
-	bool		 colourise = out->esc;
+	bool		 colourise = dst->esc;
 	bool		 endspan = false;
 #if 0
 	/*
 	 * XXX Missing regex bits, but want to replace those with a predicate.
 	 */
-	if (colourise && out->regex && !re_dline_match(out->regex, dline, 1))
+	if (colourise && dst->regex && !re_dline_match(dst->regex, dline, 1))
 		colourise = false;
 #endif
-	for (i = pos = 0; !rc && (out->esc || pos < w) && i < n; i++, pos++) {
+	for (i = pos = 0; !rc && (dst->esc || pos < w) && i < n; i++, pos++) {
 		char c = str[i];
 		if (colourise) {
-			if (i == out->idx) {
-				rc = fsl_buffer_append(o, out->tag, -1);
+			if (i == dst->idx) {
+				rc = fsl_buffer_append(o, dst->tag, -1);
 				if (rc)
 					break;
 				endspan = true;
-				if (out->idx2) {
-					out->idx = out->idx2;
-					out->tag = out->tag2;
-					out->idx2 = 0;
+				if (dst->idx2) {
+					dst->idx = dst->idx2;
+					dst->tag = dst->tag2;
+					dst->idx2 = 0;
 				}
-			} else if (i == out->end) {
+			} else if (i == dst->end) {
 				rc = fsl_buffer_append(o, "</span>", 7);
 				if (rc)
 					break;
 				endspan = false;
-				if (out->end2) {
-					out->end = out->end2;
-					out->end2 = 0;
+				if (dst->end2) {
+					dst->end = dst->end2;
+					dst->end2 = 0;
 				}
 			}
 		}
-		if (c == '\t' && !out->esc) {
+		if (c == '\t' && !dst->esc) {
 			rc = fsl_buffer_append(o, " ", 1);
-			while (!rc && (pos & 7) != 7 && (out->esc || pos < w)) {
+			while (!rc && (pos & 7) != 7 && (dst->esc || pos < w)) {
 				rc = fsl_buffer_append(o, " ", 1);
 				++pos;
 			}
 		} else if (c == '\r' || c == '\f')
 			rc = fsl_buffer_append(o, " ", 1);
-		else if (c == '<' && out->esc)
+		else if (c == '<' && dst->esc)
 			rc = fsl_buffer_append(o, "&lt;", 4);
-		else if (c == '&' && out->esc)
+		else if (c == '&' && dst->esc)
 			rc = fsl_buffer_append(o, "&amp;", 5);
-		else if (c == '>' && out->esc)
+		else if (c == '>' && dst->esc)
 			rc = fsl_buffer_append(o, "&gt;", 4);
-		else if (c == '"' && out->esc)
+		else if (c == '"' && dst->esc)
 			rc = fsl_buffer_append(o, "&quot;", 6);
 		else {
 			rc = fsl_buffer_append(o, &str[i], 1);
-			if ((c & 0xc0) == 0x80)
+			if (UTF_CONT(c))
 				--pos;
 		}
 	}
@@ -1292,111 +1443,115 @@ sbsdiff_txt(struct sbsline *out, fsl_dline *dline, int col)
 		rc = fsl_buffer_append(o, "</span>", 7);
 	if (!rc) {
 		if (col == SBS_RTEXT)
-			rc = sbsdiff_newline(out);
-		else if (!out->esc)
-			rc = sbsdiff_space(out, w-pos, SBS_LTEXT);
+			rc = sbsdiff_newline(dst);
+		else if (!dst->esc)
+			rc = sbsdiff_space(dst, w - pos, SBS_LTEXT);
 	}
 
 	return rc;
 }
 
-/* Append newlines to all columns. */
+/*
+ * Append newlines to columns corresponding to sbs diff format.
+ *   html: all columns
+ *   text: right column only
+ */
 int
-sbsdiff_newline(struct sbsline *out)
+sbsdiff_newline(struct sbsline *dst)
 {
 	int i, rc = FSL_RC_OK;
 
-	for (i = out->esc ? SBS_LLINE : SBS_RTEXT; !rc && i <= SBS_RTEXT; i++)
-		rc = fsl_buffer_append(out->cols[i], "\n", 1);
+	for (i = dst->esc ? SBS_LLINE : SBS_RTEXT; !rc && i <= SBS_RTEXT; i++)
+		rc = fsl_buffer_append(dst->cols[i], "\n", 1);
 
 	return rc;
 }
 
-/* Append n spaces to column col. */
+/* Append n spaces to column col in the sbs diff. */
 int
-sbsdiff_space(struct sbsline *out, int n, int col)
+sbsdiff_space(struct sbsline *dst, int n, int col)
 {
-	return fsl_buffer_appendf(out->cols[col], "%*s", n, "");
+	return fsl_buffer_appendf(dst->cols[col], "%*s", n, "");
 }
 
-/* Append the appropriate marker into the center column of the diff. */
+/* Append plaintext XOR html marker into the center column of the sbs diff. */
 int
-sbsdiff_marker(struct sbsline *out, const char *str, const char *html)
+sbsdiff_marker(struct sbsline *dst, const char *str, const char *html)
 {
-	return fsl_buffer_append(out->cols[SBS_MID], out->esc ? html : str, -1);
+	return fsl_buffer_append(dst->cols[SBS_MID], dst->esc ? html : str, -1);
 }
 
-/* Append a line number to the column. */
+/* Append file line number ln to column col in the sbs diff. */
 int
-sbsdiff_lineno(struct sbsline *out, int ln, int col)
+sbsdiff_lineno(struct sbsline *dst, int ln, int col)
 {
 	int rc;
 
-	if (out->esc)
-		rc = fsl_buffer_appendf(out->cols[col], "%d", ln + 1);
+	if (dst->esc)
+		rc = fsl_buffer_appendf(dst->cols[col], "%d", ln + 1);
 	else {
-		char ln[8];
-		fsl_snprintf(ln, 8, "%5d ", ln + 1);
-		rc = fsl_buffer_appendf(out->cols[col], "%s ", ln);
+		char lnno[8];
+		fsl_snprintf(lnno, 8, "%5d ", ln + 1);
+		rc = fsl_buffer_appendf(dst->cols[col], "%s ", lnno);
 	}
 
 	return rc;
 }
 
-/* Try to shift idx as far as possible to the left. */
+/* Try to shift dst->idx as far as possible to the left. */
 void
-sbsdiff_shift_left(struct sbsline *out, const char *z)
+sbsdiff_shift_left(struct sbsline *dst, const char *z)
 {
 	int i, j;
 
-	while ((i = out->idx) > 0 && z[i - 1] == z[i]) {
-		for (j = i + 1; j < out->end && z[j - 1] == z[j]; j++) {}
-		if (j < out->end)
+	while ((i = dst->idx) > 0 && z[i - 1] == z[i]) {
+		for (j = i + 1; j < dst->end && z[j - 1] == z[j]; j++) {}
+		if (j < dst->end)
 			break;
-		--out->idx;
-		--out->end;
+		--dst->idx;
+		--dst->end;
 	}
 }
 
 /*
- * Simplify idx and idx2:
+ * Simplify line at idx and idx2 in SBS diff output:
  *    -  If idx is a null-change then move idx2 into idx
  *    -  Make sure any null-changes are in canonical form.
  *    -  Make sure all changes are at character boundaries for multibyte chars.
  */
 void
-sbsdiff_simplify_line(struct sbsline *out, const char *z)
+sbsdiff_simplify_line(struct sbsline *dst, const char *z)
 {
-	if (out->idx2 == out->end2)
-		out->idx2 = out->end2 = 0;
-	else if (out->idx2) {
-		while (out->idx2 > 0 && (z[out->idx2] & 0xc0) == 0x80)
-			--out->idx2;
-		while ((z[out->end2] & 0xc0) == 0x80)
-			++out->end2;
+	if (dst->idx2 == dst->end2)
+		dst->idx2 = dst->end2 = 0;
+	else if (dst->idx2) {
+		while (dst->idx2 > 0 && UTF_CONT(z[dst->idx2]))
+			--dst->idx2;
+		while (UTF_CONT(z[dst->end2]))
+			++dst->end2;
 	}
 
-	if (out->idx == out->end) {
-		out->idx = out->idx2;
-		out->end = out->end2;
-		out->tag = out->tag2;
-		out->idx2 = 0;
-		out->end2 = 0;
+	if (dst->idx == dst->end) {
+		dst->idx = dst->idx2;
+		dst->end = dst->end2;
+		dst->tag = dst->tag2;
+		dst->idx2 = 0;
+		dst->end2 = 0;
 	}
 
-	if (out->idx == out->end)
-		out->idx = out->end = -1;
-	else if (out->idx > 0) {
-		while (out->idx > 0 && (z[out->idx] & 0xc0) == 0x80)
-			--out->idx;
-		while ((z[out->end] & 0xc0) == 0x80)
-			++out->end;
+	if (dst->idx == dst->end)
+		dst->idx = dst->end = -1;
+	else if (dst->idx > 0) {
+		while (dst->idx > 0 && UTF_CONT(z[dst->idx]))
+			--dst->idx;
+		while (UTF_CONT(z[dst->end]))
+			++dst->end;
 	}
 }
 
 /*
  * c[] is an array of six integers: two copy/delete/insert triples for a
- * pair of adjacent differences.  Return true if the gap between these two
+ * pair of adjacent differences. Return true if the gap between these two
  * differences is so small that they should be rendered as a single edit.
  */
 int
@@ -1406,29 +1561,27 @@ sbsdiff_close_gap(int *c)
 }
 
 /*
- * There is a change block in which nLeft lines of text on the left are
- * converted into nRight lines of text on the right.  This routine computes
- * how the lines on the left line up with the lines on the right.
+ * There is a change block in which nleft lines of text on the left are
+ * converted into nright lines of text on the right. This routine computes how
+ * the lines on the left line up with the lines on the right.
  *
  * The return value is a buffer of unsigned characters, obtained from
- * fsl_malloc().  (The caller needs to free the return value using
- * fsl_free().)  Entries in the returned array have values as follows:
- *
- *    1.  Delete the next line of left.
- *    2.  Insert the next line of right.
- *    3.  The next line of left changes into the next line of right.
- *    4.  Delete one line from left and add one line to right.
+ * fsl_malloc(), which needs to be disposed of by the caller. Entries in the
+ * returned array have values as follows:
+ *    1 = Delete the next line of left.
+ *    2 = Insert the next line of right.
+ *    3 = The next line of left changes into the next line of right.
+ *    4 = Delete one line from left and add one line to right.
  *
  * Values larger than three indicate better matches.
  *
- * The length of the returned array will be just large enough to cause
- * all elements of left and right to be consumed.
+ * The length of the returned array will be just large enough to cause all
+ * elements of left and right to be consumed.
  *
- * Algorithm:  Wagner's minimum edit-distance algorithm, modified by
- * adding a cost to each match based on how well the two rows match
- * each other.  Insertion and deletion costs are 50.  Match costs
- * are between 0 and 100 where 0 is a perfect match 100 is a complete
- * mismatch.
+ * Algorithm: Wagner's minimum edit-distance algorithm, modified by adding a
+ * cost to each match based on how well the two rows match each other.
+ * Insertion and deletion costs are 50. Match costs are between 0 and 100 where
+ * 0 is a perfect match 100 is a complete mismatch.
  *   left	lines of text on the left
  *   nleft	number of lines on the left
  *   right	lines of text on the right
@@ -1571,16 +1724,16 @@ unsigned char
 }
 
 /*
- * Write out lines that have been edited. Adjust the highlight to cover only
- * those parts of the line that actually changed.
- *   out	The SBS output line
+ * Write and record line type of lines that have been edited to dst. Adjust
+ * highlight to cover only those parts of the line that have changed.
+ *   dst	The SBS output line
  *   left	Left line of the change
  *   llnno	Line number for the left line
  *   right	Right line of the change
  *   rlnno	Line number of the right line
  */
 int
-sbsdiff_write_change(struct sbsline *out, fsl_dline *left, int llnno,
+sbsdiff_write_change(struct sbsline *dst, fsl_dline *left, int llnno,
     fsl_dline *right, int rlnno)
 {
 	static const char	 tag_rm[]   = "<span class=\"fsl-diff-rm\">";
@@ -1588,6 +1741,8 @@ sbsdiff_write_change(struct sbsline *out, fsl_dline *left, int llnno,
 	static const char	 tag_chg[] = "<span class=\"fsl-diff-change\">";
 	const char		*ltxt;	/* Text of the left line */
 	const char		*rtxt;	/* Text of the right line */
+	enum line_type		*lines = dst->output->lines;
+	uint32_t		*idx = dst->output->idx;
 	int	lcs[4] = {0, 0, 0, 0};	/* Bounds of common middle segment */
 	int	leftsz;		/* Length of left line in bytes */
 	int	rightsz;	/* Length of right line in bytes */
@@ -1611,7 +1766,7 @@ sbsdiff_write_change(struct sbsline *out, fsl_dline *left, int llnno,
 
 	/* Account for multibyte chars in prefix. */
 	if (npfx < shortest)
-		while (npfx > 0 && (ltxt[npfx] & 0xc0) == 0x80)
+		while (npfx > 0 && UTF_CONT(ltxt[npfx]))
 			npfx--;
 
 	/* Count common suffix. */
@@ -1622,8 +1777,7 @@ sbsdiff_write_change(struct sbsline *out, fsl_dline *left, int llnno,
 			++nsfx;
 		/* Account for multibyte chars in suffix. */
 		if (nsfx < shortest)
-			while (nsfx > 0 &&
-			    (ltxt[leftsz - nsfx] & 0xc0) == 0x80)
+			while (nsfx > 0 && UTF_CONT(ltxt[leftsz - nsfx]))
 				--nsfx;
 		if (nsfx == leftsz || nsfx == rightsz)
 			npfx = 0;
@@ -1633,24 +1787,28 @@ sbsdiff_write_change(struct sbsline *out, fsl_dline *left, int llnno,
 
 	/* A single chunk of text inserted on the right */
 	if (npfx + nsfx == leftsz) {
-		rc = sbsdiff_lineno(out, llnno, SBS_LLINE);
+		rc = sbsdiff_lineno(dst, llnno, SBS_LLINE);
 		if (rc)
 			return rc;
-		out->idx2 = out->end2 = 0;
-		out->idx = out->end = -1;
-		rc = sbsdiff_txt(out, left, SBS_LTEXT);
-		if (!rc && leftsz == rightsz && ltxt[leftsz] == rtxt[rightsz])
-			rc = sbsdiff_marker(out, "   ", "");
-		else
-			rc = sbsdiff_marker(out, " | ", "|");
+		dst->idx2 = dst->end2 = 0;
+		dst->idx = dst->end = -1;
+		rc = sbsdiff_txt(dst, left, SBS_LTEXT);
+		if (!rc && leftsz == rightsz && ltxt[leftsz] == rtxt[rightsz]) {
+			rc = sbsdiff_marker(dst, "   ", "");
+			lines[*idx] = LINE_DIFF_CONTEXT;
+		}
+		else {
+			rc = sbsdiff_marker(dst, " | ", "|");
+			lines[*idx] = LINE_DIFF_EDIT;
+		}
 
 		if (!rc) {
-			rc = sbsdiff_lineno(out, rlnno, SBS_RLINE);
+			rc = sbsdiff_lineno(dst, rlnno, SBS_RLINE);
 			if (!rc) {
-				out->idx = npfx;
-				out->end = rightsz - nsfx;
-				out->tag = tag_add;
-				rc = sbsdiff_txt(out, right, SBS_RTEXT);
+				dst->idx = npfx;
+				dst->end = rightsz - nsfx;
+				dst->tag = tag_add;
+				rc = sbsdiff_txt(dst, right, SBS_RTEXT);
 			}
 		}
 		return rc;
@@ -1658,22 +1816,23 @@ sbsdiff_write_change(struct sbsline *out, fsl_dline *left, int llnno,
 
 	/* A single chunk of text deleted from the left */
 	if (npfx + nsfx == rightsz) {
+		lines[*idx] = LINE_DIFF_EDIT;
 		/* Text deleted from the left */
-		rc = sbsdiff_lineno(out, llnno, SBS_LLINE);
+		rc = sbsdiff_lineno(dst, llnno, SBS_LLINE);
 		if (rc)
 			return rc;
-		out->idx2 = out->end2 = 0;
-		out->idx = npfx;
-		out->end = leftsz - nsfx;
-		out->tag = tag_rm;
-		rc = sbsdiff_txt(out, left, SBS_LTEXT);
+		dst->idx2 = dst->end2 = 0;
+		dst->idx = npfx;
+		dst->end = leftsz - nsfx;
+		dst->tag = tag_rm;
+		rc = sbsdiff_txt(dst, left, SBS_LTEXT);
 		if (!rc) {
-			rc = sbsdiff_marker(out, " | ", "|");
+			rc = sbsdiff_marker(dst, " | ", "|");
 			if (!rc) {
-				rc = sbsdiff_lineno(out, rlnno, SBS_RLINE);
+				rc = sbsdiff_lineno(dst, rlnno, SBS_RLINE);
 				if (!rc) {
-					out->idx = out->end = -1;
-					sbsdiff_txt(out, right, SBS_RTEXT);
+					dst->idx = dst->end = -1;
+					sbsdiff_txt(dst, right, SBS_RTEXT);
 				}
 			}
 		}
@@ -1687,59 +1846,61 @@ sbsdiff_write_change(struct sbsline *out, fsl_dline *left, int llnno,
 	 */
 	nleft = leftsz - nsfx - npfx;
 	nright = rightsz - nsfx - npfx;
-	if (out->esc && nleft >= 6 && nright >= 6 &&
+	if (dst->esc && nleft >= 6 && nright >= 6 &&
 	    find_lcs(&ltxt[npfx], nleft, &rtxt[npfx], nright, lcs)) {
-		rc = sbsdiff_lineno(out, llnno, SBS_LLINE);
+		rc = sbsdiff_lineno(dst, llnno, SBS_LLINE);
 		if (rc)
 			return rc;
-		out->idx = npfx;
-		out->end = npfx + lcs[0];
+		dst->idx = npfx;
+		dst->end = npfx + lcs[0];
 		if (lcs[2] == 0) {
-			sbsdiff_shift_left(out, left->z);
-			out->tag = tag_rm;
+			sbsdiff_shift_left(dst, left->z);
+			dst->tag = tag_rm;
 		} else
-			out->tag = tag_chg;
-		out->idx2 = npfx + lcs[1];
-		out->end2 = leftsz - nsfx;
-		out->tag2 = lcs[3] == nright ? tag_rm : tag_chg;
-		sbsdiff_simplify_line(out, ltxt + npfx);
-		rc = sbsdiff_txt(out, left, SBS_LTEXT);
+			dst->tag = tag_chg;
+		dst->idx2 = npfx + lcs[1];
+		dst->end2 = leftsz - nsfx;
+		dst->tag2 = lcs[3] == nright ? tag_rm : tag_chg;
+		sbsdiff_simplify_line(dst, ltxt + npfx);
+		lines[*idx] = LINE_DIFF_EDIT;
+		rc = sbsdiff_txt(dst, left, SBS_LTEXT);
 		if (!rc)
-			rc = sbsdiff_marker(out, " | ", "|");
+			rc = sbsdiff_marker(dst, " | ", "|");
 		if (!rc)
-			rc = sbsdiff_lineno(out, rlnno, SBS_RLINE);
+			rc = sbsdiff_lineno(dst, rlnno, SBS_RLINE);
 		if (rc)
 			return rc;
-		out->idx = npfx;
-		out->end = npfx + lcs[2];
+		dst->idx = npfx;
+		dst->end = npfx + lcs[2];
 		if (!lcs[0]) {
-			sbsdiff_shift_left(out, right->z);
-			out->tag = tag_add;
+			sbsdiff_shift_left(dst, right->z);
+			dst->tag = tag_add;
 		} else
-			out->tag = tag_chg;
-		out->idx2 = npfx + lcs[3];
-		out->end2 = rightsz - nsfx;
-		out->tag2 = lcs[1]==nleft ? tag_add : tag_chg;
-		sbsdiff_simplify_line(out, rtxt + npfx);
-		rc = sbsdiff_txt(out, right, SBS_RTEXT);
+			dst->tag = tag_chg;
+		dst->idx2 = npfx + lcs[3];
+		dst->end2 = rightsz - nsfx;
+		dst->tag2 = lcs[1]==nleft ? tag_add : tag_chg;
+		sbsdiff_simplify_line(dst, rtxt + npfx);
+		rc = sbsdiff_txt(dst, right, SBS_RTEXT);
 		return rc;
 	}
 
 	/* If all else fails, show a single big change between left and right */
-	rc = sbsdiff_lineno(out, llnno, SBS_LLINE);
+	rc = sbsdiff_lineno(dst, llnno, SBS_LLINE);
 	if (!rc) {
-		out->idx2 = out->end2 = 0;
-		out->idx = npfx;
-		out->end = leftsz - nsfx;
-		out->tag = tag_chg;
-		rc = sbsdiff_txt(out, left, SBS_LTEXT);
+		lines[*idx] = LINE_DIFF_EDIT;
+		dst->idx2 = dst->end2 = 0;
+		dst->idx = npfx;
+		dst->end = leftsz - nsfx;
+		dst->tag = tag_chg;
+		rc = sbsdiff_txt(dst, left, SBS_LTEXT);
 		if (!rc) {
-			rc = sbsdiff_marker(out, " | ", "|");
+			rc = sbsdiff_marker(dst, " | ", "|");
 			if (!rc) {
-				rc = sbsdiff_lineno(out, rlnno, SBS_RLINE);
+				rc = sbsdiff_lineno(dst, rlnno, SBS_RLINE);
 				if (!rc) {
-					out->end = rightsz - nsfx;
-					sbsdiff_txt(out, right, SBS_RTEXT);
+					dst->end = rightsz - nsfx;
+					sbsdiff_txt(dst, right, SBS_RTEXT);
 				}
 			}
 		}
@@ -1748,34 +1909,36 @@ sbsdiff_write_change(struct sbsline *out, fsl_dline *left, int llnno,
 }
 
 /*
- * Add two line numbers to the beginning of an output line for a context
- * diff. One or the other of the two numbers might be zero, which means
- * to leave that number field blank.  The "html" parameter means to format
- * the output for HTML.
+ * Add two line numbers to the beginning of a unified diff output line.
+ *   dst	Output destination
+ *   lln	Line number corresponding to the line in the left (old) file
+ *   rln	Line number corresponding to the line in the right (new) file
+ *   html	Specify html formatted output
+ * n.b. lln or rln can be zero to leave that number field blank.
  */
 int
-unidiff_lineno(struct diff_out_state *out, int lln, int rln, bool html)
+unidiff_lineno(struct diff_out_state *dst, int lln, int rln, bool html)
 {
 	int rc = FSL_RC_OK;
 
 	if (html) {
-		rc = diff_out(out, "<span class=\"fsl-diff-lineno\">", -1);
+		rc = diff_out(dst, "<span class=\"fsl-diff-lineno\">", -1);
 		if (rc)
 			return rc;
 	}
 
 	if (lln > 0)
-		rc = diff_outf(out, "%6d ", lln);
+		rc = diff_outf(dst, "%6d ", lln);
 	else
-		rc = diff_out(out, "       ", 7);
+		rc = diff_out(dst, "       ", 7);
 
 	if (!rc) {
 		if (rln > 0)
-			rc = diff_outf(out, "%6d  ", rln);
+			rc = diff_outf(dst, "%6d  ", rln);
 		else
-			rc = diff_out(out, "        ", 8);
+			rc = diff_out(dst, "        ", 8);
 		if (!rc && html)
-			rc = diff_out(out, "</span>", -1);
+			rc = diff_out(dst, "</span>", -1);
 	}
 
 	return rc;
@@ -1784,25 +1947,25 @@ unidiff_lineno(struct diff_out_state *out, int lln, int rln, bool html)
 /*
  * Append a single line of unified diff text to dst.
  *   dst	Destination
- *   sig	Either a " " (context), "+" (added),  or "-" (removed) line
+ *   sign	Either a " " (context), "+" (added),  or "-" (removed) line
  *   line	The line to be output
  *   html	True if generating HTML, false for plain text
  *   regex	colourise only if line matches this regex
  */
 int
-unidiff_txt(struct diff_out_state *const out, char sign, fsl_dline *line,
+unidiff_txt(struct diff_out_state *const dst, char sign, fsl_dline *line,
     int html, void *regex)
 {
 	char const	*ansiccode;
 	int		 rc = FSL_RC_OK;
 
-	ansiccode = !out->ansi ? NULL : ((sign == '+') ?
+	ansiccode = !dst->ansi ? NULL : ((sign == '+') ?
 	    ANSI_DIFF_ADD(0) : ((sign == '-') ? ANSI_DIFF_RM(0) : NULL));
 
 	if (ansiccode)
-		rc = diff_out(out, ansiccode, -1);
+		rc = diff_out(dst, ansiccode, -1);
 	if (!rc)
-		rc = diff_out(out, &sign, 1);
+		rc = diff_out(dst, &sign, 1);
 	if (rc)
 		return rc;
 
@@ -1818,9 +1981,9 @@ unidiff_txt(struct diff_out_state *const out, char sign, fsl_dline *line,
 		 * ----8<-----------------------------------------------------
 		 */
 		if (sign == '+')
-			rc = diff_out(out, "<span class=\"fsl-diff-add\">", -1);
+			rc = diff_out(dst, "<span class=\"fsl-diff-add\">", -1);
 		else if (sign == '-')
-			rc = diff_out(out, "<span class=\"fsl-diff-rm\">", -1);
+			rc = diff_out(dst, "<span class=\"fsl-diff-rm\">", -1);
 
 		if (!rc) {
 			/* Trim trailing newline */
@@ -1828,23 +1991,23 @@ unidiff_txt(struct diff_out_state *const out, char sign, fsl_dline *line,
 			/* while (n > 0 && (line->z[n - 1] == '\n' || */
 			/*     line->z[n - 1] == '\r')) */
 			/*	--n; */
-			rc = out->rc = fsl_htmlize(out->out, out->state,
+			rc = dst->rc = fsl_htmlize(dst->out, dst->state,
 			    line->z, line->n);
 			if (!rc && sign != ' ')
-				rc = diff_out(out, "</span>", -1);
+				rc = diff_out(dst, "</span>", -1);
 		}
 		/*
 		 * XXX Shift above block left one tab while regex is if'd out.
 		 * ----------------------------------------------------->8----
 		 */
 	} else
-		rc = diff_out(out, line->z, line->n);
+		rc = diff_out(dst, line->z, line->n);
 
 	if (!rc) {
 		if (ansiccode)
-			rc = diff_out(out, ANSI_RESET, -1);
+			rc = diff_out(dst, ANSI_RESET, -1);
 		if (!rc)
-			rc = diff_out(out, "\n", 1);
+			rc = diff_out(dst, "\n", 1);
 	}
 
 	return rc;

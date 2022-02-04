@@ -68,7 +68,6 @@
 #include <langinfo.h>
 
 #include "libfossil.h"
-#include "settings.h"
 #include "diff.h"
 
 #define FNC_VERSION	VERSION  /* cf. Makefile */
@@ -201,6 +200,7 @@ static struct fnc_setup {
 
 	/* Diff options. */
 	const char	*context;	/* Number of context lines. */
+	bool		 sbs;		/* Display side-by-side diff. */
 	bool		 ws;		/* Ignore whitespace-only changes. */
 	bool		 nocolour;	/* Disable colour in diff output. */
 	bool		 quiet;		/* Disable verbose diff output. */
@@ -224,7 +224,7 @@ static struct fnc_setup {
 	fcli_cliflag	  cliflags_global[3];		/* Global options. */
 	fcli_command	  cmd_args[7];			/* App commands. */
 	fcli_cliflag	  cliflags_timeline[13];	/* Timeline options. */
-	fcli_cliflag	  cliflags_diff[9];		/* Diff options. */
+	fcli_cliflag	  cliflags_diff[10];		/* Diff options. */
 	fcli_cliflag	  cliflags_tree[5];		/* Tree options. */
 	fcli_cliflag	  cliflags_blame[8];		/* Blame options. */
 	fcli_cliflag	  cliflags_branch[11];		/* Branch options. */
@@ -247,6 +247,7 @@ static struct fnc_setup {
 	false,		/* utc defaults to off (i.e., show user local time). */
 	NULL,		/* lineno default: open blame at the first line. */
 	NULL,		/* context defaults to five context lines. */
+	false,		/* sbs diff defaults to false (show unified diff). */
 	false,		/* ws defaults to acknowledge whitespace. */
 	false,		/* nocolour defaults to off (i.e., use diff colours). */
 	false,		/* quiet defaults to off (i.e., verbose diff is on). */
@@ -357,7 +358,7 @@ static struct fnc_setup {
 	    "toggled\n    with the 'i' key binding in diff view."),
 	    FCLI_FLAG_BOOL("l", "line-numbers", &fnc_init.showln,
 	    "Show file line numbers in diff output.  Line numbers can also be "
-	    "toggled\n    with the 'N' key binding in diff view."),
+	    "toggled\n    with the 'L' key binding in diff view."),
 	    FCLI_FLAG_BOOL("q", "quiet", &fnc_init.quiet,
 	    "Disable verbose diff output; that is, do not output complete"
 	    " content\n    of newly added or deleted files. Verbosity can also"
@@ -365,6 +366,10 @@ static struct fnc_setup {
 	    FCLI_FLAG_CSTR("R", "repo", "<path>", NULL,
 	    "Use the fossil(1) repository located at <path> for this diff\n    "
 	    "invocation."),
+	    FCLI_FLAG_BOOL("s", "sbs", &fnc_init.sbs,
+	    "Display a side-by-side, rather than the default unified, diff. "
+	    "This\n    option can alse be toggled with the 'S' key binding in "
+	    "diff view."),
 	    FCLI_FLAG_BOOL("w", "whitespace", &fnc_init.ws,
 	    "Ignore whitespace-only changes when displaying diff. This option "
 	    "can\n    also be toggled with the 'w' key binding in diff view."),
@@ -628,7 +633,7 @@ struct fnc_parent_tree {
 	struct fnc_tree_object		*tree;
 	struct fnc_tree_entry		*first_entry_onscreen;
 	struct fnc_tree_entry		*selected_entry;
-	int				 selected_idx;
+	int				 selected;
 };
 
 pthread_mutex_t fnc_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -636,7 +641,7 @@ pthread_mutex_t fnc_mutex = PTHREAD_MUTEX_INITIALIZER;
 struct fnc_tl_thread_cx {
 	struct commit_queue	 *commits;
 	struct commit_entry	**first_commit_onscreen;
-	struct commit_entry	**selected_commit;
+	struct commit_entry	**selected_entry;
 	fsl_db			 *db;
 	fsl_stmt		 *q;
 	regex_t			 *regex;
@@ -663,14 +668,14 @@ struct fnc_tl_view_state {
 	struct commit_queue	 commits;
 	struct commit_entry	*first_commit_onscreen;
 	struct commit_entry	*last_commit_onscreen;
-	struct commit_entry	*selected_commit;
+	struct commit_entry	*selected_entry;
 	struct commit_entry	*matched_commit;
 	struct commit_entry	*search_commit;
 	struct fnc_colours	 colours;
 	const char		*curr_ckout_uuid;
 	const char		*glob;  /* Match commits containing glob. */
 	char			*path;	/* Match commits involving path. */
-	int			 selected_idx;
+	int			 selected;
 	int			 nscrolled;
 	sig_atomic_t		 quit;
 	pthread_t		 thread_id;
@@ -694,7 +699,7 @@ struct index {
 
 struct fnc_diff_view_state {
 	struct fnc_view			*timeline_view;
-	struct fnc_commit_artifact	*selected_commit;
+	struct fnc_commit_artifact	*selected_entry;
 	struct fnc_pathlist_head	*paths;
 	fsl_buffer			 buf;
 	struct fnc_colours		 colours;
@@ -712,8 +717,10 @@ struct fnc_diff_view_state {
 	int				 maxx;
 	int				 lineno;
 	int				 gtl;
+	uint32_t			 ndlines;
 	size_t				 ncols;
 	size_t				 nlines;
+	enum line_type			*dlines;
 	enum line_attr			 sline;
 	off_t				*line_offsets;
 	bool				 eof;
@@ -737,7 +744,7 @@ struct fnc_tree_view_state {			  /* Parent trees of the- */
 	fsl_uuid_str			 commit_id;
 	fsl_id_t			 rid;
 	int				 ndisplayed;
-	int				 selected_idx;
+	int				 selected;
 	bool				 colour;
 	bool				 show_id;
 	bool				 show_date;
@@ -793,7 +800,7 @@ struct fnc_blame_view_state {
 	struct fnc_blame		 blame;
 	struct fnc_commit_id_queue	 blamed_commits;
 	struct fnc_commit_qid		*blamed_commit;
-	struct fnc_commit_artifact	*selected_commit;
+	struct fnc_commit_artifact	*selected_entry;
 	struct fnc_colours		 colours;
 	fsl_uuid_str			 commit_id;
 	const char			*lineno;
@@ -833,7 +840,7 @@ struct fnc_branch_view_state {
 	struct fnc_branchlist_entry	*first_branch_onscreen;
 	struct fnc_branchlist_entry	*last_branch_onscreen;
 	struct fnc_branchlist_entry	*matched_branch;
-	struct fnc_branchlist_entry	*selected_branch;
+	struct fnc_branchlist_entry	*selected_entry;
 	struct fnc_colours		 colours;
 	const char			*branch_glob;
 	double				 dateline;
@@ -856,10 +863,10 @@ struct fnc_branch_view_state {
 };
 
 struct line {
-	char		buf[BUFSIZ];
-	int		sz;
-	enum line_type	type;
-	bool		selected;
+	char		*buf;
+	int		 sz;
+	enum line_type	 type;
+	bool		 selected;
 };
 
 struct position {
@@ -928,9 +935,9 @@ static int		 commit_builder(struct fnc_commit_artifact **, fsl_id_t,
 static int		 signal_tl_thread(struct fnc_view *, int);
 static int		 draw_commits(struct fnc_view *);
 static void		 parse_emailaddr_username(char **);
-static int		 formatln(wchar_t **, int *, const char *, int, int,
-			    size_t, bool);
-static size_t		 expand_tab(char *, size_t, const char *, int);
+static int		 formatln(wchar_t **, int *, const char *, size_t, int,
+			    bool);
+static size_t		 expand_tab(char **, const char *, int);
 static int		 multibyte_to_wchar(const char *, wchar_t **, size_t *);
 static int		 write_commit_line(struct fnc_view *,
 			    struct fnc_commit_artifact *, int);
@@ -970,26 +977,28 @@ static bool		 find_commit_match(struct fnc_commit_artifact *,
 static int		 init_diff_view(struct fnc_view **, int, int,
 			    struct fnc_commit_artifact *, struct fnc_view *);
 static int		 open_diff_view(struct fnc_view *,
-			    struct fnc_commit_artifact *, int, bool, bool, bool,
-			    bool, struct fnc_view *, bool,
+			    struct fnc_commit_artifact *, int, bool, bool,
+			    bool, bool, bool, struct fnc_view *, bool,
 			    struct fnc_pathlist_head *);
 static void		 show_diff_status(struct fnc_view *);
 static int		 create_diff(struct fnc_diff_view_state *);
 static int		 create_changeset(struct fnc_commit_artifact *);
 static int		 write_commit_meta(struct fnc_diff_view_state *);
-static int		 wrapline(char *, fsl_size_t ncols_avail,
+static int		 countlines(const char *);
+static int		 wrapline(char *, fsl_size_t,
 			    struct fnc_diff_view_state *, off_t *);
 static int		 add_line_offset(off_t **, size_t *, off_t);
+static int		 add_line_type(enum line_type **, enum line_type,
+			    uint32_t *, uint32_t, bool);
 static int		 diff_commit(struct fnc_diff_view_state *);
 static int		 diff_checkout(struct fnc_diff_view_state *);
-static int		 write_diff_meta(fsl_buffer *, const char *,
-			    fsl_uuid_str, const char *, fsl_uuid_str, int,
-			    enum fsl_ckout_change_e);
+static int		 write_diff_meta(struct fnc_diff_view_state *,
+			    const char *, fsl_uuid_str, const char *,
+			    fsl_uuid_str, enum fsl_ckout_change_e);
 static int		 diff_file(struct fnc_diff_view_state *, fsl_buffer *,
 			    const char *, fsl_uuid_str, const char *,
 			    enum fsl_ckout_change_e);
-static int		 diff_non_checkin(fsl_buffer *,
-			    struct fnc_commit_artifact *, int, int, int);
+static int		 diff_non_checkin(struct fnc_diff_view_state *);
 static int		 diff_file_artifact(struct fnc_diff_view_state *,
 			    fsl_id_t, const fsl_card_F *, const fsl_card_F *,
 			    fsl_ckout_change_e);
@@ -997,8 +1006,8 @@ static int		 show_diff(struct fnc_view *);
 static int		 write_diff(struct fnc_view *, char *);
 static int		 match_line(const char *, regex_t *, size_t,
 			    regmatch_t *);
-static int		 draw_matched_line(struct fnc_view *, int *,
-			    int, regmatch_t *, attr_t);
+static int		 draw_matched_line(struct fnc_view *, const char *,
+			    int *, int, int, regmatch_t *, attr_t);
 static void		 drawborder(struct fnc_view *);
 static int		 diff_input_handler(struct fnc_view **,
 			    struct fnc_view *, int);
@@ -1009,7 +1018,8 @@ static int		 set_selected_commit(struct fnc_diff_view_state *,
 static void		 diff_grep_init(struct fnc_view *);
 static int		 find_next_match(struct fnc_view *);
 static void		 grep_set_view(struct fnc_view *, FILE **, off_t **,
-			    size_t *, int **, int **, int **, int **);
+			    size_t *, int **, int **, int **, int **,
+			    uint8_t *);
 static int		 view_close(struct fnc_view *);
 static int		 map_repo_path(char **);
 static int		 init_timeline_view(struct fnc_view **, int, int,
@@ -1062,7 +1072,7 @@ static int		 tree_entry_get_symlink_target(char **,
 			    struct fnc_tree_entry *);
 static int		 match_tree_entry(struct fnc_tree_entry *, regex_t *);
 static void		 fnc_object_tree_close(struct fnc_tree_object *);
-static void		 fnc_close_repository_tree(struct fnc_repository_tree *);
+static void		 fnc_close_repo_tree(struct fnc_repository_tree *);
 static int		 open_blame_view(struct fnc_view *, char *,
 			    fsl_uuid_str, fsl_id_t, int, const char *);
 static int		 run_blame(struct fnc_view *);
@@ -1136,7 +1146,8 @@ static void		 fnc_print_msg(struct fnc_view *, const char *, bool,
 			    bool, bool);
 static char		*fnc_strsep (char **, const char *);
 static bool		 fnc_str_has_upper(const char *);
-static int		 fnc_make_sql_glob(char **, char **, const char *, bool);
+static int		 fnc_make_sql_glob(char **, char **, const char *,
+			    bool);
 #ifdef __OpenBSD__
 static int		 init_unveil(const char *, const char *, bool);
 #endif
@@ -1672,7 +1683,7 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path,
 	/*		return RC(FSL_RC_DB, "%s", "fsl_compute_ancestors"); */
 	/* } */
 	s->thread_cx.q = NULL;
-	/* s->selected_idx = 0; */	/* Unnecessary? */
+	/* s->selected = 0; */	/* Unnecessary? */
 
 	TAILQ_INIT(&s->commits.head);
 	s->commits.ncommits = 0;
@@ -1899,7 +1910,7 @@ open_timeline_view(struct fnc_view *view, fsl_id_t rid, const char *path,
 	s->thread_cx.eotl = false;
 	s->thread_cx.quit = &s->quit;
 	s->thread_cx.first_commit_onscreen = &s->first_commit_onscreen;
-	s->thread_cx.selected_commit = &s->selected_commit;
+	s->thread_cx.selected_entry = &s->selected_entry;
 	s->thread_cx.searching = &view->searching;
 	s->thread_cx.search_status = &view->search_status;
 	s->thread_cx.regex = &view->regex;
@@ -2107,7 +2118,7 @@ tl_producer_thread(void *state)
 		} else if (*cx->first_commit_onscreen == NULL) {
 			*cx->first_commit_onscreen =
 			    TAILQ_FIRST(&cx->commits->head);
-			*cx->selected_commit = *cx->first_commit_onscreen;
+			*cx->selected_entry = *cx->first_commit_onscreen;
 		} else if (*cx->quit)
 			done = true;
 
@@ -2377,7 +2388,8 @@ signal_tl_thread(struct fnc_view *view, int wait)
 			cx->reset = true;
 
 		/* Wake timeline thread. */
-		if ((rc = pthread_cond_signal(&cx->commit_consumer)))
+		rc = pthread_cond_signal(&cx->commit_consumer);
+		if (rc)
 			return RC(fsl_errno_to_rc(rc, FSL_RC_MISUSE),
 			    "%s", "pthread_cond_signal");
 
@@ -2394,7 +2406,8 @@ signal_tl_thread(struct fnc_view *view, int wait)
 		doupdate();
 
 		/* Wait while the next commit is being loaded. */
-		if ((rc = pthread_cond_wait(&cx->commit_producer, &fnc_mutex)))
+		rc = pthread_cond_wait(&cx->commit_producer, &fnc_mutex);
+		if (rc)
 			return RC(fsl_errno_to_rc(rc, FSL_RC_ACCESS),
 			    "%s", "pthread_cond_wait");
 
@@ -2412,22 +2425,22 @@ draw_commits(struct fnc_view *view)
 {
 	struct fnc_tl_view_state	*s = &view->state.timeline;
 	struct fnc_tl_thread_cx		*tcx = &s->thread_cx;
-	struct commit_entry		*entry = s->selected_commit;
+	struct commit_entry		*entry = s->selected_entry;
 	struct fnc_colour		*c = NULL;
 	const char			*search_str = NULL;
 	char				*headln = NULL, *idxstr = NULL;
 	char				*branch = NULL, *type = NULL;
 	char				*uuid = NULL;
-	wchar_t				*wcstr;
+	wchar_t				*wline;
 	attr_t				 rx = A_BOLD;
-	int				 ncommits = 0, rc = 0, wstrlen = 0;
-	int				 ncols_needed, max_usrlen = -1;
+	int				 ncommits = 0, rc = FSL_RC_OK, wlen = 0;
+	int				 ncols_needed, maxlen = -1;
 
-	if (s->selected_commit && !(view->searching != SEARCH_DONE &&
+	if (s->selected_entry && !(view->searching != SEARCH_DONE &&
 	    view->search_status == SEARCH_WAITING)) {
-		uuid = fsl_strdup(s->selected_commit->commit->uuid);
-		branch = fsl_strdup(s->selected_commit->commit->branch);
-		type = fsl_strdup(s->selected_commit->commit->type);
+		uuid = fsl_strdup(s->selected_entry->commit->uuid);
+		branch = fsl_strdup(s->selected_entry->commit->branch);
+		type = fsl_strdup(s->selected_entry->commit->type);
 	}
 
 	if (tcx->ncommits_needed > 0 && !tcx->eotl) {
@@ -2490,7 +2503,7 @@ draw_commits(struct fnc_view *view)
 	}
 	if (SPINNER[++tcx->spin_idx] == '\0')
 		tcx->spin_idx = 0;
-	rc = formatln(&wcstr, &wstrlen, headln, view->ncols, 0, 0, false);
+	rc = formatln(&wline, &wlen, headln, view->ncols, 0, false);
 	if (rc)
 		goto end;
 
@@ -2503,22 +2516,22 @@ draw_commits(struct fnc_view *view)
 	if (c)
 		rx |= COLOR_PAIR(c->scheme);
 	wattron(view->window, rx);
-	waddwstr(view->window, wcstr);
-	while (wstrlen < view->ncols) {
+	waddwstr(view->window, wline);
+	while (wlen < view->ncols) {
 		waddch(view->window, ' ');
-		++wstrlen;
+		++wlen;
 	}
 	wattroff(view->window, rx);
-	fsl_free(wcstr);
+	fsl_free(wline);
 	if (view->nlines <= 1)
 		goto end;
 
 	/* Parse commits to be written on screen for the longest username. */
 	entry = s->first_commit_onscreen;
 	while (entry) {
-		wchar_t		*usr_wcstr;
+		wchar_t		*wstr;
 		char		*user;
-		int		 usrlen;
+		int		 wusrlen;
 		if (ncommits >= view->nlines - 1)
 			break;
 		user = fsl_strdup(entry->commit->user);
@@ -2528,11 +2541,10 @@ draw_commits(struct fnc_view *view)
 		}
 		if (strpbrk(user, "<@>") != NULL)
 			parse_emailaddr_username(&user);
-		rc = formatln(&usr_wcstr, &usrlen, user, view->ncols, 0, 0,
-		    false);
-		if (max_usrlen < usrlen)
-			max_usrlen = usrlen;
-		fsl_free(usr_wcstr);
+		rc = formatln(&wstr, &wusrlen, user, view->ncols, 0, false);
+		if (maxlen < wusrlen)
+			maxlen = wusrlen;
+		fsl_free(wstr);
 		fsl_free(user);
 		++ncommits;
 		entry = TAILQ_NEXT(entry, entries);
@@ -2544,10 +2556,10 @@ draw_commits(struct fnc_view *view)
 	while (entry) {
 		if (ncommits >= MIN(view->nlines - 1, view->lines - 1))
 			break;
-		if (ncommits == s->selected_idx)
+		if (ncommits == s->selected)
 			wattr_on(view->window, A_REVERSE, NULL);
-		rc = write_commit_line(view, entry->commit, max_usrlen);
-		if (ncommits == s->selected_idx)
+		rc = write_commit_line(view, entry->commit, maxlen);
+		if (ncommits == s->selected)
 			wattr_off(view->window, A_REVERSE, NULL);
 		++ncommits;
 		s->last_commit_onscreen = entry;
@@ -2581,26 +2593,24 @@ parse_emailaddr_username(char **username)
 }
 
 static int
-formatln(wchar_t **ptr, int *wstrlen, const char *mbstr, int column_limit,
-    int start_column, size_t skip, bool expand)
+formatln(wchar_t **ptr, int *wstrlen, const char *mbstr, size_t column_limit,
+    int start_column, bool expand)
 {
 	wchar_t		*wline = NULL;
-	static char	 exstr[BUFSIZ];
+	char		*exstr = NULL;
 	size_t		 i, sz, wlen;
-	int		 cols = 0, rc = FSL_RC_OK;
+	size_t		 cols = 0;
+	int		 rc = FSL_RC_OK;
 
 	*ptr = NULL;
 	*wstrlen = 0;
 	sz = fsl_strlen(mbstr);
 
-	if (expand) {
-		sz = expand_tab(exstr, sizeof(exstr), mbstr, sz);
-		mbstr = exstr;
-	}
-	if (skip)
-		skip = MIN(skip, sz);
+	if (expand)
+		expand_tab(&exstr, mbstr, sz);
 
-	rc = multibyte_to_wchar(mbstr + skip, &wline, &wlen);
+	rc = multibyte_to_wchar(expand ? exstr : mbstr, &wline, &wlen);
+	fsl_free(exstr);
 	if (rc)
 		return rc;
 
@@ -2661,18 +2671,22 @@ end:
  * characters. Return number of bytes written to dst minus the terminating NUL.
  */
 static size_t
-expand_tab(char *dst, size_t dstlen, const char *src, int srclen)
+expand_tab(char **ptr, const char *src, int srclen)
 {
-	size_t	sz = 0;
-	int	idx = 0;
+	char	*dst;
+	size_t	 n = srclen, sz = 0;
+	int	 idx = 0;
 
-	while (sz < dstlen - 1 && idx < srclen && src[idx]) {
+	*ptr = NULL;
+	dst = fsl_malloc((srclen + 1) * sizeof(char));
+
+	while (idx < srclen && src[idx]) {
 		const char c = *(src + idx);
 
 		if (c == '\t') {
 			size_t spaces = TABSIZE - (sz % TABSIZE);
-			if (spaces + sz >= dstlen - 1)
-				spaces = dstlen - sz - 1;
+			n += spaces;
+			dst = fsl_realloc(dst, n * sizeof(char));
 			memcpy(dst + sz, "        ", spaces);
 			sz += spaces;
 		} else {
@@ -2682,6 +2696,7 @@ expand_tab(char *dst, size_t dstlen, const char *src, int srclen)
 	}
 
 	dst[sz] = '\0';
+	*ptr = dst;
 	return sz;
 }
 
@@ -2739,31 +2754,31 @@ end:
  */
 static int
 write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
-    int max_usrlen)
+    int maxlen)
 {
 	struct fnc_tl_view_state	*s = &view->state.timeline;
 	struct fnc_colour		*c = NULL;
-	wchar_t				*usr_wcstr = NULL, *wcomment = NULL;
+	wchar_t				*wstr = NULL;
 	char				*comment0 = NULL, *comment = NULL;
 	char				*date = NULL;
 	char				*eol = NULL, *pad = NULL, *user = NULL;
 	size_t				 i = 0;
-	int				 col_pos, ncols_avail, usrlen;
-	int				 commentlen, rc = 0;
+	int				 col, limit, wlen;
+	int				 rc = FSL_RC_OK;
 
 	/* Trim time component from timestamp for the date field. */
 	date = fsl_strdup(commit->timestamp);
 	while (!fsl_isspace(date[i++])) {}
 	date[i] = '\0';
-	col_pos = MIN(view->ncols, ISO8601_DATE_ONLY + 1);
+	col = MIN(view->ncols, ISO8601_DATE_ONLY + 1);
 	if (s->colour)
 		c = get_colour(&s->colours, FNC_COLOUR_DATE);
 	if (c)
 		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
-	waddnstr(view->window, date, col_pos);
+	waddnstr(view->window, date, col);
 	if (c)
 		wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
-	if (col_pos > view->ncols)
+	if (col > view->ncols)
 		goto end;
 
 	/* If enough columns, write abbreviated commit hash. */
@@ -2775,8 +2790,8 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 		wprintw(view->window, "%.9s ", commit->uuid);
 		if (c)
 			wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
-		col_pos += 10;
-		if (col_pos > view->ncols)
+		col += 10;
+		if (col > view->ncols)
 			goto end;
 	}
 
@@ -2790,21 +2805,22 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 		goto end;
 	if (strpbrk(user, "<@>") != NULL)
 		parse_emailaddr_username(&user);
-	rc = formatln(&usr_wcstr, &usrlen, user, view->ncols - col_pos,
-	    col_pos, 0, false);
+	rc = formatln(&wstr, &wlen, user, view->ncols - col,
+	    col, false);
 	if (rc)
 		goto end;
 	if (s->colour)
 		c = get_colour(&s->colours, FNC_COLOUR_USER);
 	if (c)
 		wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
-	waddwstr(view->window, usr_wcstr);
-	pad = fsl_mprintf("%*c",  max_usrlen - usrlen + 2, ' ');
+	waddwstr(view->window, wstr);
+	fsl_free(wstr);
+	pad = fsl_mprintf("%*c",  maxlen - wlen + 2, ' ');
 	waddstr(view->window, pad);
 	if (c)
 		wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
-	col_pos += (max_usrlen + 2);
-	if (col_pos > view->ncols)
+	col += (maxlen + 2);
+	if (col > view->ncols)
 		goto end;
 
 	/* Only show comment up to the first newline character. */
@@ -2817,24 +2833,22 @@ write_commit_line(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	eol = strchr(comment, '\n');
 	if (eol)
 		*eol = '\0';
-	ncols_avail = view->ncols - col_pos;
-	rc = formatln(&wcomment, &commentlen, comment, ncols_avail, col_pos, 0,
-	    false);
+	limit = view->ncols - col;
+	rc = formatln(&wstr, &wlen, comment, limit, col, false);
 	if (rc)
 		goto end;
-	waddwstr(view->window, wcomment);
-	col_pos += commentlen;
-	while (col_pos < view->ncols) {
+	waddwstr(view->window, wstr);
+	col += wlen;
+	while (col < view->ncols) {
 		waddch(view->window, ' ');
-		++col_pos;
+		++col;
 	}
 end:
 	fsl_free(date);
 	fsl_free(user);
-	fsl_free(usr_wcstr);
+	fsl_free(wstr);
 	fsl_free(pad);
 	fsl_free(comment0);
-	fsl_free(wcomment);
 	return rc;
 }
 
@@ -3066,6 +3080,7 @@ help(struct fnc_view *view)
 	    {"  i                ", "  ❬i❭             "},
 	    {"  L                ", "  ❬L❭             "},
 	    {"  p                ", "  ❬p❭             "},
+	    {"  S                ", "  ❬S❭             "},
 	    {"  v                ", "  ❬v❭             "},
 	    {"  w                ", "  ❬w❭             "},
 	    {"  -,_              ", "  ❬-❭❬_❭          "},
@@ -3152,6 +3167,7 @@ help(struct fnc_view *view)
 	    "Toggle inversion of diff output",
 	    "Toggle display of file line numbers",
 	    "Toggle display of function name in chunk header",
+	    "Display side-by-side formatted diff",
 	    "Toggle verbosity of diff output",
 	    "Toggle ignore whitespace-only changes in diff",
 	    "Decrease the number of context lines",
@@ -3403,10 +3419,10 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		move_tl_cursor_up(view, false, true);
 		break;
 	case KEY_RESIZE:
-		if (s->selected_idx > view->nlines - 2)
-			s->selected_idx = view->nlines - 2;
-		if (s->selected_idx > s->commits.ncommits - 1)
-			s->selected_idx = s->commits.ncommits - 1;
+		if (s->selected > view->nlines - 2)
+			s->selected = view->nlines - 2;
+		if (s->selected > s->commits.ncommits - 1)
+			s->selected = s->commits.ncommits - 1;
 		select_commit(s);
 		if (s->commits.ncommits < view->nlines - 1 &&
 		    !s->thread_cx.eotl) {
@@ -3442,10 +3458,10 @@ tl_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		break;
 	}
 	case 't':
-		if (s->selected_commit == NULL)
+		if (s->selected_entry == NULL)
 			break;
 		if (!fsl_rid_is_a_checkin(fcli_cx(),
-		    s->selected_commit->commit->rid))
+		    s->selected_entry->commit->rid))
 			fnc_print_msg(view,
 			    "-- tree requires check-in artifact --", true,
 			    true, true);
@@ -3474,38 +3490,38 @@ move_tl_cursor_down(struct fnc_view *view, uint16_t page)
 		return rc;
 
 	if (s->thread_cx.eotl &&
-	    s->selected_commit->idx >= s->commits.ncommits - 1)
+	    s->selected_entry->idx >= s->commits.ncommits - 1)
 		return rc;  /* Last commit already selected. */
 
 	if (!page) {
 		/* Still more commits on this page to scroll down. */
-		if (s->selected_idx < MIN(view->nlines - 2,
+		if (s->selected < MIN(view->nlines - 2,
 		    s->commits.ncommits - 1))
-			++s->selected_idx;
+			++s->selected;
 		else  /* Last commit on screen is selected, need to scroll. */
 			rc = timeline_scroll_down(view, 1);
 	} else if (s->thread_cx.eotl) {
 		/* Last displayed commit is the end, jump to it. */
 		if (s->last_commit_onscreen->idx == s->commits.ncommits - 1)
-			s->selected_idx += MIN(s->last_commit_onscreen->idx -
-			    s->selected_commit->idx, page + 1);
+			s->selected += MIN(s->last_commit_onscreen->idx -
+			    s->selected_entry->idx, page + 1);
 		else  /* Scroll the page. */
 			rc = timeline_scroll_down(view, MIN(page,
-			    s->commits.ncommits - s->selected_commit->idx - 1));
+			    s->commits.ncommits - s->selected_entry->idx - 1));
 	} else {
 		rc = timeline_scroll_down(view, page);
 		if (rc)
 			return rc;
-		if (first == s->first_commit_onscreen && s->selected_idx <
+		if (first == s->first_commit_onscreen && s->selected <
 		    MIN(view->nlines - 2, s->commits.ncommits - 1)) {
 			/* End of timeline, no more commits; move cursor down */
-			s->selected_idx = MIN(s->commits.ncommits - 1, page);
+			s->selected = MIN(s->commits.ncommits - 1, page);
 		}
 		/*
 		 * If we've overshot (necessarily possible with horizontal
 		 * splits), select the final commit.
 		 */
-		s->selected_idx = MIN(s->selected_idx,
+		s->selected = MIN(s->selected,
 		    s->last_commit_onscreen->idx -
 		    s->first_commit_onscreen->idx);
 	}
@@ -3525,10 +3541,10 @@ move_tl_cursor_up(struct fnc_view *view, uint16_t page, bool home)
 
 	if ((page && TAILQ_FIRST(&s->commits.head) == s->first_commit_onscreen)
 	    || home)
-		s->selected_idx = home ? 0 : MAX(0, s->selected_idx - page - 1);
+		s->selected = home ? 0 : MAX(0, s->selected - page - 1);
 
-	if (!page && !home && s->selected_idx > 0)
-		--s->selected_idx;
+	if (!page && !home && s->selected > 0)
+		--s->selected;
 	else
 		timeline_scroll_up(s, home ?
 		    s->commits.ncommits : MAX(page, 1));
@@ -3588,9 +3604,9 @@ init_view(struct fnc_view **new_view, struct fnc_view *view,
 	switch (request) {
 	case FNC_VIEW_DIFF: {
 		struct fnc_tl_view_state *s = &view->state.timeline;
-		if (s->selected_commit == NULL)
+		if (s->selected_entry == NULL)
 			break;
-		rc = init_diff_view(new_view, x, y, s->selected_commit->commit,
+		rc = init_diff_view(new_view, x, y, s->selected_entry->commit,
 		    view);
 		break;
 	}
@@ -3607,13 +3623,13 @@ init_view(struct fnc_view **new_view, struct fnc_view *view,
 			glob = view->state.timeline.glob;
 		else if (view->vid == FNC_VIEW_BRANCH)
 			rid = fsl_uuid_to_rid(fcli_cx(),
-			    view->state.branch.selected_branch->branch->id);
+			    view->state.branch.selected_entry->branch->id);
 		rc = init_timeline_view(new_view, x, y, rid, "/", glob);
 		break;
 	}
 	case FNC_VIEW_TREE: {
 		struct fnc_tl_view_state *s = &view->state.timeline;
-		rc = browse_commit_tree(new_view, x, y, s->selected_commit,
+		rc = browse_commit_tree(new_view, x, y, s->selected_entry,
 		    s->path);
 		break;
 	}
@@ -3690,14 +3706,14 @@ offset_selected_line(struct fnc_view *view)
 		struct fnc_tl_view_state *s = &view->state.timeline;
 		scrolld = &timeline_scroll_down;
 		header = 2;
-		selected = &s->selected_idx;
+		selected = &s->selected;
 		break;
 	}
 	case FNC_VIEW_TREE: {
 		struct fnc_tree_view_state *s = &view->state.tree;
 		scrolld = &tree_scroll_down;
 		header = 4;
-		selected = &s->selected_idx;
+		selected = &s->selected;
 		break;
 	}
 	case FNC_VIEW_BRANCH: {
@@ -3791,8 +3807,8 @@ select_commit(struct fnc_tl_view_state *s)
 
 	entry = s->first_commit_onscreen;
 	while (entry) {
-		if (ncommits == s->selected_idx) {
-			s->selected_commit = entry;
+		if (ncommits == s->selected) {
+			s->selected_entry = entry;
 			break;
 		}
 		entry = TAILQ_NEXT(entry, entries);
@@ -4031,7 +4047,7 @@ tl_search_next(struct fnc_view *view)
 	}
 
 	if (s->matched_commit) {
-		int cur = s->selected_commit->idx;
+		int cur = s->selected_entry->idx;
 		while (cur < s->matched_commit->idx) {
 			if ((rc = tl_input_handler(NULL, view, KEY_DOWN)))
 				return rc;
@@ -4072,9 +4088,11 @@ view_close(struct fnc_view *view)
 	int rc = FSL_RC_OK;
 
 	if (view->child) {
+		regfree(&view->child->regex);
 		view_close(view->child);
 		view->child = NULL;
 	}
+	regfree(&view->regex);
 	if (view->close)
 		rc = view->close(view);
 	if (view->panel)
@@ -4096,7 +4114,6 @@ close_timeline_view(struct fnc_view *view)
 	fsl_stmt_finalize(s->thread_cx.q);
 	fnc_free_commits(&s->commits);
 	free_colours(&s->colours);
-	regfree(&view->regex);
 	fsl_free(s->path);
 	s->path = NULL;
 
@@ -4212,9 +4229,9 @@ init_diff_view(struct fnc_view **new_view, int start_col, int start_ln,
 	if (diff_view == NULL)
 		return RC(FSL_RC_ERROR, "%s", "view_open");
 
-	rc = open_diff_view(diff_view, commit, DEF_DIFF_CTX, fnc_init.ws,
-	    fnc_init.invert, !fnc_init.quiet, fnc_init.showln, timeline_view,
-	    true, NULL);
+	rc = open_diff_view(diff_view, commit, DEF_DIFF_CTX, fnc_init.sbs,
+	    fnc_init.ws, fnc_init.invert, !fnc_init.quiet, fnc_init.showln,
+	    timeline_view, true, NULL);
 	if (!rc)
 		*new_view = diff_view;
 
@@ -4223,8 +4240,8 @@ init_diff_view(struct fnc_view **new_view, int start_col, int start_ln,
 
 static int
 open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
-    int context, bool ignore_ws, bool invert, bool verbosity, bool showln,
-    struct fnc_view *timeline_view, bool showmeta,
+    int context, bool sbs, bool ignore_ws, bool invert, bool verbosity,
+    bool showln, struct fnc_view *timeline_view, bool showmeta,
     struct fnc_pathlist_head *paths)
 {
 	struct fnc_diff_view_state	*s = &view->state.diff;
@@ -4238,9 +4255,8 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 
 	s->index.n = 0;
 	s->index.idx = 0;
-	s->maxx = 0;
 	s->paths = paths;
-	s->selected_commit = commit;
+	s->selected_entry = commit;
 	s->first_line_onscreen = 1;
 	s->last_line_onscreen = view->nlines;
 	s->selected_line = 1;
@@ -4248,6 +4264,7 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 	s->context = context;
 	s->sbs = 0;
 	FLAG_SET(s->diff_flags, FNC_DIFF_PROTOTYPE);
+	sbs ? FLAG_SET(s->diff_flags, FNC_DIFF_SIDEBYSIDE) : 0;
 	verbosity ? FLAG_SET(s->diff_flags, FNC_DIFF_VERBOSE) : 0;
 	ignore_ws ? FLAG_SET(s->diff_flags, FNC_DIFF_IGNORE_ALLWS) : 0;
 	invert ? FLAG_SET(s->diff_flags, FNC_DIFF_INVERT) : 0;
@@ -4269,6 +4286,8 @@ open_diff_view(struct fnc_view *view, struct fnc_commit_artifact *commit,
 
 	s->line_offsets = NULL;
 	s->nlines = 0;
+	s->dlines = NULL;
+	s->ndlines = 0;
 	s->ncols = view->ncols;
 	rc = create_diff(s);
 	if (rc) {
@@ -4298,10 +4317,17 @@ create_diff(struct fnc_diff_view_state *s)
 {
 	FILE	*fout = NULL;
 	char	*line, *st0 = NULL, *st = NULL;
-	off_t	 lnoff = 0;
+	off_t	 off = 0;
 	uint32_t idx = 0;
 	int	 rc = 0;
 
+	s->maxx = 0;
+
+	free(s->dlines);
+	s->dlines = fsl_malloc(sizeof(enum line_type *));
+	if (s->dlines == NULL)
+		return RC(FSL_RC_ERROR, "%s", "fsl_malloc");
+	s->ndlines = 0;
 	free(s->line_offsets);
 	s->line_offsets = fsl_malloc(sizeof(off_t));
 	if (s->line_offsets == NULL)
@@ -4319,18 +4345,23 @@ create_diff(struct fnc_diff_view_state *s)
 	}
 	s->f = fout;
 
+	rc = add_line_offset(&s->line_offsets, &s->nlines, 0);
+	if (rc)
+		goto end;
+
 	/*
 	 * We'll diff artifacts of type "ci" (i.e., "checkin") separately, as
 	 * it's a different process to diff the others (wiki, technote, etc.).
 	 */
-	if (s->selected_commit->diff_type == FNC_DIFF_COMMIT)
-		rc = create_changeset(s->selected_commit);
-	else if (s->selected_commit->diff_type == FNC_DIFF_BLOB)
-		rc = diff_file_artifact(s, s->selected_commit->prid, NULL,
+	if (s->selected_entry->diff_type == FNC_DIFF_COMMIT)
+		rc = create_changeset(s->selected_entry);
+	else if (s->selected_entry->diff_type == FNC_DIFF_BLOB)
+		rc = diff_file_artifact(s, s->selected_entry->prid, NULL,
 		    NULL, FSL_CKOUT_CHANGE_MOD);
-	else if (s->selected_commit->diff_type == FNC_DIFF_WIKI)
-		rc = diff_non_checkin(&s->buf, s->selected_commit,
-		    s->diff_flags, s->context, s->sbs);
+	if (!rc && s->showmeta)
+		rc = write_commit_meta(s);
+	if (!rc && s->selected_entry->diff_type == FNC_DIFF_WIKI)
+		rc = diff_non_checkin(s);
 	if (rc)
 		goto end;
 
@@ -4338,18 +4369,18 @@ create_diff(struct fnc_diff_view_state *s)
 	 * Delay assigning diff headline labels (i.e., diff id1 id2) till now
 	 * because wiki parent commits are obtained in diff_non_checkin().
 	 */
-	if (s->selected_commit->puuid) {
+	if (s->selected_entry->puuid) {
 		fsl_free(s->id1);
-		s->id1 = fsl_strdup(s->selected_commit->puuid);
+		s->id1 = fsl_strdup(s->selected_entry->puuid);
 		if (s->id1 == NULL) {
 			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 			goto end;
 		}
 	} else
 		s->id1 = NULL;	/* Initial commit, tag, technote, etc. */
-	if (s->selected_commit->uuid) {
+	if (s->selected_entry->uuid) {
 		fsl_free(s->id2);
-		s->id2 = fsl_strdup(s->selected_commit->uuid);
+		s->id2 = fsl_strdup(s->selected_entry->uuid);
 		if (s->id2 == NULL) {
 			rc = RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 			goto end;
@@ -4357,21 +4388,14 @@ create_diff(struct fnc_diff_view_state *s)
 	} else
 		s->id2 = NULL;	/* Local work tree. */
 
-	rc = add_line_offset(&s->line_offsets, &s->nlines, 0);
-	if (rc)
-		goto end;
-
-	if (s->showmeta)
-		write_commit_meta(s);
-
 	/*
 	 * Diff local changes on disk in the current checkout differently to
 	 * checked-in versions: the former compares on disk file content with
 	 * file artifacts; the latter compares file artifact blobs only.
 	 */
-	if (s->selected_commit->diff_type == FNC_DIFF_COMMIT)
+	if (s->selected_entry->diff_type == FNC_DIFF_COMMIT)
 		diff_commit(s);
-	else if (s->selected_commit->diff_type == FNC_DIFF_CKOUT)
+	else if (s->selected_entry->diff_type == FNC_DIFF_CKOUT)
 		diff_checkout(s);
 
 	/*
@@ -4380,18 +4404,18 @@ create_diff(struct fnc_diff_view_state *s)
 	 */
 	st0 = fsl_strdup(fsl_buffer_str(&s->buf));
 	st = st0;
-	lnoff = (s->line_offsets)[s->nlines - 1];
+	off = (s->line_offsets)[s->nlines - 1];
 	s->index.lineno = fsl_malloc(s->index.n * sizeof(size_t));
 	while ((line = fnc_strsep(&st, "\n")) != NULL) {
 		int lineno, n = fprintf(s->f, "%s\n", line);
-		s->maxx = MAX((int)s->maxx, n);
+		s->maxx = MAX(s->maxx, n);
 		if (s->index.offset && idx < s->index.n &&
-		    lnoff == s->index.offset[idx]) {
+		    off == s->index.offset[idx]) {
 			lineno = s->nlines + (idx ? 1 : 0);
 			s->index.lineno[idx++] = lineno;
 		}
-		lnoff += n;
-		rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff);
+		off += n;
+		rc = add_line_offset(&s->line_offsets, &s->nlines, off);
 		if (rc)
 			goto end;
 	}
@@ -4433,7 +4457,7 @@ create_changeset(struct fnc_commit_artifact *commit)
 		/* int perm; */
 
 		path = fsl_stmt_g_text(st, 0, NULL);	/* Current filename. */
-		//perm = fsl_stmt_g_int32(st, 1);	/* File permissions. */
+		/* perm = fsl_stmt_g_int32(st, 1); */	/* File permissions. */
 		olduuid = fsl_stmt_g_text(st, 2, NULL);	/* UUID before change */
 		uuid = fsl_stmt_g_text(st, 3, NULL);	/* UUID after change. */
 		oldpath = fsl_stmt_g_text(st, 4, NULL);	/* Old name, if chngd */
@@ -4473,42 +4497,60 @@ write_commit_meta(struct fnc_diff_view_state *s)
 {
 	char		*line = NULL, *st0 = NULL, *st = NULL;
 	fsl_size_t	 linelen, idx = 0;
-	off_t		 lnoff = 0;
-	int		 n, rc = 0;
+	off_t		 off = 0;
+	int		 rc = FSL_RC_OK, n = 7;  /* Min lines in commit meta */
 
-	if ((n = fprintf(s->f,"%s %s\n", s->selected_commit->type,
-	    s->selected_commit->uuid)) < 0)
+	n += countlines(s->selected_entry->comment);
+	n += s->selected_entry->changeset.used;
+
+	if ((n = fprintf(s->f,"%s %s\n", s->selected_entry->type,
+	    s->selected_entry->uuid)) < 0)
 		goto end;
-	lnoff += n;
-	if ((rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff)))
+	off += n;
+	rc = add_line_type(&s->dlines, LINE_DIFF_META, &s->ndlines, n, true);
+	if (!rc)
+		rc = add_line_offset(&s->line_offsets, &s->nlines, off);
+	if (rc)
 		goto end;
 
-	if ((n = fprintf(s->f,"user: %s\n", s->selected_commit->user)) < 0)
+	if ((n = fprintf(s->f,"user: %s\n", s->selected_entry->user)) < 0)
 		goto end;
-	lnoff += n;
-	if ((rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff)))
+	off += n;
+	rc = add_line_type(&s->dlines, LINE_DIFF_USER, &s->ndlines, 0, true);
+	if (!rc)
+		rc = add_line_offset(&s->line_offsets, &s->nlines, off);
+	if (rc)
 		goto end;
 
-	if ((n = fprintf(s->f,"tags: %s\n", s->selected_commit->branch ?
-	    s->selected_commit->branch : "/dev/null")) < 0)
+	if ((n = fprintf(s->f,"tags: %s\n", s->selected_entry->branch ?
+	    s->selected_entry->branch : "/dev/null")) < 0)
 		goto end;
-	lnoff += n;
-	if ((rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff)))
+	off += n;
+	rc = add_line_type(&s->dlines, LINE_DIFF_TAGS, &s->ndlines, 0, true);
+	if (!rc)
+		rc = add_line_offset(&s->line_offsets, &s->nlines, off);
+	if (rc)
 		goto end;
 
 	if ((n = fprintf(s->f,"date: %s\n",
-	    s->selected_commit->timestamp)) < 0)
+	    s->selected_entry->timestamp)) < 0)
 		goto end;
-	lnoff += n;
-	if ((rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff)))
+	off += n;
+	rc = add_line_type(&s->dlines, LINE_DIFF_DATE, &s->ndlines, 0, true);
+	if (!rc)
+		rc = add_line_offset(&s->line_offsets, &s->nlines, off);
+	if (rc)
 		goto end;
 
 	fputc('\n', s->f);
-	++lnoff;
-	if ((rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff)))
+	++off;
+	rc = add_line_type(&s->dlines, LINE_BLANK, &s->ndlines, 0, true);
+	if (!rc)
+		rc = add_line_offset(&s->line_offsets, &s->nlines, off);
+	if (rc)
 		goto end;
 
-	st0 = fsl_strdup(s->selected_commit->comment);
+	st0 = fsl_strdup(s->selected_entry->comment);
 	st = st0;
 	if (st == NULL) {
 		RC(FSL_RC_ERROR, "%s", "fsl_strdup");
@@ -4517,34 +4559,41 @@ write_commit_meta(struct fnc_diff_view_state *s)
 	while ((line = fnc_strsep(&st, "\n")) != NULL) {
 		linelen = fsl_strlen(line);
 		if (linelen >= s->ncols) {
-			rc = wrapline(line, s->ncols - LINENO_WIDTH, s, &lnoff);
+			rc = wrapline(line, s->ncols - LINENO_WIDTH, s, &off);
 			if (rc)
 				goto end;
 		}
 		else {
 			if ((n = fprintf(s->f, "%s\n", line)) < 0)
 				goto end;
-			lnoff += n;
-			if ((rc = add_line_offset(&s->line_offsets, &s->nlines,
-			    lnoff)))
+			off += n;
+			rc = add_line_type(&s->dlines, LINE_DIFF_COMMENT,
+			    &s->ndlines, 0, true);
+			if (!rc)
+				rc = add_line_offset(&s->line_offsets,
+				    &s->nlines, off);
+			if (rc)
 				goto end;
 
 		}
 	}
 
 	fputc('\n', s->f);
-	++lnoff;
-	if ((rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff)))
+	++off;
+	rc = add_line_type(&s->dlines, LINE_BLANK, &s->ndlines, 0, true);
+	if (!rc)
+		rc = add_line_offset(&s->line_offsets, &s->nlines, off);
+	if (rc)
 		goto end;
 
-	if (s->selected_commit->diff_type == FNC_DIFF_WIKI)
+	if (s->selected_entry->diff_type == FNC_DIFF_WIKI)
 		goto end;  /* No changeset for wiki commits. */
 
-	for (idx = 0; idx < s->selected_commit->changeset.used; ++idx) {
+	for (idx = 0; idx < s->selected_entry->changeset.used; ++idx) {
 		char				*changeline;
 		struct fsl_file_artifact	*file_change;
 
-		file_change = s->selected_commit->changeset.list[idx];
+		file_change = s->selected_entry->changeset.list[idx];
 
 		switch (file_change->change) {
 		case FSL_CKOUT_CHANGE_MOD:
@@ -4567,18 +4616,26 @@ write_commit_meta(struct fnc_diff_view_state *s)
 		if ((n = fprintf(s->f, "%s%s\n", changeline,
 		    file_change->fc->name)) < 0)
 			goto end;
-		lnoff += n;
-		if ((rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff)))
+		off += n;
+		rc = add_line_type(&s->dlines, LINE_DIFF_META, &s->ndlines, 0,
+		    true);
+		if (!rc)
+			rc = add_line_offset(&s->line_offsets, &s->nlines, off);
+		if (rc)
 			goto end;
 	}
 
 	/* Add blank line between end of changeset and diff. */
 	fputc('\n', s->f);
-	++lnoff;
-	rc = add_line_offset(&s->line_offsets, &s->nlines, lnoff);
+	++off;
+	rc = add_line_type(&s->dlines, LINE_BLANK, &s->ndlines, 0, true);
+	if (!rc)
+		rc = add_line_offset(&s->line_offsets, &s->nlines, off);
+	if (rc)
+		goto end;
 	s->index.offset = fsl_realloc(s->index.offset,
 	    (s->index.n + 1) * sizeof(off_t));
-	s->index.offset[s->index.n++] = lnoff;
+	s->index.offset[s->index.n++] = off;
 end:
 	free(st0);
 	free(line);
@@ -4590,17 +4647,29 @@ end:
 	return rc;
 }
 
+static int
+countlines(const char *str)
+{
+	int n, idx;
+
+	for (idx = 0, n = 1; str[idx]; ++idx)
+		if (str[idx] == '\n')
+			++n;
+
+	return str[idx - 1] == '\n' ? n : ++n;
+}
+
 /*
  * Wrap long lines at the terminal's available column width. The caller
- * must ensure the ncols_avail parameter has taken into account whether the
+ * must ensure the limit parameter has taken into account whether the
  * screen is currently split, and not mistakenly pass in the curses COLS macro
  * without deducting the parent panel's width. This function doesn't break
  * words, and will wrap at the end of the last word that can wholly fit within
- * the ncols_avail limit.
+ * the limit limit.
  */
 static int
-wrapline(char *line, fsl_size_t ncols_avail, struct fnc_diff_view_state *s,
-    off_t *lnoff)
+wrapline(char *line, fsl_size_t limit, struct fnc_diff_view_state *s,
+    off_t *off)
 {
 	char		*word;
 	fsl_size_t	 wordlen, cursor = 0;
@@ -4608,26 +4677,30 @@ wrapline(char *line, fsl_size_t ncols_avail, struct fnc_diff_view_state *s,
 
 	while ((word = fnc_strsep(&line, " ")) != NULL) {
 		wordlen = fsl_strlen(word);
-		if ((cursor + wordlen) >= ncols_avail) {
+		if ((cursor + wordlen) >= limit) {
 			fputc('\n', s->f);
-			++(*lnoff);
-			rc = add_line_offset(&s->line_offsets, &s->nlines,
-			    *lnoff);
+			++(*off);
+			rc = add_line_type(&s->dlines, LINE_DIFF_COMMENT,
+			    &s->ndlines, 0, true);
+			if (!rc)
+				rc = add_line_offset(&s->line_offsets,
+				    &s->nlines, *off);
 			if (rc)
 				return rc;
 			cursor = 0;
 		}
 		if ((n  = fprintf(s->f, "%s ", word)) < 0)
 			return rc;
-		*lnoff += n;
+		*off += n;
 		cursor += n;
 	}
 	fputc('\n', s->f);
-	++(*lnoff);
-	if ((rc = add_line_offset(&s->line_offsets, &s->nlines, *lnoff)))
-		return rc;
+	++(*off);
+	rc = add_line_type(&s->dlines, LINE_DIFF_COMMENT, &s->ndlines, 0, true);
+	if (!rc)
+		rc = add_line_offset(&s->line_offsets, &s->nlines, *off);
 
-	return 0;
+	return rc;
 }
 
 static int
@@ -4643,6 +4716,26 @@ add_line_offset(off_t **line_offsets, size_t *nlines, off_t off)
 	(*nlines)++;
 
 	return 0;
+}
+
+static int
+add_line_type(enum line_type **lines, enum line_type type, uint32_t *nlines,
+    uint32_t alloc, bool incr)
+{
+	if (alloc) {
+		enum line_type *p;
+		p = fsl_realloc(*lines,
+		    (*nlines + alloc) * sizeof(enum line_type *));
+		if (p == NULL)
+			return RC(FSL_RC_ERROR, "%s", "fsl_realloc");
+		*lines = p;
+	}
+
+	(*lines)[*nlines] = type;
+	if (incr)
+		(*nlines)++;
+
+	return FSL_RC_OK;
 }
 
 /*
@@ -4669,7 +4762,7 @@ diff_commit(struct fnc_diff_view_state *s)
 	fsl_id_t		 id1;
 	int			 different = 0, rc = 0;
 
-	rc = fsl_deck_load_rid(f, &d2, s->selected_commit->rid,
+	rc = fsl_deck_load_rid(f, &d2, s->selected_entry->rid,
 	    FSL_SATYPE_CHECKIN);
 	if (rc)
 		goto end;
@@ -4682,8 +4775,8 @@ diff_commit(struct fnc_diff_view_state *s)
 	 * canonical fnc, that do not have an "initial empty check-in", we
 	 * proceed with no parent version to diff against.
 	 */
-	if (s->selected_commit->puuid) {
-		rc = fsl_sym_to_rid(f, s->selected_commit->puuid,
+	if (s->selected_entry->puuid) {
+		rc = fsl_sym_to_rid(f, s->selected_entry->puuid,
 		    FSL_SATYPE_CHECKIN, &id1);
 		if (rc)
 			goto end;
@@ -4786,7 +4879,7 @@ diff_checkout(struct fnc_diff_view_state *s)
 	bool		 allow_symlinks;
 
 	abspath = bminus = sql = fsl_buffer_empty;
-	vid = s->selected_commit->prid;
+	vid = s->selected_entry->prid;
 	fsl_ckout_version_info(f, &cid, NULL);
 	/* cid = fsl_config_get_id(f, FSL_CONFDB_CKOUT, 0, "checkout"); */
 	/* XXX Already done in cmd_diff(): Load vfile table with local state. */
@@ -4911,8 +5004,8 @@ diff_checkout(struct fnc_diff_view_state *s)
 		    "allow-symlinks");
 		if (!symlink != !(fsl_is_symlink(fsl_buffer_cstr(&abspath)) &&
 		    allow_symlinks)) {
-			rc = write_diff_meta(&s->buf, path, xminus, path,
-			    NULL_DEVICE, s->diff_flags, change);
+			rc = write_diff_meta(s, path, xminus, path, NULL_DEVICE,
+			    change);
 			fsl_buffer_append(&s->buf,
 			    "\nSymbolic links cannot be diffed\n", -1);
 			if (rc)
@@ -4979,12 +5072,12 @@ unload:
  *   change      enum denoting the versioning change of the file
  */
 static int
-write_diff_meta(fsl_buffer *buf, const char *zminus, fsl_uuid_str xminus,
-    const char *zplus, fsl_uuid_str xplus, int diff_flags,
+write_diff_meta(struct fnc_diff_view_state *s, const char *zminus,
+    fsl_uuid_str xminus, const char *zplus, fsl_uuid_str xplus,
     enum fsl_ckout_change_e change)
 {
-	int	rc = 0;
 	const char	*index, *plus, *minus;
+	int		 rc = FSL_RC_OK;
 
 	index = zplus ? zplus : (zminus ? zminus : NULL_DEVICE);
 
@@ -5015,7 +5108,7 @@ write_diff_meta(fsl_buffer *buf, const char *zminus, fsl_uuid_str xminus,
 		break;
 	}
 
-	if FLAG_CHK(diff_flags, FNC_DIFF_INVERT) {
+	if FLAG_CHK(s->diff_flags, FNC_DIFF_INVERT) {
 		const char *tmp = minus;
 		minus = plus;
 		plus = tmp;
@@ -5024,15 +5117,23 @@ write_diff_meta(fsl_buffer *buf, const char *zminus, fsl_uuid_str xminus,
 		zplus = tmp;
 	}
 
-	if (!FLAG_CHK(diff_flags, (FNC_DIFF_SIDEBYSIDE | FNC_DIFF_BRIEF))) {
-		rc = fsl_buffer_appendf(buf, "%sIndex: %s\n%.71c\n",
-		    buf->used ? "\n" : "", index, '=');
+	if (!FLAG_CHK(s->diff_flags, FNC_DIFF_BRIEF)) {
+		int c, i;
+		for (c = 0, i = 10; !rc && i < 14; ++c) {
+			rc = add_line_type(&s->dlines, (enum line_type)i,
+			    &s->ndlines, (!c ? 6 : 0), true);
+			i += (c > 3 || c % 2) ? 1 : 0;
+		}
 		if (!rc)
-			rc = fsl_buffer_appendf(buf, "hash - %s\nhash + %s\n",
-			    minus, plus);
+			rc = fsl_buffer_appendf(&s->buf, "%sIndex: %s\n%.71c\n",
+			    s->buf.used ? "\n" : "", index, '=');
+		if (!rc)
+			rc = fsl_buffer_appendf(&s->buf,
+			    "hash - %s\nhash + %s\n", minus, plus);
+		if (!rc)
+			rc = fsl_buffer_appendf(&s->buf, "--- %s\n+++ %s\n",
+			    zminus, zplus);
 	}
-	if (!rc && !FLAG_CHK(diff_flags, FNC_DIFF_BRIEF))
-		rc = fsl_buffer_appendf(buf, "--- %s\n+++ %s\n", zminus, zplus);
 
 	return rc;
 }
@@ -5119,8 +5220,8 @@ diff_file(struct fnc_diff_view_state *s, fsl_buffer *bminus, const char *zminus,
 	s->index.offset = fsl_realloc(s->index.offset,
 	    (s->index.n + 1) * sizeof(off_t));
 	s->index.offset[s->index.n++] = s->buf.used;
-	rc = write_diff_meta(&s->buf, zminus, xminus, zplus,
-	    fsl_buffer_str(&xplus), s->diff_flags, change);
+	rc = write_diff_meta(s, zminus, xminus, zplus, fsl_buffer_str(&xplus),
+	    change);
 	if (rc)
 		goto end;
 
@@ -5132,8 +5233,10 @@ diff_file(struct fnc_diff_view_state *s, fsl_buffer *bminus, const char *zminus,
 	} else if (FLAG_CHK(s->diff_flags, FNC_DIFF_VERBOSE) ||
 	    (bminus->used && bplus.used))
 		rc = fnc_diff_text_to_buffer(bminus, &bplus, &s->buf,
-		    s->context, s->sbs, s->diff_flags);
+		    &s->dlines, &s->ndlines, s->context, s->sbs,
+		    s->diff_flags);
 end:
+	rc = add_line_type(&s->dlines, LINE_BLANK, &s->ndlines, 0, true);
 	fsl_buffer_clear(&bplus);
 	fsl_buffer_clear(&xplus);
 	return rc;
@@ -5145,8 +5248,7 @@ end:
  * TODO: Rename this horrible function name.
  */
 static int
-diff_non_checkin(fsl_buffer *buf, struct fnc_commit_artifact *commit,
-    int diff_flags, int context, int sbs)
+diff_non_checkin(struct fnc_diff_view_state *s)
 {
 	fsl_cx		*const f = fcli_cx();
 	fsl_buffer	 wiki = fsl_buffer_empty;
@@ -5161,7 +5263,8 @@ diff_non_checkin(fsl_buffer *buf, struct fnc_commit_artifact *commit,
 		return RC(FSL_RC_ERROR, "%s", "fsl_deck_malloc");
 
 	fsl_deck_init(f, d, FSL_SATYPE_ANY);
-	if ((rc = fsl_deck_load_rid(f, d, commit->rid, FSL_SATYPE_ANY)))
+	rc = fsl_deck_load_rid(f, d, s->selected_entry->rid, FSL_SATYPE_ANY);
+	if (rc)
 		goto end;
 
 	/*
@@ -5172,7 +5275,7 @@ diff_non_checkin(fsl_buffer *buf, struct fnc_commit_artifact *commit,
 		for (idx = 0; idx < d->J.used; ++idx) {
 			fsl_card_J *ticket = d->J.list[idx];
 			bool icom = !fsl_strncmp(ticket->field, "icom", 4);
-			fsl_buffer_appendf(buf, "%d. %s:%s%s%c\n", idx + 1,
+			fsl_buffer_appendf(&s->buf, "%d. %s:%s%s%c\n", idx + 1,
 			    ticket->field, icom ? "\n\n" : " ", ticket->value,
 			    icom ? '\n' : ' ');
 		}
@@ -5182,29 +5285,31 @@ diff_non_checkin(fsl_buffer *buf, struct fnc_commit_artifact *commit,
 	if (d->type == FSL_SATYPE_CONTROL) {
 		for (idx = 0; idx < d->T.used; ++idx) {
 			fsl_card_T *ctl = d->T.list[idx];
-			fsl_buffer_appendf(buf, "Tag %d ", idx + 1);
+			fsl_buffer_appendf(&s->buf, "Tag %d ", idx + 1);
 			switch (ctl->type) {
 			case FSL_TAGTYPE_CANCEL:
-				fsl_buffer_append(buf, "[CANCEL]", -1);
+				fsl_buffer_append(&s->buf, "[CANCEL]", -1);
 				break;
 			case FSL_TAGTYPE_ADD:
-				fsl_buffer_append(buf, "[ADD]", -1);
+				fsl_buffer_append(&s->buf, "[ADD]", -1);
 				break;
 			case FSL_TAGTYPE_PROPAGATING:
-				fsl_buffer_append(buf, "[PROPAGATE]", -1);
+				fsl_buffer_append(&s->buf, "[PROPAGATE]", -1);
 				break;
 			default:
 				break;
 			}
 			if (ctl->uuid)
-				fsl_buffer_appendf(buf, "\ncheckin %s",
+				fsl_buffer_appendf(&s->buf, "\ncheckin %s",
 				    ctl->uuid);
-			fsl_buffer_appendf(buf, "\n%s", ctl->name);
+			fsl_buffer_appendf(&s->buf, "\n%s", ctl->name);
 			if (!fsl_strcmp(ctl->name, "branch"))
-				commit->branch = fsl_strdup(ctl->value);
+				s->selected_entry->branch =
+				    fsl_strdup(ctl->value);
 			if (ctl->value)
-				fsl_buffer_appendf(buf, " -> %s", ctl->value);
-			fsl_buffer_append(buf, "\n\n", 2);
+				fsl_buffer_appendf(&s->buf, " -> %s",
+				    ctl->value);
+			fsl_buffer_append(&s->buf, "\n\n", 2);
 		}
 		goto end;
 	}
@@ -5214,17 +5319,18 @@ diff_non_checkin(fsl_buffer *buf, struct fnc_commit_artifact *commit,
 	 * entire wiki card content.
 	 */
 	fsl_buffer_append(&wiki, d->W.mem, d->W.used);
-	if (commit->puuid == NULL) {
+	if (s->selected_entry->puuid == NULL) {
 		if (d->P.used > 0)
-			commit->puuid = fsl_strdup(d->P.list[0]);
+			s->selected_entry->puuid = fsl_strdup(d->P.list[0]);
 		else {
-			fsl_buffer_copy(buf, &wiki);
+			fsl_buffer_copy(&s->buf, &wiki);
 			goto end;
 		}
 	}
 
 	/* Diff the artifacts if a parent is found. */
-	rc = fsl_sym_to_rid(f, commit->puuid, FSL_SATYPE_ANY, &prid);
+	rc = fsl_sym_to_rid(f, s->selected_entry->puuid, FSL_SATYPE_ANY,
+	    &prid);
 	if (rc)
 		goto end;
 	rc = fsl_deck_load_rid(f, d, prid, FSL_SATYPE_ANY);
@@ -5232,12 +5338,12 @@ diff_non_checkin(fsl_buffer *buf, struct fnc_commit_artifact *commit,
 		goto end;
 	fsl_buffer_append(&pwiki, d->W.mem, d->W.used);
 
-	rc = fnc_diff_text_to_buffer(&pwiki, &wiki, buf, context, sbs,
-	    diff_flags);
+	rc = fnc_diff_text_to_buffer(&pwiki, &wiki, &s->buf, &s->dlines,
+	    &s->ndlines, s->context, s->sbs, s->diff_flags);
 
 	/* If a technote, provide the full content after its diff. */
 	if (d->type == FSL_SATYPE_TECHNOTE)
-		fsl_buffer_appendf(buf, "\n---\n\n%s", wiki.mem);
+		fsl_buffer_appendf(&s->buf, "\n---\n\n%s", wiki.mem);
 
 end:
 	fsl_buffer_clear(&wiki);
@@ -5271,7 +5377,7 @@ diff_file_artifact(struct fnc_diff_view_state *s, fsl_id_t vid1,
 	const char	*zplus = NULL, *zminus = NULL;
 	fsl_uuid_str	 xplus0 = NULL, xminus0 = NULL;
 	fsl_uuid_str	 xplus = NULL, xminus = NULL;
-	fsl_id_t	 vid2 = s->selected_commit->rid;
+	fsl_id_t	 vid2 = s->selected_entry->rid;
 	int		 rc = 0;
 
 	assert(vid1 != vid2);
@@ -5286,7 +5392,7 @@ diff_file_artifact(struct fnc_diff_view_state *s, fsl_id_t vid1,
 			goto end;
 		zminus = a->name;
 		xminus = a->uuid;
-	} else if (s->selected_commit->diff_type == FNC_DIFF_BLOB) {
+	} else if (s->selected_entry->diff_type == FNC_DIFF_BLOB) {
 		rc = fsl_cx_prepare(f, &stmt,
 		    "SELECT name FROM filename, mlink "
 		    "WHERE filename.fnid=mlink.fnid AND mlink.fid = %d", vid1);
@@ -5316,7 +5422,7 @@ diff_file_artifact(struct fnc_diff_view_state *s, fsl_id_t vid1,
 			goto end;
 		zplus = b->name;
 		xplus = b->uuid;
-	} else if (s->selected_commit->diff_type == FNC_DIFF_BLOB) {
+	} else if (s->selected_entry->diff_type == FNC_DIFF_BLOB) {
 		rc = fsl_cx_prepare(f, &stmt,
 		    "SELECT name FROM filename, mlink "
 		    "WHERE filename.fnid=mlink.fnid AND mlink.fid = %d", vid2);
@@ -5347,20 +5453,21 @@ diff_file_artifact(struct fnc_diff_view_state *s, fsl_id_t vid1,
 		s->index.offset[s->index.n++] = s->buf.used +
 		    s->index.offset[0];
 	}
-	rc = write_diff_meta(&s->buf, zminus, xminus, zplus, xplus,
-	    s->diff_flags, change);
+	rc = write_diff_meta(s, zminus, xminus, zplus, xplus, change);
 	if (rc)
 		goto end;
 
 	if (FLAG_CHK(s->diff_flags, FNC_DIFF_VERBOSE) || (a && b))
 		rc = fnc_diff_text_to_buffer(&fbuf1, &fbuf2, &s->buf,
-		    s->context, s->sbs, s->diff_flags);
+		    &s->dlines, &s->ndlines, s->context, s->sbs,
+		    s->diff_flags);
 	if (rc)
 		RC(rc, "%s: fnc_diff_text_to_buffer\n"
 		    " -> %s [%s]\n -> %s [%s]", fsl_rc_cstr(rc),
 		    a ? a->name : NULL_DEVICE, a ? a->uuid : NULL_DEVICE,
 		    b ? b->name : NULL_DEVICE, b ? b->uuid : NULL_DEVICE);
 end:
+	rc = add_line_type(&s->dlines, LINE_BLANK, &s->ndlines, 0, true);
 	fsl_free(zminus0);
 	fsl_free(zplus0);
 	fsl_free(xminus0);
@@ -5416,7 +5523,7 @@ write_diff(struct fnc_view *view, char *headln)
 	attr_t				 rx = A_BOLD;
 	int				 col, wstrlen, max_lines = view->nlines;
 	int				 nlines = s->nlines;
-	int				 npad = 0, nprinted = 0, rc = FSL_RC_OK;
+	int				 nprinted = 0, rc = FSL_RC_OK;
 	bool				 selected;
 
 	s->lineno = s->first_line_onscreen - 1;
@@ -5439,7 +5546,7 @@ write_diff(struct fnc_view *view, char *headln)
 		line = fsl_mprintf("[%d/%d] %s", ln, nlines, headln);
 		if (line == NULL)
 			return RC(FSL_RC_RANGE, "%s", "fsl_mprintf");
-		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0, 0, false);
+		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0, false);
 		fsl_free(line);
 		fsl_free(headln);
 		if (rc)
@@ -5465,6 +5572,7 @@ write_diff(struct fnc_view *view, char *headln)
 	s->eof = false;
 	line = NULL;
 	while (max_lines > 0 && nprinted < max_lines) {
+		col = wstrlen = 0;
 		linelen = getline(&line, &linesz, s->f);
 		if (linelen == -1) {
 			if (feof(s->f)) {
@@ -5487,10 +5595,12 @@ write_diff(struct fnc_view *view, char *headln)
 		if ((selected = nprinted == s->selected_line - 1))
 			rx = A_BOLD | A_REVERSE;
 		if (s->showln)
-			npad = draw_lineno(view, nlines, s->lineno, rx);
+			col = draw_lineno(view, nlines, s->lineno, rx);
 
 		if (s->colour)
-			c = match_colour(&s->colours, line);
+			c = FLAG_CHK(s->diff_flags, FNC_DIFF_SIDEBYSIDE) ?
+			    get_colour(&s->colours, s->dlines[s->lineno - 1]) :
+			    match_colour(&s->colours, line);
 		if (c && !(selected && s->sline == SLINE_MONO))
 			rx |= COLOR_PAIR(c->scheme);
 		if (c || selected)
@@ -5498,24 +5608,23 @@ write_diff(struct fnc_view *view, char *headln)
 
 		if (s->first_line_onscreen + nprinted == s->matched_line &&
 		    regmatch->rm_so >= 0 && regmatch->rm_so < regmatch->rm_eo) {
-			rc = draw_matched_line(view, &wstrlen, npad, regmatch,
-			    rx);
-			if (rc) {
-				fsl_free(line);
-				return rc;
-			}
-		} else {
+			rc = draw_matched_line(view, line, &wstrlen,
+			    view->ncols - col, 0, regmatch, rx);
+		} else if (view->pos.col < (etcount(line, linelen) - 1)) {
 			rc = formatln(&wcstr, &wstrlen, line,
-			    view->ncols - npad, npad, view->pos.col, true);
-			if (rc) {
-				fsl_free(line);
-				return rc;
-			}
-			waddwstr(view->window, wcstr);
+			    view->pos.col + view->ncols - col, 0, true);
+			/* XXX Change above else if to else to use next line. */
+			/* if (view->pos.col < wstrlen) */
+			waddwstr(view->window, wcstr + view->pos.col);
 			fsl_free(wcstr);
 			wcstr = NULL;
 		}
-		col = wstrlen + npad;
+		if (rc) {
+			fsl_free(line);
+			return rc;
+		}
+		col += MAX(wstrlen - view->pos.col, 0);
+
 		while (col++ < view->ncols)
 			waddch(view->window, ' ');
 
@@ -5583,93 +5692,71 @@ updatescreen(WINDOW *win, bool panel, bool update)
 }
 
 static int
-draw_matched_line(struct fnc_view *view, int *col, int offset,
-    regmatch_t *regmatch, attr_t rx)
+draw_matched_line(struct fnc_view *view, const char *line, int *col, int limit,
+    int offset, regmatch_t *regmatch, attr_t rx)
 {
-	wchar_t		*wcstr;
-	char		*s;
-	int		 rme, rms, skip = view->pos.col, wstrlen;
-	int		 n = 0, ncols_avail = view->ncols - offset, rc = 0;
+	wchar_t		*wstr = NULL;
+	int		 rme, rms, skip = view->pos.col, wlen;
+	int		 n, rc = FSL_RC_OK;
 	attr_t		 hl = A_BOLD | A_REVERSE;
 
-	*col = 0;
+	*col = n = 0;
 	rms = regmatch->rm_so;
 	rme = regmatch->rm_eo;
 
-	/*
-	 * Copy line up to string match and draw to screen. Trim preceding skip
-	 * chars if scrolled right. Don't copy if skip consumes substring.
-	 */
-	s = fsl_strndup(view->line.buf + skip, MAX(rms - skip, 0));
-	if (s == NULL)
-		return RC(FSL_RC_ERROR, "%s", "fsl_strndup");
-
-	rc = formatln(&wcstr, &wstrlen, s, ncols_avail, offset, 0, false);
-	if (rc) {
-		free(s);
+	rc = formatln(&wstr, &wlen, line, limit + view->pos.col,
+	    offset, true);
+	if (rc)
 		return rc;
+
+	/*
+	 * Draw to screen all chars up to string match. Trim preceding skip
+	 * chars if scrolled right. Don't draw if skip consumes substring.
+	 */
+	n = MAX(rms - skip, 0);
+	if (n) {
+		waddnwstr(view->window, wstr + skip, n);
+		limit -= n;
+		*col += n;
 	}
-	waddwstr(view->window, wcstr);
-	free(wcstr);
-	free(s);
-	ncols_avail -= wstrlen;
-	*col += wstrlen;
 
 	/*
 	 * Copy string match and draw with highlight. If skip traverses string
 	 * match, trim n chars off the front. Don't copy if skip consumed match.
 	 */
-	if (ncols_avail > 0) {
+	if (limit > 0) {
 		int len = rme - rms;
+		n = 0;
 		if (skip > rms) {
 			n = skip - rms;
 			len = MAX(len - n, 0);
 		}
-		s = fsl_strndup(view->line.buf + rms + n, len);
-		if (s == NULL) {
-			rc = RC(FSL_RC_ERROR, "%s", "fsl_strndup");
-			free(s);
-			return rc;
+		if (len) {
+			wattron(view->window,
+			    COLOR_PAIR(FNC_COLOUR_HL_SEARCH) | hl);
+			waddnwstr(view->window, wstr + rms + n, len);
+			wattroff(view->window,
+			    COLOR_PAIR(FNC_COLOUR_HL_SEARCH) | hl);
+			limit -= len;
+			*col += len;
 		}
-		rc = formatln(&wcstr, &wstrlen, s, ncols_avail, offset,
-		    0, false);
-		if (rc) {
-			free(s);
-			return rc;
-		}
-		wattron(view->window, COLOR_PAIR(FNC_COLOUR_HL_SEARCH) | hl);
-		waddwstr(view->window, wcstr);
-		wattroff(view->window, COLOR_PAIR(FNC_COLOUR_HL_SEARCH) | hl);
-		free(wcstr);
-		free(s);
-		ncols_avail -= wstrlen;
-		*col += wstrlen;
 	}
 
 	/*
 	 * Write rest of line if not yet at EOL. If skip passes the end of
 	 * string match, trim n chars off the front of substring.
 	 */
-	if (ncols_avail > 0 && view->line.sz > rme) {
+	if (limit > 0 && skip < wlen) {
 		n = 0;
 		if (skip > rme)
-			n = MIN(skip - rme, view->line.sz - rme);
-		rc = formatln(&wcstr, &wstrlen, view->line.buf + rme + n,
-		    ncols_avail, offset, 0, false);
-		if (rc)
-			return rc;
+			n = MIN(skip - rme, wlen - rme);
 		wattron(view->window, rx);
-		waddwstr(view->window, wcstr);
-		free(wcstr);
-		ncols_avail -= wstrlen;
-		*col += wstrlen;
-		while (--ncols_avail >= 0) {
-			++(*col);
-			waddch(view->window, ' ');
-		}
-		wattroff(view->window, rx);
+		waddnwstr(view->window, wstr + rme + n, limit);
+		/* *col += wlen - (rme + n) + view->pos.col; */
 	}
 
+	*col = wlen;
+	free(wstr);
 	return rc;
 }
 
@@ -5722,7 +5809,7 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		view->pos.col = 0;
 		break;
 	case '$':
-		view->pos.col = s->maxx - view->ncols / 2;
+		view->pos.col = MAX(s->maxx - view->ncols / 2, 0);
 		break;
 	case KEY_RIGHT:
 	case 'l':
@@ -5734,7 +5821,7 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		view->pos.col -= MIN(view->pos.col, 2);
 		break;
 	case CTRL('p'):
-		if (s->selected_commit->diff_type == FNC_DIFF_WIKI)
+		if (s->selected_entry->diff_type == FNC_DIFF_WIKI)
 			break;
 		if (!((size_t)s->lineno > s->index.lineno[s->index.n - 1])) {
 			if (s->index.idx == 0)
@@ -5747,7 +5834,7 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		s->selected_line = 1;
 		break;
 	case CTRL('n'):
-		if (s->selected_commit->diff_type == FNC_DIFF_WIKI)
+		if (s->selected_entry->diff_type == FNC_DIFF_WIKI)
 			break;
 		if (!((size_t)s->lineno < s->index.lineno[0])) {
 			if (++s->index.idx == s->index.n)
@@ -5859,7 +5946,7 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		s->index.idx = 0;
 		break;
 	case 'F':
-		if (s->selected_commit->diff_type == FNC_DIFF_WIKI)
+		if (s->selected_entry->diff_type == FNC_DIFF_WIKI)
 			break;
 		fsl_buffer	 buf = fsl_buffer_empty;
 		struct input	 input;
@@ -5925,14 +6012,15 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case 'i':
 	case 'L':
 	case 'p':
+	case 'S':
 	case 'v':
 	case 'w':
 		if (ch == 'c')
 			s->colour = !s->colour;
-		/* Lipvw key maps don't apply to tag or ticket artifacts. */
-		if (*s->selected_commit->type == 't' &&
-		    (s->selected_commit->type[1] == 'a' ||
-		     s->selected_commit->type[1] == 'i'))
+		/* LSipvw key maps don't apply to tag or ticket artifacts. */
+		if (*s->selected_entry->type == 't' &&
+		    (s->selected_entry->type[1] == 'a' ||
+		     s->selected_entry->type[1] == 'i'))
 			break;
 		else if (ch == 'i')
 			FLAG_TOG(s->diff_flags, FNC_DIFF_INVERT);
@@ -5940,6 +6028,8 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			FLAG_TOG(s->diff_flags, FNC_DIFF_LINENO);
 		else if (ch == 'p')
 			FLAG_TOG(s->diff_flags, FNC_DIFF_PROTOTYPE);
+		else if (ch == 'S')
+			FLAG_TOG(s->diff_flags, FNC_DIFF_SIDEBYSIDE);
 		else if (ch == 'v')
 			FLAG_TOG(s->diff_flags, FNC_DIFF_VERBOSE);
 		else if (ch == 'w')
@@ -5973,16 +6063,18 @@ diff_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		if (s->timeline_view == NULL)
 			break;
 		tlstate = &s->timeline_view->state.timeline;
-		previous_selection = tlstate->selected_commit;
+		previous_selection = tlstate->selected_entry;
 
-		if ((rc = tl_input_handler(NULL, s->timeline_view,
-		    tl_down ? KEY_DOWN : KEY_UP)))
+		rc = tl_input_handler(NULL, s->timeline_view, tl_down ?
+		    KEY_DOWN : KEY_UP);
+		if (rc)
 			break;
 
-		if (previous_selection == tlstate->selected_commit)
+		if (previous_selection == tlstate->selected_entry)
 			break;
 
-		if ((rc = set_selected_commit(s, tlstate->selected_commit)))
+		rc = set_selected_commit(s, tlstate->selected_entry);
+		if (rc)
 			break;
 
 		s->selected_line = 1;
@@ -6003,6 +6095,9 @@ reset_diff_view(struct fnc_view *view, bool stay)
 
 	n = s->nlines;
 	free_index(&s->index);
+	fsl_free(s->dlines);
+	s->dlines = NULL;
+	s->ndlines = 0;
 	show_diff_status(view);
 	rc = create_diff(s);
 	if (rc)
@@ -6016,8 +6111,16 @@ reset_diff_view(struct fnc_view *view, bool stay)
 		view->pos.col = 0;
 	}
 
-	s->last_line_onscreen = s->first_line_onscreen + view->nlines;
 	s->matched_line = 0;
+	s->last_line_onscreen = MIN(s->nlines,
+	    (size_t)s->first_line_onscreen + view->nlines);
+	s->selected_line = MIN(s->selected_line,
+	    s->last_line_onscreen - s->first_line_onscreen + 1);
+	/*
+	 * If max width has reduced (i.e., user switched from SBS to unidiff),
+	 * and col position is beyond new max, move back to within line limits.
+	 */
+	view->pos.col = MAX(MIN(view->pos.col, s->maxx - view->ncols / 2), 0);
 
 	return rc;
 }
@@ -6044,7 +6147,7 @@ set_selected_commit(struct fnc_diff_view_state *s, struct commit_entry *entry)
 		return RC(FSL_RC_ERROR, "%s", "fsl_strdup");
 	fsl_free(s->id1);
 	s->id1 = entry->commit->puuid ? fsl_strdup(entry->commit->puuid) : NULL;
-	s->selected_commit = entry->commit;
+	s->selected_entry = entry->commit;
 
 	return 0;
 }
@@ -6066,11 +6169,12 @@ find_next_match(struct fnc_view *view)
 	size_t	 nlines = 0, linesz = 0;
 	int	*first, *last, *match, *selected;
 	int	 lineno;
-	char	*line = NULL;
+	uint8_t	 col = 0;
+	char	*exstr = NULL, *line = NULL;
 
 	first = last = match = selected = NULL;
 	grep_set_view(view, &f, &line_offsets, &nlines, &first, &last,
-	    &match, &selected);
+	    &match, &selected, &col);
 
 	if (view->searching == SEARCH_DONE) {
 		view->search_status = SEARCH_CONTINUE;
@@ -6110,27 +6214,30 @@ find_next_match(struct fnc_view *view)
 			return RC(fsl_errno_to_rc(errno, FSL_RC_IO),
 			    "%s", "fseeko");
 		}
-		/*
-		 * Expand tabs for accurate rm_so/rm_eo offsets, and save to
-		 * view->line so we don't have to expand when drawing matches.
-		 */
+		/* Expand tabs for accurate rm_so/rm_eo offsets. */
 		linelen = getline(&line, &linesz, f);
-		view->line.sz = expand_tab(view->line.buf,
-		    sizeof(view->line.buf), line, linelen);
-		if (linelen != -1 && regexec(&view->regex, view->line.buf, 1,
+		expand_tab(&exstr, line, linelen);
+		if (linelen != -1 && regexec(&view->regex, exstr, 1,
 		    &view->regmatch, 0) == 0) {
+			int *pos = &view->pos.col;
 			view->search_status = SEARCH_CONTINUE;
 			*match = lineno;
-			while (view->pos.col > view->regmatch.rm_so)
-				--view->pos.col;  /* Scroll till on-screen. */
+			/* Scroll till on-screen. */
+			while (*pos > view->regmatch.rm_so)
+				--(*pos);
+			while (*pos + view->ncols < view->regmatch.rm_eo + col)
+				++(*pos);
 			break;
 		}
+		fsl_free(exstr);
+		exstr = NULL;
 		if (view->searching == SEARCH_FORWARD)
 			++lineno;
 		else
 			--lineno;
 	}
 	fsl_free(line);
+	fsl_free(exstr);
 
 	/*
 	 * If match is on current screen, move to it and highlight; else,
@@ -6150,7 +6257,8 @@ find_next_match(struct fnc_view *view)
 
 static void
 grep_set_view(struct fnc_view *view, FILE **f, off_t **line_offsets,
-    size_t *nlines, int **first, int **last, int **match, int **selected)
+    size_t *nlines, int **first, int **last, int **match, int **selected,
+    uint8_t *startx)
 {
 	if (view->vid == FNC_VIEW_DIFF) {
 		struct fnc_diff_view_state *s = &view->state.diff;
@@ -6161,6 +6269,11 @@ grep_set_view(struct fnc_view *view, FILE **f, off_t **line_offsets,
 		*first = &s->first_line_onscreen;
 		*last = &s->last_line_onscreen;
 		*selected = &s->selected_line;
+		if (s->showln) {
+			int d = s->nlines, n = 0;
+			ndigits(n, d);
+			*startx = n + 3;  /* {ap,pre}pended ' ' + line sep */
+		}
 	} else if (view->vid == FNC_VIEW_BLAME) {
 		struct fnc_blame_view_state *s = &view->state.blame;
 		*f = s->blame.f;
@@ -6170,6 +6283,12 @@ grep_set_view(struct fnc_view *view, FILE **f, off_t **line_offsets,
 		*first = &s->first_line_onscreen;
 		*last = &s->last_line_onscreen;
 		*selected = &s->selected_line;
+		if (s->showln) {
+			int d = s->blame.nlines, n = 0;
+			ndigits(n, d);
+			*startx = n + 3;  /* {ap,pre}pended ' ' + line sep */
+		}
+		*startx += 11;  /* id field */
 	}
 }
 
@@ -6190,6 +6309,8 @@ close_diff_view(struct fnc_view *view)
 	s->line_offsets = NULL;
 	s->nlines = 0;
 	free_index(&s->index);
+	fsl_free(s->dlines);
+	s->dlines = NULL;
 	return rc;
 }
 
@@ -6376,9 +6497,10 @@ usage_diff(void)
 {
 	fsl_fprintf(fnc_init.err ? stderr : stdout,
 	    " usage: %s diff [-C|--no-colour] [-R path] [-h|--help] "
-	    "[-i|--invert] [-l|--line-numbers] [-q|--quiet] [-w|--whitespace] "
-	    "[-x|--context n] [artifact1 [artifact2]] [path ...]\n  "
-	    "e.g.: %s diff --context 3 d34db33f c0ff33 src/*.c\n\n",
+	    "[-i|--invert] [-l|--line-numbers] [-q|--quiet] [-s|--sbs] "
+	    "[-w|--whitespace] [-x|--context n] [artifact1 [artifact2]] "
+	    "[path ...]\n"
+	    "  e.g.: %s diff --sbs d34db33f c0ff33 src/*.c\n\n",
 	    fcli_progname(), fcli_progname());
 }
 
@@ -6601,7 +6723,7 @@ cmd_diff(fcli_command const *argv)
 		goto end;
 	}
 
-	rc = open_diff_view(view, commit, context, fnc_init.ws,
+	rc = open_diff_view(view, commit, context, fnc_init.sbs, fnc_init.ws,
 	    fnc_init.invert, !fnc_init.quiet, fnc_init.showln, NULL,
 	    showmeta, &paths);
 	if (!rc)
@@ -7227,8 +7349,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 		return rc;
 
 	/* Write (highlighted) headline (if view is active in splitscreen). */
-	rc = formatln(&wcstr, &wstrlen, s->tree_label, view->ncols, 0, 0,
-	    false);
+	rc = formatln(&wcstr, &wstrlen, s->tree_label, view->ncols, 0, false);
 	if (rc)
 		return rc;
 	if (screen_is_shared(view))
@@ -7252,7 +7373,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 		return rc;
 
 	/* Write this (sub)tree's absolute repository path subheader. */
-	rc = formatln(&wcstr, &wstrlen, treepath, view->ncols, 0, 0, false);
+	rc = formatln(&wcstr, &wstrlen, treepath, view->ncols, 0, false);
 	if (rc)
 		return rc;
 	waddwstr(view->window, wcstr);
@@ -7269,12 +7390,12 @@ draw_tree(struct fnc_view *view, const char *treepath)
 	/* Write parent dir entry (i.e., "..") if top of the tree is in view. */
 	if (s->first_entry_onscreen == NULL) {
 		te = &s->tree->entries[0];
-		if (s->selected_idx == 0) {
+		if (s->selected == 0) {
 			wattr_on(view->window, A_REVERSE, NULL);
 			s->selected_entry = NULL;
 		}
 		waddstr(view->window, "  ..\n");
-		if (s->selected_idx == 0)
+		if (s->selected == 0)
 			wattr_off(view->window, A_REVERSE, NULL);
 		++s->ndisplayed;
 		if (--limit <= 0)
@@ -7353,12 +7474,12 @@ draw_tree(struct fnc_view *view, const char *treepath)
 		if (rc || line == NULL)
 			return RC(rc ? rc : FSL_RC_RANGE, "%s",
 			    rc ? "fsl_julian_to_iso8601" : "fsl_mprintf");
-		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0, 0, false);
+		rc = formatln(&wcstr, &wstrlen, line, view->ncols, 0, false);
 		if (rc) {
 			fsl_free(line);
 			break;
 		}
-		if (n == s->selected_idx) {
+		if (n == s->selected) {
 			wattr_on(view->window, A_REVERSE, NULL);
 			s->selected_entry = te;
 		}
@@ -7371,7 +7492,7 @@ draw_tree(struct fnc_view *view, const char *treepath)
 			wattr_off(view->window, COLOR_PAIR(c->scheme), NULL);
 		if (wstrlen < view->ncols)
 			waddch(view->window, '\n');
-		if (n == s->selected_idx)
+		if (n == s->selected)
 			wattr_off(view->window, A_REVERSE, NULL);
 		fsl_free(line);
 		fsl_free(wcstr);
@@ -7511,7 +7632,7 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			break;
 		/* FALL THROUGH */
 	case KEY_HOME:
-		s->selected_idx = 0;
+		s->selected = 0;
 		if (s->tree == s->root)
 			s->first_entry_onscreen = &s->tree->entries[0];
 		else
@@ -7519,7 +7640,7 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		break;
 	case KEY_END:
 	case 'G':
-		s->selected_idx = 0;
+		s->selected = 0;
 		te = &s->tree->entries[s->tree->nentries - 1];
 		for (n = 0; n < view->nlines - 3; ++n) {
 			if (te == NULL) {
@@ -7533,12 +7654,12 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			te = get_tree_entry(s->tree, te->idx - 1);
 		}
 		if (n > 0)
-			s->selected_idx = n - 1;
+			s->selected = n - 1;
 		break;
 	case KEY_DOWN:
 	case 'j':
-		if (s->selected_idx < s->ndisplayed - 1) {
-			++s->selected_idx;
+		if (s->selected < s->ndisplayed - 1) {
+			++s->selected;
 			break;
 		}
 		if (get_tree_entry(s->tree, s->last_entry_onscreen->idx + 1)
@@ -7548,8 +7669,8 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		break;
 	case KEY_UP:
 	case 'k':
-		if (s->selected_idx > 0) {
-			--s->selected_idx;
+		if (s->selected > 0) {
+			--s->selected;
 			break;
 		}
 		tree_scroll_up(s, 1);
@@ -7565,9 +7686,9 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			 * When the last entry on screen is the last node in the
 			 * tree move cursor to it instead of scrolling the view.
 			 */
-			if (s->selected_idx < s->ndisplayed - 1)
-				s->selected_idx += MIN(nscroll,
-				    s->ndisplayed - s->selected_idx - 1);
+			if (s->selected < s->ndisplayed - 1)
+				s->selected += MIN(nscroll,
+				    s->ndisplayed - s->selected - 1);
 			break;
 		}
 		tree_scroll_down(view, nscroll);
@@ -7579,10 +7700,10 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case CTRL('b'):
 		if (s->tree == s->root) {
 			if (&s->tree->entries[0] == s->first_entry_onscreen)
-				s->selected_idx -= MIN(s->selected_idx, nscroll);
+				s->selected -= MIN(s->selected, nscroll);
 		} else {
 			if (s->first_entry_onscreen == NULL)
-				s->selected_idx -= MIN(s->selected_idx, nscroll);
+				s->selected -= MIN(s->selected, nscroll);
 		}
 		tree_scroll_up(s, nscroll);
 		break;
@@ -7611,8 +7732,8 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			s->tree = parent->tree;
 			s->first_entry_onscreen = parent->first_entry_onscreen;
 			s->selected_entry = parent->selected_entry;
-			s->selected_idx = parent->selected_idx;
-			if (s->selected_idx > view->nlines - 3)
+			s->selected = parent->selected;
+			if (s->selected > view->nlines - 3)
 				offset_selected_line(view);
 			fsl_free(parent);
 		} else if (s->selected_entry != NULL &&
@@ -7632,8 +7753,8 @@ tree_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			rc = blame_selected_file(new_view, view);
 		break;
 	case KEY_RESIZE:
-		if (view->nlines >= 4 && s->selected_idx >= view->nlines - 3)
-			s->selected_idx = view->nlines - 4;
+		if (view->nlines >= 4 && s->selected >= view->nlines - 3)
+			s->selected = view->nlines - 4;
 		break;
 	default:
 		break;
@@ -7754,10 +7875,10 @@ visit_subtree(struct fnc_tree_view_state *s, struct fnc_tree_object *subtree)
 	parent->tree = s->tree;
 	parent->first_entry_onscreen = s->first_entry_onscreen;
 	parent->selected_entry = s->selected_entry;
-	parent->selected_idx = s->selected_idx;
+	parent->selected = s->selected;
 	TAILQ_INSERT_HEAD(&s->parents, parent, entry);
 	s->tree = subtree;
-	s->selected_idx = 0;
+	s->selected = 0;
 	s->first_entry_onscreen = NULL;
 
 	return 0;
@@ -7867,11 +7988,11 @@ tree_search_next(struct fnc_view *view)
 
 		if (idx >= (parent ? 0 : s->first_entry_onscreen->idx) &&
 		    idx <= s->last_entry_onscreen->idx)
-			s->selected_idx = idx - (parent ? - 1 :
+			s->selected = idx - (parent ? - 1 :
 			    s->first_entry_onscreen->idx);
 		else {
 			s->first_entry_onscreen = s->matched_entry;
-			s->selected_idx = 0;
+			s->selected = 0;
 		}
 	}
 
@@ -7942,7 +8063,7 @@ close_tree_view(struct fnc_view *view)
 	if (s->root)
 		fnc_object_tree_close(s->root);
 	if (s->repo)
-		fnc_close_repository_tree(s->repo);
+		fnc_close_repo_tree(s->repo);
 
 	return 0;
 }
@@ -7963,7 +8084,7 @@ fnc_object_tree_close(struct fnc_tree_object *tree)
 }
 
 static void
-fnc_close_repository_tree(struct fnc_repository_tree *repo)
+fnc_close_repo_tree(struct fnc_repository_tree *repo)
 {
 	struct fnc_repo_tree_node *next, *tn;
 
@@ -8130,16 +8251,22 @@ set_colours(struct fnc_colours *s, enum fnc_view_id vid)
 		    "^((checkin|wiki|ticket|technote) "
 		    "[0-9a-f]|hash [+-] |\\[[+~>-]] |[+-]{3} )",
 		    "^user:", "^date:", "^tags:", "^-|^[0-9 ]+ -",
-		    "^\\+|^[0-9 ]+ \\+", "^@@"
+		    "^\\+|^[0-9 ]+ \\+", "^@@",
+		    /*
+		     * XXX Ugly hack to fail matching _DIFF_SBS_EDIT early
+		     * until all diff modes use the new line_type interface.
+		     */
+		    "a^"
 		};
 		const int pairs_diff[][2] = {
-		    {FNC_COLOUR_DIFF_META, init_colour(FNC_COLOUR_DIFF_META)},
-		    {FNC_COLOUR_USER, init_colour(FNC_COLOUR_USER)},
-		    {FNC_COLOUR_DATE, init_colour(FNC_COLOUR_DATE)},
-		    {FNC_COLOUR_DIFF_TAGS, init_colour(FNC_COLOUR_DIFF_TAGS)},
-		    {FNC_COLOUR_DIFF_MINUS, init_colour(FNC_COLOUR_DIFF_MINUS)},
-		    {FNC_COLOUR_DIFF_PLUS, init_colour(FNC_COLOUR_DIFF_PLUS)},
-		    {FNC_COLOUR_DIFF_CHUNK, init_colour(FNC_COLOUR_DIFF_CHUNK)}
+		    {LINE_DIFF_META, init_colour(FNC_COLOUR_DIFF_META)},
+		    {LINE_DIFF_USER, init_colour(FNC_COLOUR_USER)},
+		    {LINE_DIFF_DATE, init_colour(FNC_COLOUR_DATE)},
+		    {LINE_DIFF_TAGS, init_colour(FNC_COLOUR_DIFF_TAGS)},
+		    {LINE_DIFF_MINUS, init_colour(FNC_COLOUR_DIFF_MINUS)},
+		    {LINE_DIFF_PLUS, init_colour(FNC_COLOUR_DIFF_PLUS)},
+		    {LINE_DIFF_CHUNK, init_colour(FNC_COLOUR_DIFF_CHUNK)},
+		    {LINE_DIFF_EDIT, init_colour(FNC_COLOUR_DIFF_SBS_EDIT)}
 		};
 		rc = set_colour_scheme(s, pairs_diff, regexp_diff,
 		    nitems(regexp_diff));
@@ -8336,6 +8463,8 @@ default_colour(enum fnc_opt_id id)
 		return COLOR_MAGENTA;
 	case FNC_COLOUR_HL_SEARCH:
 		return COLOR_YELLOW;
+	case FNC_COLOUR_DIFF_SBS_EDIT:
+		return COLOR_RED;
 	default:
 		return -1;  /* Terminal default foreground colour. */
 	}
@@ -8930,9 +9059,8 @@ draw_blame(struct fnc_view *view)
 	fsl_uuid_str			 prev_id = NULL;
 	ssize_t				 linelen;
 	size_t				 linesz = 0;
-	int				 width, lineno = 0, nprinted = 0;
+	int				 col, width, lineno = 0, nprinted = 0;
 	int				 rc = FSL_RC_OK;
-	int				 npad = 0;
 	const int			 idfield = 11;  /* Prefix + space. */
 	bool				 selected;
 
@@ -8945,7 +9073,7 @@ draw_blame(struct fnc_view *view)
 		return rc;
 	}
 
-	rc = formatln(&wcstr, &width, line, view->ncols, 0, 0, false);
+	rc = formatln(&wcstr, &width, line, view->ncols, 0, false);
 	fsl_free(line);
 	line = NULL;
 	if (rc)
@@ -8967,17 +9095,14 @@ draw_blame(struct fnc_view *view)
 		wattroff(view->window, A_REVERSE);
 	fsl_free(wcstr);
 	wcstr = NULL;
-	if (width < view->ncols - 1)
-		waddch(view->window, '\n');
 
-	line = fsl_mprintf("[%d/%d] %s%s%s %c", s->gtl ? s->gtl :
+	line = fsl_mprintf("[%d/%d] %s%s %c", s->gtl ? s->gtl :
 	    MIN(blame->nlines, s->first_line_onscreen - 1 + s->selected_line),
 	    blame->nlines, s->blame_complete ? "" : "annotating... ",
-	    fnc_init.sym ? "/" : "", s->path,
-	    s->blame_complete ? ' ' : SPINNER[s->spin_idx]);
+	    s->path, s->blame_complete ? ' ' : SPINNER[s->spin_idx]);
 	if (SPINNER[++s->spin_idx] == '\0')
 		s->spin_idx = 0;
-	rc = formatln(&wcstr, &width, line, view->ncols, 0, 0, false);
+	rc = formatln(&wcstr, &width, line, view->ncols, 0, false);
 	fsl_free(line);
 	line = NULL;
 	if (rc)
@@ -8990,6 +9115,7 @@ draw_blame(struct fnc_view *view)
 
 	s->eof = false;
 	while (nprinted < view->nlines - 2) {
+		width = col = 0;
 		attr_t rx = 0;
 		linelen = getline(&line, &linesz, blame->f);
 		if (linelen == -1) {
@@ -9045,19 +9171,19 @@ draw_blame(struct fnc_view *view)
 				prev_id = NULL;
 			}
 			if (s->showln)
-				npad = draw_lineno(view, blame->nlines,
+				col = draw_lineno(view, blame->nlines,
 				    blame_line->lineno, rx);
 		} else {
 			waddstr(view->window, "..........");
 			prev_id = NULL;
 		}
+		col += idfield;
 
 		if (selected)
 			wattroff(view->window, rx);
 		waddch(view->window, ' ');
 
 		if (view->ncols <= idfield) {
-			width = idfield;
 			wcstr = wcsdup(L"");
 			if (wcstr == NULL) {
 				rc = RC(fsl_errno_to_rc(errno, FSL_RC_RANGE),
@@ -9068,24 +9194,24 @@ draw_blame(struct fnc_view *view)
 		} else if (s->first_line_onscreen + nprinted == s->matched_line
 		    && regmatch->rm_so >= 0 &&
 		    regmatch->rm_so < regmatch->rm_eo) {
-			rc = draw_matched_line(view, &width, idfield + npad,
-			    regmatch, 0);
-			if (rc) {
-				fsl_free(line);
-				return rc;
-			}
-			width += idfield;
-		} else {
+			rc = draw_matched_line(view, line, &width,
+			    view->ncols - col, 0, regmatch, 0);
+		} else if (view->pos.col < etcount(line, linelen) - 1) {
 			rc = formatln(&wcstr, &width, line,
-			    view->ncols - idfield - npad, idfield + npad,
-			    view->pos.col, true);
-			waddwstr(view->window, wcstr);
+			    view->pos.col + view->ncols - col, 0, true);
+			/* XXX Change above else if to else to use next line. */
+			/* if (view->pos.col < width) */
+			waddwstr(view->window, wcstr + view->pos.col);
 			fsl_free(wcstr);
 			wcstr = NULL;
-			width += idfield;
 		}
+		if (rc) {
+			fsl_free(line);
+			return rc;
+		}
+		col += MAX(width - view->pos.col, 0);
 
-		if (width + npad <= view->ncols - 1)
+		if (col < view->ncols)
 			waddch(view->window, '\n');
 		if (++nprinted == 1)
 			s->first_line_onscreen = lineno;
@@ -9189,8 +9315,8 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		break;
 	case 'q':
 		s->done = true;
-		if (s->selected_commit)
-			fnc_commit_artifact_close(s->selected_commit);
+		if (s->selected_entry)
+			fnc_commit_artifact_close(s->selected_entry);
 		break;
 	case 'c':
 		s->colour = !s->colour;
@@ -9392,8 +9518,8 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		    s->first_line_onscreen, s->selected_line);
 		if (id == NULL)
 			break;
-		if (s->selected_commit)
-			fnc_commit_artifact_close(s->selected_commit);
+		if (s->selected_entry)
+			fnc_commit_artifact_close(s->selected_entry);
 		if (rc)
 			break;
 		q = fsl_stmt_malloc();
@@ -9412,9 +9538,9 @@ blame_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 			break;
 		}
 		rc = open_diff_view(diff_view, commit, DEF_DIFF_CTX,
-		    fnc_init.ws, fnc_init.invert, !fnc_init.quiet,
-		    fnc_init.showln, NULL, true, NULL);
-		s->selected_commit = commit;
+		    fnc_init.sbs, fnc_init.ws, fnc_init.invert,
+		    !fnc_init.quiet, fnc_init.showln, NULL, true, NULL);
+		s->selected_entry = commit;
 		if (rc) {
 			fnc_commit_artifact_close(commit);
 			view_close(diff_view);
@@ -9664,7 +9790,7 @@ open_branch_view(struct fnc_view *view, int branch_flags, const char *glob,
 	struct fnc_branch_view_state	*s = &view->state.branch;
 	int				 rc = 0;
 
-	s->selected_branch = 0;
+	s->selected_entry = 0;
 	s->colour = !fnc_init.nocolour && has_colors();
 	s->branch_flags = branch_flags;
 	s->branch_glob = glob;
@@ -9944,7 +10070,7 @@ show_branch_view(struct fnc_view *view)
 	    s->nbranches)) == NULL)
 		return RC(FSL_RC_ERROR, "%s", "fsl_mprintf");
 
-	rc = formatln(&wline, &width, line, view->ncols, 0, 0, false);
+	rc = formatln(&wline, &width, line, view->ncols, 0, false);
 	if (rc) {
 		fsl_free(line);
 		return rc;
@@ -9984,7 +10110,7 @@ show_branch_view(struct fnc_view *view)
 		if (s->colour)
 			c = match_colour(&s->colours, line);
 
-		rc = formatln(&wline, &width, line, view->ncols, 0, 0, false);
+		rc = formatln(&wline, &width, line, view->ncols, 0, false);
 		if (rc) {
 			fsl_free(line);
 			return rc;
@@ -9993,7 +10119,7 @@ show_branch_view(struct fnc_view *view)
 		if (n == s->selected) {
 			if (view->active)
 				wattr_on(view->window, A_REVERSE, NULL);
-			s->selected_branch = be;
+			s->selected_entry = be;
 		}
 		if (c)
 			wattr_on(view->window, COLOR_PAIR(c->scheme), NULL);
@@ -10041,7 +10167,7 @@ branch_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 	case KEY_ENTER:
 	case '\r':
 	case ' ':
-		if (!s->selected_branch)
+		if (!s->selected_entry)
 			break;
 		rc = request_view(new_view, view, FNC_VIEW_TIMELINE);
 		break;
@@ -10061,12 +10187,12 @@ branch_input_handler(struct fnc_view **new_view, struct fnc_view *view, int ch)
 		rc = fnc_load_branches(s);
 		break;
 	case 't':
-		if (!s->selected_branch)
+		if (!s->selected_entry)
 			break;
 		if (view_is_parent(view))
 			start_col = view_split_start_col(view->start_col);
 		rc = browse_branch_tree(&tree_view, start_col,
-		    s->selected_branch);
+		    s->selected_entry);
 		if (rc || tree_view == NULL)
 			break;
 		view->active = false;
@@ -10249,17 +10375,17 @@ branch_search_next(struct fnc_view *view)
 
 	if (s->matched_branch) {
 		if (view->searching == SEARCH_FORWARD) {
-			if (s->selected_branch)
-				be = TAILQ_NEXT(s->selected_branch, entries);
+			if (s->selected_entry)
+				be = TAILQ_NEXT(s->selected_entry, entries);
 			else
-				be = TAILQ_PREV(s->selected_branch,
+				be = TAILQ_PREV(s->selected_entry,
 				    fnc_branchlist_head, entries);
 		} else {
-			if (s->selected_branch == NULL)
+			if (s->selected_entry == NULL)
 				be = TAILQ_LAST(&s->branches,
 				    fnc_branchlist_head);
 			else
-				be = TAILQ_PREV(s->selected_branch,
+				be = TAILQ_PREV(s->selected_entry,
 				    fnc_branchlist_head, entries);
 		}
 	} else {
